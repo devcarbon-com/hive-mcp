@@ -37,33 +37,50 @@ git clone https://github.com/BuddhiLW/emacs-mcp.git
 cd emacs-mcp
 ```
 
-### 2. Add to Claude MCP config
+### 2. Add to Claude Code
 
-Add to `~/.claude/mcp.json`:
+Add to `~/.claude/settings.json` under `mcpServers`:
 
 ```json
 {
   "mcpServers": {
-    "emacs": {
-      "command": "/path/to/emacs-mcp/start-mcp.sh",
-      "args": []
+    "emacs-mcp": {
+      "command": "/home/you/path/to/emacs-mcp/start-mcp.sh"
     }
   }
 }
 ```
 
-Or for Claude Desktop, add to `claude_desktop_config.json`:
+Or directly with clojure:
 
 ```json
 {
   "mcpServers": {
-    "emacs": {
-      "command": "/bin/bash",
-      "args": ["-c", "cd /path/to/emacs-mcp && clojure -X:mcp"]
+    "emacs-mcp": {
+      "command": "clojure",
+      "args": ["-X:mcp"],
+      "cwd": "/home/you/path/to/emacs-mcp"
     }
   }
 }
 ```
+
+### 3. Ensure Emacs server is running
+
+```elisp
+;; In your Emacs init.el
+(server-start)
+```
+
+### 4. (Optional) Load emacs-mcp.el for full features
+
+```elisp
+(add-to-list 'load-path "/path/to/emacs-mcp/elisp")
+(require 'emacs-mcp)
+(emacs-mcp-mode 1)
+```
+
+**No nREPL needed!** The MCP server runs standalone via `clojure -X:mcp`.
 
 ## Development
 
