@@ -1,0 +1,34 @@
+{:paths ["src" "resources"]
+
+ :deps {org.clojure/clojure {:mvn/version "1.12.1"}
+        org.clojure/data.json {:mvn/version "2.5.1"}
+        org.clojure/core.async {:mvn/version "1.7.701"}
+
+        ;; MCP SDK from unravel-team
+        io.modelcontextprotocol/mcp-clojure-sdk
+        {:git/url "https://github.com/unravel-team/mcp-clojure-sdk.git"
+         :git/sha "039cf220ac6bb3858f71e823016035e257a5380d"}
+
+        ;; Logging
+        com.taoensso/timbre {:mvn/version "6.8.0"}
+        org.slf4j/slf4j-nop {:mvn/version "2.0.16"}}
+
+ :aliases
+ {:mcp
+  {:exec-fn emacs-mcp.server/start!
+   :exec-args {}}
+
+  :dev
+  {:extra-paths ["dev" "test"]
+   :extra-deps {nrepl/nrepl {:mvn/version "1.3.1"}}}
+
+  :nrepl
+  {:extra-paths ["dev" "test"]
+   :extra-deps {nrepl/nrepl {:mvn/version "1.3.1"}}
+   :main-opts ["-m" "nrepl.cmdline" "--port" "7910"]}
+
+  :test
+  {:extra-paths ["test"]
+   :extra-deps {io.github.cognitect-labs/test-runner
+                {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+   :main-opts ["-m" "cognitect.test-runner"]}}}
