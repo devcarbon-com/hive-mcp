@@ -200,7 +200,8 @@ Each top-level heading is a project."
     "LEVEL=1")))
 
 (cl-defmethod emacs-mcp-kanban--list-tasks ((_backend (eql standalone)) project-id &optional status)
-  "List tasks from standalone org file for PROJECT-ID."
+  "List tasks from standalone org file for PROJECT-ID.
+If PROJECT-ID is nil, lists all tasks from all projects."
   (emacs-mcp-kanban--with-org-file
    (let ((tasks '()))
      (org-map-entries
@@ -211,7 +212,8 @@ Each top-level heading is a project."
                              (org-id-get))))
                (task-status (cdr (assoc "TODO" props)))
                (mapped-status (emacs-mcp-kanban--org-to-vibe-status task-status)))
-          (when (and (equal parent-id project-id)
+          ;; If no project-id specified, list all tasks; otherwise filter by project
+          (when (and (or (null project-id) (equal parent-id project-id))
                      (or (null status)
                          (equal mapped-status status)))
             (push `((id . ,(org-id-get-create))
@@ -243,12 +245,22 @@ Each top-level heading is a project."
              (updated . ,(org-entry-get nil "UPDATED")))))))))
 
 (cl-defmethod emacs-mcp-kanban--create-task ((_backend (eql standalone)) project-id title &optional description)
-  "Create task in standalone org file."
+  "Create task in standalone org file.
+If PROJECT-ID is nil, uses the first project (Default Project)."
   (emacs-mcp-kanban--with-org-file
-   (let ((marker (org-id-find project-id 'marker)))
+   ;; Find project - if nil, use the first heading as default
+   (let ((marker (if project-id
+                     (org-id-find project-id 'marker)
+                   ;; Find first level-1 heading (default project)
+                   (save-excursion
+                     (goto-char (point-min))
+                     (when (re-search-forward "^\\* " nil t)
+                       (point-marker))))))
      (when marker
-       (with-current-buffer (marker-buffer marker)
-         (goto-char marker)
+       (with-current-buffer (or (marker-buffer marker) (current-buffer))
+         (goto-char (if (markerp marker) marker (point-min)))
+         (when (and (not (markerp marker)) (re-search-forward "^\\* " nil t))
+           (beginning-of-line))
          (org-end-of-subtree t)
          (insert "\n** TODO " title "\n")
          (org-entry-put nil "ID" (org-id-uuid))
@@ -346,9 +358,11 @@ Each top-level heading is a project."
 (defun emacs-mcp-kanban-list-tasks (&optional project-id status)
   "List tasks from current backend.
 PROJECT-ID defaults to `emacs-mcp-kanban-default-project'.
+For standalone backend, PROJECT-ID can be nil.
 STATUS optionally filters by kanban status."
   (let ((pid (or project-id emacs-mcp-kanban-default-project)))
-    (unless pid
+    ;; Only require project-id for vibe backend
+    (when (and (eq emacs-mcp-kanban-backend 'vibe) (not pid))
       (error "No project ID specified. Set emacs-mcp-kanban-default-project"))
     (emacs-mcp-kanban--list-tasks emacs-mcp-kanban-backend pid status)))
 
@@ -358,9 +372,11 @@ STATUS optionally filters by kanban status."
 
 (defun emacs-mcp-kanban-create-task (title &optional description project-id)
   "Create a new task with TITLE and optional DESCRIPTION.
-PROJECT-ID defaults to `emacs-mcp-kanban-default-project'."
+PROJECT-ID defaults to `emacs-mcp-kanban-default-project'.
+For standalone backend, PROJECT-ID can be nil."
   (let ((pid (or project-id emacs-mcp-kanban-default-project)))
-    (unless pid
+    ;; Only require project-id for vibe backend
+    (when (and (eq emacs-mcp-kanban-backend 'vibe) (not pid))
       (error "No project ID specified. Set emacs-mcp-kanban-default-project"))
     (let ((result (emacs-mcp-kanban--create-task
                    emacs-mcp-kanban-backend pid title description)))
