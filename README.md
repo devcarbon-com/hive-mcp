@@ -198,8 +198,33 @@ elisp/
 ├── emacs-mcp-triggers.el  # Keybindings, hooks
 ├── emacs-mcp-transient.el # Transient menus
 ├── emacs-mcp-workflows.el # Workflow system
-└── emacs-mcp-api.el       # Stable API for Claude
+├── emacs-mcp-api.el       # Stable API for Claude
+├── emacs-mcp-addons.el    # Addon system
+└── addons/                # Built-in and custom addons
+    ├── emacs-mcp-addon-template.el
+    ├── emacs-mcp-claude-code.el
+    ├── emacs-mcp-cider.el
+    ├── emacs-mcp-org-ai.el
+    └── emacs-mcp-org-kanban.el  # Dual-backend kanban
 ```
+
+## Addon System
+
+Modular integrations with other Emacs packages. Addons are **lazy-loaded** when target packages are detected.
+
+| Addon | Integration | MCP Tools | Description |
+|-------|-------------|:---------:|-------------|
+| [claude-code](ADDONS.org#claude-code) | [claude-code.el](https://github.com/karthink/claude-code) | - | Context injection for Claude CLI |
+| [cider](ADDONS.org#cider) | [CIDER](https://github.com/clojure-emacs/cider) | ✓ | Clojure REPL integration |
+| [org-ai](ADDONS.org#org-ai) | [org-ai](https://github.com/rksm/org-ai) | - | AI conversation context |
+| [org-kanban](ADDONS.org#org-kanban) | [org-kanban](https://github.com/gizmomogwai/org-kanban) | ✓ | Dual-backend kanban tracking |
+
+**Quick start:**
+```elisp
+(emacs-mcp-addons-auto-load)  ; Auto-load when packages detected
+```
+
+📖 **Full documentation:** [ADDONS.org](ADDONS.org)
 
 ## Tested & Working
 
