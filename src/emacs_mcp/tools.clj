@@ -3,6 +3,10 @@
   (:require [emacs-mcp.emacsclient :as ec]
             [emacs-mcp.telemetry :as telemetry]
             [emacs-mcp.validation :as v]
+            [emacs-mcp.org-clj.parser :as org-parser]
+            [emacs-mcp.org-clj.writer :as org-writer]
+            [emacs-mcp.org-clj.query :as org-query]
+            [emacs-mcp.org-clj.transform :as org-transform]
             [clojure.data.json :as json]
             [taoensso.timbre :as log]))
 
@@ -544,6 +548,114 @@
     {:content [{:type "text"
                 :text "emacs-mcp-swarm addon not loaded."}]}))
 
+;; ============================================================
+;; org-clj Native Org-Mode Tools
+;; ============================================================
+
+(defn handle-org-clj-parse
+  "Parse an org file and return its structure as JSON."
+  [{:keys [file_path]}]
+  (try
+    (let [content (slurp file_path)
+          doc (org-parser/parse-document content)
+          json-str (json/write-str doc)]
+      {:content [{:type "text"
+                  :text json-str}]})
+    (catch Exception e
+      {:content [{:type "text"
+                  :text (str "Error parsing org file: " (.getMessage e))}]
+       :isError true})))
+
+(defn handle-org-clj-write
+  "Write an org document structure back to a file."
+  [{:keys [file_path document]}]
+  (try
+    (let [doc (if (string? document)
+                (json/read-str document :key-fn keyword)
+                document)
+          org-text (org-writer/write-document doc)]
+      (spit file_path org-text)
+      {:content [{:type "text"
+                  :text (str "Successfully wrote " (count org-text) " characters to " file_path)}]})
+    (catch Exception e
+      {:content [{:type "text"
+                  :text (str "Error writing org file: " (.getMessage e))}]
+       :isError true})))
+
+(defn handle-org-clj-query
+  "Query headlines in a parsed org document."
+  [{:keys [file_path query_type query_value]}]
+  (try
+    (let [content (slurp file_path)
+          doc (org-parser/parse-document content)
+          results (case query_type
+                    "by_id" [(org-query/find-by-id doc query_value)]
+                    "by_vibe_id" [(org-query/find-by-vibe-id doc query_value)]
+                    "by_status" (org-query/find-by-status doc query_value)
+                    "todo" (org-query/find-todo doc)
+                    "done" (org-query/find-done doc)
+                    "in_progress" (org-query/find-in-progress doc)
+                    "stats" [(org-query/task-stats doc)]
+                    (throw (ex-info (str "Unknown query type: " query_type)
+                                    {:query_type query_type})))
+          ;; Filter out nils
+          results (filterv some? results)]
+      {:content [{:type "text"
+                  :text (json/write-str results)}]})
+    (catch Exception e
+      {:content [{:type "text"
+                  :text (str "Error querying org file: " (.getMessage e))}]
+       :isError true})))
+
+(defn handle-org-kanban-native-status
+  "Get kanban status using native Clojure parser (no elisp dependency)."
+  [{:keys [file_path]}]
+  (try
+    (let [content (slurp file_path)
+          doc (org-parser/parse-document content)
+          stats (org-query/task-stats doc)
+          todos (org-query/find-todo doc)
+          in-progress (org-query/find-in-progress doc)
+          done (org-query/find-done doc)
+          result {:stats stats
+                  :by_status {:todo (mapv #(select-keys % [:title :properties]) todos)
+                              :in_progress (mapv #(select-keys % [:title :properties]) in-progress)
+                              :done (mapv #(select-keys % [:title :properties]) done)}
+                  :file file_path
+                  :backend "org-clj-native"}]
+      {:content [{:type "text"
+                  :text (json/write-str result)}]})
+    (catch Exception e
+      {:content [{:type "text"
+                  :text (str "Error getting kanban status: " (.getMessage e))}]
+       :isError true})))
+
+(defn handle-org-kanban-native-move
+  "Move a task to a new status using native Clojure parser."
+  [{:keys [file_path task_id new_status]}]
+  (try
+    (let [content (slurp file_path)
+          doc (org-parser/parse-document content)
+          ;; Check if task exists
+          task (org-query/find-by-id doc task_id)]
+      (if task
+        (let [updated-doc (org-transform/set-status doc task_id new_status)
+              org-text (org-writer/write-document updated-doc)]
+          (spit file_path org-text)
+          {:content [{:type "text"
+                      :text (json/write-str {:success true
+                                             :task_id task_id
+                                             :old_status (:keyword task)
+                                             :new_status new_status})}]})
+        {:content [{:type "text"
+                    :text (json/write-str {:success false
+                                           :error (str "Task not found: " task_id)})}]
+         :isError true}))
+    (catch Exception e
+      {:content [{:type "text"
+                  :text (str "Error moving task: " (.getMessage e))}]
+       :isError true})))
+
 ;; Tool definitions
 
 (def tools
@@ -865,7 +977,59 @@
                   :properties {"prompt" {:type "string"
                                          :description "The prompt to broadcast to all slaves"}}
                   :required ["prompt"]}
-    :handler handle-swarm-broadcast}])
+    :handler handle-swarm-broadcast}
+
+   ;; org-clj Native Org-Mode Tools (no elisp dependency)
+   {:name "org_clj_parse"
+    :description "Parse an org-mode file and return its structure as JSON. Uses native Clojure parser without elisp dependency."
+    :inputSchema {:type "object"
+                  :properties {"file_path" {:type "string"
+                                            :description "Absolute path to the org file to parse"}}
+                  :required ["file_path"]}
+    :handler handle-org-clj-parse}
+
+   {:name "org_clj_write"
+    :description "Write an org document structure back to a file. Takes a JSON document and writes org-mode formatted text."
+    :inputSchema {:type "object"
+                  :properties {"file_path" {:type "string"
+                                            :description "Absolute path to write the org file"}
+                               "document" {:type "string"
+                                           :description "JSON string representing the org document structure"}}
+                  :required ["file_path" "document"]}
+    :handler handle-org-clj-write}
+
+   {:name "org_clj_query"
+    :description "Query headlines in an org file. Supports queries by ID, status, or get statistics."
+    :inputSchema {:type "object"
+                  :properties {"file_path" {:type "string"
+                                            :description "Absolute path to the org file"}
+                               "query_type" {:type "string"
+                                             :enum ["by_id" "by_vibe_id" "by_status" "todo" "done" "in_progress" "stats"]
+                                             :description "Type of query to perform"}
+                               "query_value" {:type "string"
+                                              :description "Value for the query (ID for by_id, status string for by_status)"}}
+                  :required ["file_path" "query_type"]}
+    :handler handle-org-clj-query}
+
+   {:name "org_kanban_native_status"
+    :description "Get kanban status from an org file using native Clojure parser. Returns task counts and lists by status."
+    :inputSchema {:type "object"
+                  :properties {"file_path" {:type "string"
+                                            :description "Absolute path to the kanban org file"}}
+                  :required ["file_path"]}
+    :handler handle-org-kanban-native-status}
+
+   {:name "org_kanban_native_move"
+    :description "Move a task to a new status in an org file using native Clojure parser. Updates the file directly."
+    :inputSchema {:type "object"
+                  :properties {"file_path" {:type "string"
+                                            :description "Absolute path to the kanban org file"}
+                               "task_id" {:type "string"
+                                          :description "ID of the task to move (from :ID property)"}
+                               "new_status" {:type "string"
+                                             :description "New TODO status (e.g., TODO, IN-PROGRESS, DONE)"}}
+                  :required ["file_path" "task_id" "new_status"]}
+    :handler handle-org-kanban-native-move}])
 
 (defn get-tool-by-name
   "Find a tool definition by name."
