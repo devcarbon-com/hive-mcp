@@ -100,7 +100,8 @@ Keyword keys become symbols, lists become vectors."
 
 (defun emacs-mcp-api-memory-query (type &optional tags limit)
   "Query project memory by TYPE with optional TAGS filter.
-TYPE is a string: \"note\", \"snippet\", \"convention\", \"decision\", \"conversation\".
+TYPE is a string: \"note\", \"snippet\", \"convention\", \"decision\",
+or \"conversation\".
 TAGS is a list of strings.
 LIMIT is max results (default 20).
 Returns a vector of alists suitable for JSON encoding."

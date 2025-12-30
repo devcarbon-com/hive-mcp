@@ -261,7 +261,9 @@ Returns t if loaded successfully, nil otherwise."
 ;;;###autoload
 (defun emacs-mcp-addons-auto-load ()
   "Enable auto-loading of addons when their trigger packages load.
-Uses `emacs-mcp-addon-auto-load-list' to determine mappings."
+Uses `emacs-mcp-addon-auto-load-list' to determine mappings.
+This function is called during initialization; for manual setup,
+users can also configure auto-loading in their init file."
   (interactive)
   (dolist (entry emacs-mcp-addon-auto-load-list)
     (let ((addon (car entry))
@@ -269,9 +271,10 @@ Uses `emacs-mcp-addon-auto-load-list' to determine mappings."
       ;; If trigger already loaded, load addon now
       (if (featurep trigger)
           (emacs-mcp-addon-load addon)
-        ;; Otherwise, set up deferred loading
-        (with-eval-after-load trigger
-          (emacs-mcp-addon-load addon))))))
+        ;; Set up deferred loading via eval-after-load
+        ;; Note: eval-after-load is appropriate here as this runs during init
+        (eval-after-load trigger
+          `(emacs-mcp-addon-load ',addon))))))
 
 ;;;###autoload
 (defun emacs-mcp-addons-load-always ()

@@ -23,9 +23,12 @@
   :group 'emacs-mcp
   :prefix "emacs-mcp-trigger-")
 
-(defcustom emacs-mcp-keymap-prefix (kbd "C-c m")
-  "Prefix key for emacs-mcp commands."
-  :type 'key-sequence
+(defcustom emacs-mcp-keymap-prefix nil
+  "Prefix key for emacs-mcp commands.
+Set this in your init file before enabling `emacs-mcp-mode'.
+Example: (setq emacs-mcp-keymap-prefix (kbd \"C-c m\"))
+Note: C-c followed by a letter is reserved for user bindings per Emacs conventions."
+  :type '(choice (const :tag "None" nil) key-sequence)
   :group 'emacs-mcp-triggers)
 
 (defcustom emacs-mcp-after-save-hook-enabled nil
@@ -104,8 +107,14 @@ Events: after-save, compilation-finish, diagnostics-error, custom."
 
 ;;;###autoload
 (defun emacs-mcp-setup-keybindings ()
-  "Set up emacs-mcp keybindings."
-  (global-set-key emacs-mcp-keymap-prefix emacs-mcp-command-map))
+  "Set up emacs-mcp keybindings.
+Only sets up keybindings if `emacs-mcp-keymap-prefix' is configured.
+Users should set this in their init file before enabling `emacs-mcp-mode'.
+Example configuration:
+  (setq emacs-mcp-keymap-prefix (kbd \"C-c m\"))
+  (emacs-mcp-mode 1)"
+  (when emacs-mcp-keymap-prefix
+    (define-key emacs-mcp-mode-map emacs-mcp-keymap-prefix emacs-mcp-command-map)))
 
 ;;; Interactive Commands
 
@@ -270,7 +279,7 @@ BUFFER is the compilation buffer, STATUS is the result string."
   "Run a workflow interactively."
   (interactive)
   (if (fboundp 'emacs-mcp-workflow-run-interactive)
-      (call-interactively 'emacs-mcp-workflow-run-interactive)
+      (call-interactively #'emacs-mcp-workflow-run-interactive)
     (message "Workflows not loaded yet")))
 
 (defun emacs-mcp-define-workflow-interactive ()

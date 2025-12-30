@@ -159,31 +159,34 @@ keybindings for AI-assisted development.
 
 ;;; Convenience aliases for common operations
 
-(defalias 'emacs-mcp-note 'emacs-mcp-add-note-interactive
+(defalias 'emacs-mcp-note #'emacs-mcp-add-note-interactive
   "Add a note to project memory.")
 
-(defalias 'emacs-mcp-snippet 'emacs-mcp-add-snippet-interactive
+(defalias 'emacs-mcp-snippet #'emacs-mcp-add-snippet-interactive
   "Save region as a snippet.")
 
-(defalias 'emacs-mcp-context 'emacs-mcp-show-context
+(defalias 'emacs-mcp-context #'emacs-mcp-show-context
   "Show current context.")
 
-(defalias 'emacs-mcp-memory 'emacs-mcp-show-memory
+(defalias 'emacs-mcp-memory #'emacs-mcp-show-memory
   "Show project memory.")
 
-(defalias 'emacs-mcp-workflow 'emacs-mcp-workflow-run-interactive
+(defalias 'emacs-mcp-workflow #'emacs-mcp-workflow-run-interactive
   "Run a workflow.")
 
 ;;; Auto-load on init (optional)
+;; Users who want auto-enable should add to their init file:
+;;   (setq emacs-mcp-auto-enable t)
+;;   (add-hook 'after-init-hook #'emacs-mcp--maybe-auto-enable)
 
 (defun emacs-mcp--maybe-auto-enable ()
   "Maybe enable `emacs-mcp-mode' automatically.
-Controlled by `emacs-mcp-auto-enable'."
+Controlled by `emacs-mcp-auto-enable'.
+To use, add to your init file:
+  (setq emacs-mcp-auto-enable t)
+  (add-hook \\='after-init-hook #\\='emacs-mcp--maybe-auto-enable)"
   (when emacs-mcp-auto-enable
     (emacs-mcp-mode 1)))
-
-;; Set up auto-enable hook (runs if emacs-mcp-auto-enable is t)
-(add-hook 'after-init-hook #'emacs-mcp--maybe-auto-enable)
 
 (provide 'emacs-mcp)
 ;;; emacs-mcp.el ends here

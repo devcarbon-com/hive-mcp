@@ -232,7 +232,7 @@ Called with single argument: the context plist being built.")
 Includes buffer, region, defun, project, git, and custom providers."
   (let ((context
          (list
-          :timestamp (format-time-string "%Y-%m-%dT%H:%M:%S%z")
+          :timestamp (format-time-string "%FT%T%z")
           :buffer (emacs-mcp-context-buffer)
           :region (emacs-mcp-context-region)
           :defun (emacs-mcp-context-defun)

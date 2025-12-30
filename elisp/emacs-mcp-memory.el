@@ -61,7 +61,7 @@
 
 (defun emacs-mcp-memory--timestamp ()
   "Return current ISO 8601 timestamp."
-  (format-time-string "%Y-%m-%dT%H:%M:%S%z"))
+  (format-time-string "%FT%T%z"))
 
 (defun emacs-mcp-memory--project-id (&optional project-root)
   "Return unique ID for PROJECT-ROOT (defaults to current project).
