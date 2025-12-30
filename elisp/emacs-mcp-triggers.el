@@ -16,6 +16,9 @@
 (require 'emacs-mcp-memory)
 (require 'emacs-mcp-context)
 
+;; Forward declaration for byte-compiler
+(defvar emacs-mcp-mode-map)
+
 ;;; Customization
 
 (defgroup emacs-mcp-triggers nil
@@ -27,7 +30,7 @@
   "Prefix key for emacs-mcp commands.
 Set this in your init file before enabling `emacs-mcp-mode'.
 Example: (setq emacs-mcp-keymap-prefix (kbd \"C-c m\"))
-Note: C-c followed by a letter is reserved for user bindings per Emacs conventions."
+Note: C-c <letter> is reserved for user bindings."
   :type '(choice (const :tag "None" nil) key-sequence)
   :group 'emacs-mcp-triggers)
 
