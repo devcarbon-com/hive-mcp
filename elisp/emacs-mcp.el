@@ -4,7 +4,7 @@
 
 ;; Author: Pedro G. Branquinho <pedrogbranquinho@gmail.com>
 ;; Maintainer: Pedro G. Branquinho <pedrogbranquinho@gmail.com>
-;; Version: 0.1.0
+;; Version: 0.2.1
 ;; Package-Requires: ((emacs "28.1") (transient "0.4.0"))
 ;; Keywords: tools, ai, convenience
 ;; URL: https://github.com/BuddhiLW/emacs-mcp
@@ -66,6 +66,19 @@
   :type 'boolean
   :group 'emacs-mcp)
 
+(defcustom emacs-mcp-auto-enable nil
+  "Automatically enable `emacs-mcp-mode' when Emacs starts.
+Set this to t in your config to have emacs-mcp ready on startup."
+  :type 'boolean
+  :group 'emacs-mcp)
+
+(defcustom emacs-mcp-setup-addons t
+  "Set up addon system during initialization.
+When non-nil, loads addons from `emacs-mcp-addon-always-load'
+and enables auto-loading for feature-triggered addons."
+  :type 'boolean
+  :group 'emacs-mcp)
+
 ;;; Require submodules
 
 (require 'emacs-mcp-memory)
@@ -73,6 +86,10 @@
 (require 'emacs-mcp-triggers)
 (require 'emacs-mcp-workflows)
 (require 'emacs-mcp-api)
+(require 'emacs-mcp-addons)
+
+;; Forward declaration for byte-compiler
+(declare-function emacs-mcp-addons-setup "emacs-mcp-addons")
 
 ;; Optional: transient menus
 (when (require 'transient nil t)
@@ -104,8 +121,12 @@
     ;; Set up hooks
     (emacs-mcp-setup-hooks)
 
+    ;; Set up addons (always-load + auto-load triggers)
+    (when emacs-mcp-setup-addons
+      (emacs-mcp-addons-setup))
+
     (setq emacs-mcp--initialized t)
-    (message "emacs-mcp initialized (C-c m for menu)")))
+    (message "Emacs-mcp initialized (C-c m for menu)")))
 
 (defun emacs-mcp-reset ()
   "Reset emacs-mcp state (for debugging)."
@@ -114,7 +135,7 @@
   (clrhash emacs-mcp-memory--cache)
   (clrhash emacs-mcp-workflow-registry)
   (clrhash emacs-mcp-trigger-registry)
-  (message "emacs-mcp reset"))
+  (message "Emacs-mcp reset"))
 
 ;;; Minor Mode
 
@@ -129,40 +150,44 @@ keybindings for AI-assisted development.
   :global t
   :lighter " MCP"
   :keymap (let ((map (make-sparse-keymap)))
-            (define-key map emacs-mcp-keymap-prefix emacs-mcp-command-map)
+            (when emacs-mcp-keymap-prefix
+              (define-key map emacs-mcp-keymap-prefix emacs-mcp-command-map))
             map)
   (if emacs-mcp-mode
       (when emacs-mcp-auto-initialize
         (emacs-mcp-initialize))
-    (message "emacs-mcp mode disabled")))
+    (message "Emacs-mcp mode disabled")))
 
 ;;; Convenience aliases for common operations
 
-(defalias 'mcp-note 'emacs-mcp-add-note-interactive
+(defalias 'emacs-mcp-note #'emacs-mcp-add-note-interactive
   "Add a note to project memory.")
 
-(defalias 'mcp-snippet 'emacs-mcp-add-snippet-interactive
+(defalias 'emacs-mcp-snippet #'emacs-mcp-add-snippet-interactive
   "Save region as a snippet.")
 
-(defalias 'mcp-context 'emacs-mcp-show-context
+(defalias 'emacs-mcp-context #'emacs-mcp-show-context
   "Show current context.")
 
-(defalias 'mcp-memory 'emacs-mcp-show-memory
+(defalias 'emacs-mcp-memory #'emacs-mcp-show-memory
   "Show project memory.")
 
-(defalias 'mcp-workflow 'emacs-mcp-workflow-run-interactive
+(defalias 'emacs-mcp-workflow #'emacs-mcp-workflow-run-interactive
   "Run a workflow.")
 
 ;;; Auto-load on init (optional)
+;; Users who want auto-enable should add to their init file:
+;;   (setq emacs-mcp-auto-enable t)
+;;   (add-hook 'after-init-hook #'emacs-mcp--maybe-auto-enable)
 
 (defun emacs-mcp--maybe-auto-enable ()
-  "Maybe enable emacs-mcp-mode automatically."
-  (when (and (boundp 'emacs-mcp-auto-enable)
-             emacs-mcp-auto-enable)
+  "Maybe enable `emacs-mcp-mode' automatically.
+Controlled by `emacs-mcp-auto-enable'.
+To use, add to your init file:
+  (setq emacs-mcp-auto-enable t)
+  (add-hook \\='after-init-hook #\\='emacs-mcp--maybe-auto-enable)"
+  (when emacs-mcp-auto-enable
     (emacs-mcp-mode 1)))
-
-;; Uncomment to auto-enable:
-;; (add-hook 'after-init-hook #'emacs-mcp--maybe-auto-enable)
 
 (provide 'emacs-mcp)
 ;;; emacs-mcp.el ends here

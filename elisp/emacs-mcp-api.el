@@ -27,9 +27,7 @@
 (declare-function emacs-mcp-register-trigger "emacs-mcp-triggers")
 (declare-function emacs-mcp-list-triggers "emacs-mcp-triggers")
 
-;;; ============================================================================
-;;; Context API
-;;; ============================================================================
+;;;; Context API:
 
 (defun emacs-mcp-api-get-context ()
   "Return full context as JSON-compatible plist.
@@ -64,9 +62,7 @@ Includes buffer, region, defun, project, git, and memory."
 BEFORE and AFTER default to 5 lines each."
   (emacs-mcp-context-surrounding-lines before after))
 
-;;; ============================================================================
-;;; Memory API
-;;; ============================================================================
+;;;; Memory API:
 
 (defun emacs-mcp-api--plist-to-alist (plist)
   "Convert PLIST to alist for JSON serialization.
@@ -100,7 +96,8 @@ Keyword keys become symbols, lists become vectors."
 
 (defun emacs-mcp-api-memory-query (type &optional tags limit)
   "Query project memory by TYPE with optional TAGS filter.
-TYPE is a string: \"note\", \"snippet\", \"convention\", \"decision\", \"conversation\".
+TYPE is a string: \"note\", \"snippet\", \"convention\", \"decision\",
+or \"conversation\".
 TAGS is a list of strings.
 LIMIT is max results (default 20).
 Returns a vector of alists suitable for JSON encoding."
@@ -128,13 +125,57 @@ Returns the created entry as alist suitable for JSON encoding."
   "Delete memory entry by ID."
   (emacs-mcp-memory-delete id))
 
+(defun emacs-mcp-api-memory--content-preview (content &optional max-len)
+  "Return a preview of CONTENT truncated to MAX-LEN characters.
+MAX-LEN defaults to 100.  Handles both string and plist content."
+  (let ((max-len (or max-len 100))
+        (text (cond
+               ((stringp content) content)
+               ((plistp content)
+                ;; For plists, try to get a meaningful preview
+                (or (plist-get content :description)
+                    (plist-get content :title)
+                    (plist-get content :name)
+                    (plist-get content :code)
+                    (format "%S" content)))
+               (t (format "%S" content)))))
+    (if (> (length text) max-len)
+        (concat (substring text 0 (- max-len 3)) "...")
+      text)))
+
+(defun emacs-mcp-api-memory--entry-to-metadata (entry)
+  "Convert ENTRY plist to metadata-only alist.
+Returns id, type, preview (first 100 chars), tags, created."
+  (let ((content (plist-get entry :content)))
+    `((id . ,(plist-get entry :id))
+      (type . ,(plist-get entry :type))
+      (preview . ,(emacs-mcp-api-memory--content-preview content))
+      (tags . ,(or (plist-get entry :tags) []))
+      (created . ,(plist-get entry :created)))))
+
+(defun emacs-mcp-api-memory-query-metadata (type &optional tags limit)
+  "Query project memory by TYPE, returning only metadata.
+TYPE is a string: \"note\", \"snippet\", \"convention\", \"decision\",
+or \"conversation\".
+TAGS is a list of strings.
+LIMIT is max results (default 20).
+Returns a vector of alists with only: id, type, preview, tags, created.
+Use `emacs-mcp-api-memory-get-full' to fetch full content by ID."
+  (let ((results (emacs-mcp-memory-query (intern type) tags nil (or limit 20))))
+    (apply #'vector (mapcar #'emacs-mcp-api-memory--entry-to-metadata results))))
+
+(defun emacs-mcp-api-memory-get-full (id)
+  "Get full memory entry by ID.
+Returns the complete entry as alist suitable for JSON encoding.
+Use this after `emacs-mcp-api-memory-query-metadata' to fetch full content."
+  (when-let* ((entry (emacs-mcp-memory-get id)))
+    (emacs-mcp-api--plist-to-alist entry)))
+
 (defun emacs-mcp-api-memory-get-project-context ()
   "Return full project context including all memory."
   (emacs-mcp-memory-get-project-context))
 
-;;; ============================================================================
-;;; Conversation API
-;;; ============================================================================
+;;;; Conversation API:
 
 (defun emacs-mcp-api-conversation-log (role content)
   "Log conversation entry.
@@ -153,9 +194,7 @@ LIMIT defaults to 20 entries."
     (emacs-mcp-memory--set-data pid "conversation" '())
     t))
 
-;;; ============================================================================
-;;; Workflow API
-;;; ============================================================================
+;;;; Workflow API:
 
 (defun emacs-mcp-api-list-workflows ()
   "Return list of registered workflows."
@@ -177,9 +216,7 @@ SPEC is plist with :description, :steps, :params."
       (emacs-mcp-workflow-register name spec)
     (error "Workflows not available")))
 
-;;; ============================================================================
-;;; Trigger API
-;;; ============================================================================
+;;;; Trigger API:
 
 (defun emacs-mcp-api-register-trigger (name spec)
   "Register a trigger for automation.
@@ -195,12 +232,10 @@ SPEC is plist with :event, :condition, :action."
       (emacs-mcp-list-triggers)
     '()))
 
-;;; ============================================================================
-;;; Interaction API
-;;; ============================================================================
+;;;; Interaction API:
 
 (defun emacs-mcp-api-notify (message &optional type)
-  "Show notification to user.
+  "Show notification MESSAGE to user.
 TYPE is \"info\", \"warning\", or \"error\"."
   (pcase type
     ("error" (user-error "%s" message))
@@ -209,12 +244,13 @@ TYPE is \"info\", \"warning\", or \"error\"."
   t)
 
 (defun emacs-mcp-api-prompt (prompt &optional default)
-  "Prompt user for input.
+  "Show PROMPT and ask user for input.
+DEFAULT provides an optional initial value.
 Returns the user's response string."
   (read-string (concat prompt ": ") default))
 
 (defun emacs-mcp-api-confirm (prompt)
-  "Ask user for yes/no confirmation.
+  "Show PROMPT and ask user for yes/no confirmation.
 Returns t or nil."
   (yes-or-no-p prompt))
 
@@ -225,15 +261,14 @@ OPTIONS is a list of strings.
 Returns the selected option."
   (completing-read (concat prompt ": ") options nil t))
 
-;;; ============================================================================
-;;; Buffer/File Operations API
-;;; ============================================================================
+;;;; Buffer and File Operations API:
 
 (defun emacs-mcp-api-open-file (path &optional line)
   "Open file at PATH and optionally go to LINE."
   (find-file path)
   (when line
-    (goto-line line))
+    (goto-char (point-min))
+    (forward-line (1- line)))
   t)
 
 (defun emacs-mcp-api-save-buffer ()
@@ -255,13 +290,12 @@ Returns the selected option."
   (kill-buffer name)
   t)
 
-;;; ============================================================================
-;;; Navigation API
-;;; ============================================================================
+;;;; Navigation API:
 
 (defun emacs-mcp-api-goto-line (line)
   "Go to LINE number."
-  (goto-line line)
+  (goto-char (point-min))
+  (forward-line (1- line))
   (list :line (line-number-at-pos) :column (current-column)))
 
 (defun emacs-mcp-api-goto-point (point)
@@ -271,22 +305,24 @@ Returns the selected option."
 
 (defun emacs-mcp-api-search-forward (string &optional bound)
   "Search forward for STRING.
+BOUND limits the search to that buffer position.
 Returns position if found, nil otherwise."
   (search-forward string bound t))
 
 (defun emacs-mcp-api-search-regexp (regexp &optional bound)
   "Search forward for REGEXP.
+BOUND limits the search to that buffer position.
 Returns position if found, nil otherwise."
   (re-search-forward regexp bound t))
 
-;;; ============================================================================
-;;; Visual Feedback API
-;;; ============================================================================
+;;;; Visual Feedback API:
 
 (defun emacs-mcp-api-highlight-line (&optional line)
   "Highlight LINE (or current line) briefly."
   (save-excursion
-    (when line (goto-line line))
+    (when line
+      (goto-char (point-min))
+      (forward-line (1- line)))
     (when (fboundp 'pulse-momentary-highlight-one-line)
       (pulse-momentary-highlight-one-line (point))))
   t)
@@ -309,9 +345,7 @@ Returns position if found, nil otherwise."
     (display-buffer buf)
     name))
 
-;;; ============================================================================
-;;; Version Info
-;;; ============================================================================
+;;;; Version Info:
 
 (defconst emacs-mcp-api-version "0.1.0"
   "Version of the emacs-mcp API.")

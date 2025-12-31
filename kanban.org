@@ -1,0 +1,1013 @@
+#+TITLE: emacs-mcp Kanban
+#+STARTUP: overview
+#+TODO: TODO IN-PROGRESS IN-REVIEW | DONE CANCELLED
+
+* emacs-mcp
+:PROPERTIES:
+:ID: b70720e8-3a52-41ba-a115-964b81369bb5
+:END:
+
+** TODO Implement bidirectional sync between vibe-kanban and org-kanban
+:PROPERTIES:
+:ID:       c75935fb-2f77-49b8-ba0e-2e0db9e4d044
+:VIBE_ID:  e54edcbd-3b67-42fd-8ce3-487d22e883fe
+:END:
+** TODO Create projectile addon for emacs-mcp
+:PROPERTIES:
+:ID:       667e61c0-4e2b-42e8-9b7b-ccc2a0d2dd55
+:VIBE_ID:  bc0e078a-1613-4596-a4f3-cb75d16d203a
+:END:
+** TODO Create magit addon for emacs-mcp
+:PROPERTIES:
+:ID:       ff03ad80-47ee-41bd-8c59-6b9a1d57c803
+:VIBE_ID:  c801605b-d21e-42eb-9a61-300c3f96ca3c
+:END:
+** DONE Add org-kanban addon with dual backends
+:PROPERTIES:
+:ID:       3131b0ec-09c9-48c0-b6bb-56bb52a7cb4c
+:CREATED:  2025-12-29 16:26
+:AGENT:    emacs-3455282
+:SESSION:  20251229-162605
+:UPDATED:  2025-12-29 16:26
+:LAST_AGENT: emacs-3455282
+:VIBE_ID:  ee9d5a6b-afe6-4224-9543-cd448a49f2a6
+:END:
+** DONE Implement graceful degradation for eval failures
+:PROPERTIES:
+:ID:       3663b578-2d56-4115-b0bf-4edd679b48b5
+:CREATED:  2025-12-29 16:26
+:AGENT:    emacs-3455282
+:SESSION:  20251229-162605
+:UPDATED:  2025-12-29 16:26
+:LAST_AGENT: emacs-3455282
+:VIBE_ID:  687f5b15-9673-411c-b086-81f9cb3ff3b0
+:END:
+** DONE Add telemetry for eval operations
+:PROPERTIES:
+:ID:       f711c92d-f05a-4823-a12c-a20758c02ac0
+:CREATED:  2025-12-29 16:26
+:AGENT:    emacs-3455282
+:SESSION:  20251229-162605
+:UPDATED:  2025-12-29 16:26
+:LAST_AGENT: emacs-3455282
+:VIBE_ID:  de363cea-e8b4-46a5-ad2d-eddbd1df9408
+:END:
+** DONE Add boundary validation for eval inputs
+:PROPERTIES:
+:ID:       cb611618-bcdf-477d-93ee-50ad42893753
+:CREATED:  2025-12-29 16:26
+:AGENT:    emacs-3455282
+:SESSION:  20251229-162606
+:UPDATED:  2025-12-29 16:26
+:LAST_AGENT: emacs-3455282
+:VIBE_ID:  6252b3bf-0a73-4173-8706-3f76d8f19336
+:END:
+** DONE Create EvaluatorFactory with mode selection
+:PROPERTIES:
+:ID:       e6d109b7-bf0b-40bf-8ad5-d92e1bdf126f
+:CREATED:  2025-12-29 16:26
+:AGENT:    emacs-3455282
+:SESSION:  20251229-162606
+:UPDATED:  2025-12-29 16:26
+:LAST_AGENT: emacs-3455282
+:VIBE_ID:  ba551d14-5d89-4ed4-8b85-6928f827ec44
+:END:
+** DONE Implement EmacsCiderEvaluator
+:PROPERTIES:
+:ID:       882f9eeb-0e82-46c7-a0af-287f543193cb
+:CREATED:  2025-12-29 16:26
+:AGENT:    emacs-3455282
+:SESSION:  20251229-162606
+:UPDATED:  2025-12-29 16:26
+:LAST_AGENT: emacs-3455282
+:VIBE_ID:  4992fe7c-644f-4659-bb3b-9660689667ea
+:END:
+** DONE Implement DirectNreplEvaluator
+:PROPERTIES:
+:ID:       0de8a6ec-8c54-406b-8f5a-f861b1dc3c8d
+:CREATED:  2025-12-29 16:26
+:AGENT:    emacs-3455282
+:SESSION:  20251229-162606
+:UPDATED:  2025-12-29 16:26
+:LAST_AGENT: emacs-3455282
+:VIBE_ID:  de4cfc8c-de0d-43a3-87a7-addaa7808b24
+:END:
+** DONE Define ReplEvaluator protocol (DIP)
+:PROPERTIES:
+:ID:       e0a7a379-7ecd-4000-97aa-ab53056f62ca
+:CREATED:  2025-12-29 16:26
+:AGENT:    emacs-3455282
+:SESSION:  20251229-162606
+:UPDATED:  2025-12-29 16:26
+:LAST_AGENT: emacs-3455282
+:VIBE_ID:  dcd6cd59-20c8-4033-827c-45974b0a440f
+:END:
+** DONE Merge feat/addon-system to staging
+:PROPERTIES:
+:ID:       31dd233d-a042-4e56-8ccd-d4ff1c1638fd
+:CREATED:  2025-12-29 16:26
+:AGENT:    emacs-3455282
+:SESSION:  20251229-162606
+:UPDATED:  2025-12-29 16:26
+:LAST_AGENT: emacs-3455282
+:VIBE_ID:  1d0e9b71-4889-4951-a1d0-6df0d270fea2
+:END:
+** DONE Test addon loading in Emacs
+:PROPERTIES:
+:ID:       45879f05-452e-40fa-b3d2-7955bfe3045b
+:CREATED:  2025-12-29 16:26
+:AGENT:    emacs-3455282
+:SESSION:  20251229-162606
+:UPDATED:  2025-12-29 16:26
+:LAST_AGENT: emacs-3455282
+:VIBE_ID:  26fba8fc-2158-486d-b6cd-c4be5920ab65
+:END:
+** DONE Update README with addon system documentation
+:PROPERTIES:
+:ID:       72dbb55a-49aa-48f9-b47a-8c392962ad77
+:CREATED:  2025-12-29 16:26
+:AGENT:    emacs-3455282
+:SESSION:  20251229-162606
+:UPDATED:  2025-12-29 16:26
+:LAST_AGENT: emacs-3455282
+:VIBE_ID:  ee555311-f56c-4510-b657-de390f4d5d09
+:END:
+** DONE Create org-ai-mcp addon stub
+:PROPERTIES:
+:ID:       f04692bb-592a-4b3a-8b98-7d4a811508a8
+:CREATED:  2025-12-29 16:26
+:AGENT:    emacs-3455282
+:SESSION:  20251229-162607
+:UPDATED:  2025-12-29 16:26
+:LAST_AGENT: emacs-3455282
+:VIBE_ID:  6bcd672a-6f47-4af1-a630-9be012503da1
+:END:
+** TODO Create emacs-mcp-presentation addon
+:PROPERTIES:
+:ID:       45d2e2c4-9ea5-4a4b-a3ff-737ce8ba838c
+:CREATED:  2025-12-31 14:11
+:DESCRIPTION: New addon for emacs-mcp that streamlines org-mode presentation creation. Supports both Beamer (LaTeX/PDF) and Reveal.js (HTML) output formats. Features: templates, slide scaffolding, MCP tools for AI-assisted content generation.
+:AGENT:    emacs-1664516
+:SESSION:  20251231-141135
+:END:
+** TODO BUG #1: Add parse-file function to org-clj parser
+:PROPERTIES:
+:ID:       076910d5-ad28-4842-8c0b-d72a658c5b3f
+:CREATED:  2025-12-31 16:43
+:DESCRIPTION: HIGH PRIORITY - Add convenience function parse-file that wraps slurp + parse-document. Test: test-parse-file-exists, test-parse-file-works in bug_regression_test.clj
+:AGENT:    emacs-1664516
+:SESSION:  20251231-164359
+:END:
+** TODO BUG #1: Add parse-file function to org-clj parser
+:PROPERTIES:
+:ID:       929c44a2-ed9a-46b5-9947-b4ed1188c129
+:CREATED:  2025-12-31 16:46
+:DESCRIPTION: HIGH - Add convenience function. Test: test-parse-file-exists
+:AGENT:    emacs-1664516
+:SESSION:  20251231-164646
+:END:
+** TODO BUG #2: Fix CIDER eval returning feature name
+:PROPERTIES:
+:ID:       a1bd3899-8b4d-4755-9305-98f540b5036f
+:CREATED:  2025-12-31 16:46
+:DESCRIPTION: HIGH - Returns 'emacs-mcp-cider' instead of result. Test: test-cider-eval-returns-result
+:AGENT:    emacs-1664516
+:SESSION:  20251231-164647
+:END:
+** TODO BUG #3: Fix prompt-capture list-prompts nil fields
+:PROPERTIES:
+:ID:       054a1296-5e3e-454c-98aa-20365da886ae
+:CREATED:  2025-12-31 16:46
+:DESCRIPTION: MEDIUM - Second entry returns nil for :id, :created, :source
+:AGENT:    emacs-1664516
+:SESSION:  20251231-164647
+:END:
+** TODO BUG #4: Fix render stats vs column count mismatch
+:PROPERTIES:
+:ID:       f9a8898b-1265-4c35-adde-8fa078c4e450
+:CREATED:  2025-12-31 16:46
+:DESCRIPTION: LOW - Stats shows 4 todo but column shows 54. Test: test-render-stats-match-columns
+:AGENT:    emacs-1664516
+:SESSION:  20251231-164647
+:END:
+** TODO BUG #6: Fix swarm double-encoded JSON response
+:PROPERTIES:
+:ID:       3686c044-84f3-4ba6-8371-ddfb7c08d660
+:CREATED:  2025-12-31 16:46
+:DESCRIPTION: LOW - Returns escaped JSON within JSON. Test: test-swarm-status-clean-json
+:AGENT:    emacs-1664516
+:SESSION:  20251231-164648
+:END:
+
+
+
+
+
+
+
+
+* MCP-Native Documentation Tools (Emacs RAG)
+:PROPERTIES:
+:ID: emacs-docs-rag-epic-2025
+:EPIC: docs-rag
+:DESCRIPTION: Native MCP tools for querying Emacs documentation - enables LLM-powered docs synthesis
+:END:
+
+** Phase 1: Core MCP Tools (Clojure Server)
+*** TODO Implement mcp_describe_function MCP tool
+:PROPERTIES:
+:ID: docs-rag-describe-function
+:EFFORT: S
+:PRIORITY: high
+:WAVE: 1
+:END:
+Native MCP tool to get function documentation.
+- Parameters: function_name (string)
+- Returns: {:name, :type, :signature, :docstring, :file}
+- Calls emacs-mcp-docs-describe-function via emacsclient
+
+*** TODO Implement mcp_describe_variable MCP tool
+:PROPERTIES:
+:ID: docs-rag-describe-variable
+:EFFORT: S
+:PRIORITY: high
+:WAVE: 1
+:END:
+Native MCP tool to get variable documentation.
+- Parameters: variable_name (string)
+- Returns: {:name, :type, :value, :docstring, :file}
+- Calls emacs-mcp-docs-describe-variable via emacsclient
+
+*** TODO Implement mcp_apropos MCP tool
+:PROPERTIES:
+:ID: docs-rag-apropos
+:EFFORT: M
+:PRIORITY: high
+:WAVE: 1
+:END:
+Native MCP tool for symbol search.
+- Parameters: pattern (string), type (optional: "function", "variable", "command", "face")
+- Returns: {:pattern, :total-matches, :symbols [{:name, :type, :docstring-preview}]}
+- Calls emacs-mcp-docs-apropos via emacsclient
+
+*** TODO Implement mcp_package_functions MCP tool
+:PROPERTIES:
+:ID: docs-rag-package-functions
+:EFFORT: S
+:PRIORITY: high
+:WAVE: 1
+:END:
+List all functions in a package/prefix.
+- Parameters: package_or_prefix (string)
+- Returns: {:prefix, :total-functions, :functions [{:name, :signature, :interactive}]}
+- Calls emacs-mcp-docs-package-functions via emacsclient
+
+*** TODO Implement mcp_find_keybindings MCP tool
+:PROPERTIES:
+:ID: docs-rag-find-keybindings
+:EFFORT: S
+:PRIORITY: high
+:WAVE: 1
+:END:
+Find keybindings for a command.
+- Parameters: command (string)
+- Returns: {:command, :bindings [{:key}], :binding-count}
+- Calls emacs-mcp-docs-find-keybindings via emacsclient
+
+*** TODO Implement mcp_package_commentary MCP tool
+:PROPERTIES:
+:ID: docs-rag-package-commentary
+:EFFORT: S
+:PRIORITY: medium
+:WAVE: 1
+:END:
+Get package Commentary section.
+- Parameters: package_name (string)
+- Returns: {:file, :path, :commentary}
+- Calls emacs-mcp-docs-package-commentary via emacsclient
+
+*** TODO Implement mcp_list_packages MCP tool
+:PROPERTIES:
+:ID: docs-rag-list-packages
+:EFFORT: S
+:PRIORITY: low
+:WAVE: 1
+:END:
+List loaded Emacs features/packages.
+- Parameters: none
+- Returns: {:total, :features [{:name, :file}]}
+- Calls emacs-mcp-docs-list-packages via emacsclient
+
+** Phase 2: Clojure Server Infrastructure
+*** TODO Create docs.clj MCP tool namespace
+:PROPERTIES:
+:ID: docs-rag-namespace
+:EFFORT: M
+:PRIORITY: high
+:WAVE: 2
+:DEPENDS: phase-1
+:END:
+- Define tool schemas for all docs tools
+- Wire to emacs-mcp-docs.el functions via emacsclient
+- Parse elisp plist responses to JSON/EDN
+
+*** TODO Add emacsclient response parser
+:PROPERTIES:
+:ID: docs-rag-response-parser
+:EFFORT: M
+:PRIORITY: high
+:WAVE: 2
+:END:
+Parse elisp plist output from emacsclient:
+- Convert (:key value) to {:key value}
+- Handle nested structures
+- Handle nil, t, strings, numbers
+
+*** TODO Add docs tool registration to server
+:PROPERTIES:
+:ID: docs-rag-registration
+:EFFORT: S
+:PRIORITY: high
+:WAVE: 2
+:DEPENDS: docs-namespace
+:END:
+Register all docs MCP tools in the server tool registry.
+
+** Phase 3: Enhanced Features
+*** TODO Implement mcp_info_lookup MCP tool
+:PROPERTIES:
+:ID: docs-rag-info-lookup
+:EFFORT: M
+:PRIORITY: medium
+:WAVE: 3
+:END:
+Search Info manuals for symbol.
+- Parameters: symbol (string), mode (optional)
+- Returns: {:symbol, :found, :info-content}
+- More complex: may need to capture Info buffer content
+
+*** TODO Implement mcp_describe_mode MCP tool
+:PROPERTIES:
+:ID: docs-rag-describe-mode
+:EFFORT: M
+:PRIORITY: medium
+:WAVE: 3
+:END:
+Get documentation for a major/minor mode.
+- Parameters: mode_name (string)
+- Returns: {:mode, :docstring, :keybindings, :hooks}
+
+*** TODO Implement mcp_customization_options MCP tool
+:PROPERTIES:
+:ID: docs-rag-customization
+:EFFORT: M
+:PRIORITY: low
+:WAVE: 3
+:END:
+List customization options for a group.
+- Parameters: group (string)
+- Returns: {:group, :options [{:name, :type, :default, :docstring}]}
+
+*** TODO Add caching layer for docs queries
+:PROPERTIES:
+:ID: docs-rag-caching
+:EFFORT: M
+:PRIORITY: low
+:WAVE: 3
+:END:
+Cache frequent queries:
+- LRU cache with TTL
+- Invalidate on package reload
+- Configurable cache size
+
+** Phase 4: Integration & Polish
+*** TODO Add docs addon auto-load trigger
+:PROPERTIES:
+:ID: docs-rag-autoload
+:EFFORT: S
+:PRIORITY: medium
+:WAVE: 4
+:END:
+Update emacs-mcp-addon-auto-load-list to include docs addon.
+Trigger: always (no specific feature dependency).
+
+*** TODO Write docs-tools.md API reference
+:PROPERTIES:
+:ID: docs-rag-api-docs
+:EFFORT: M
+:PRIORITY: medium
+:WAVE: 4
+:END:
+Document all MCP tools:
+- Parameters and return values
+- Usage examples
+- Integration with LLM workflows
+
+*** TODO Create example: package explainer workflow
+:PROPERTIES:
+:ID: docs-rag-example-workflow
+:EFFORT: M
+:PRIORITY: low
+:WAVE: 4
+:END:
+Demonstrate end-to-end workflow:
+- User asks about a package
+- MCP tools gather docs
+- LLM synthesizes guide
+- Output to org buffer
+
+*** TODO Add telemetry for docs tool usage
+:PROPERTIES:
+:ID: docs-rag-telemetry
+:EFFORT: S
+:PRIORITY: low
+:WAVE: 4
+:END:
+Track query patterns:
+- Most queried packages
+- Query latency
+- Cache hit rates
+
+* org-clj: Native Clojure Org-Mode Parser
+:PROPERTIES:
+:ID: org-clj-epic-2025
+:EPIC: org-clj
+:DESCRIPTION: Native Clojure library for parsing, querying, and writing org-mode files
+:END:
+
+** Phase 1: Core Parser (Wave 1 - Parallelizable)
+*** TODO Define org-clj data schemas (spec/malli)
+:PROPERTIES:
+:EFFORT: S
+:PRIORITY: high
+:WAVE: 1
+:WORKER: A
+:END:
+Create core data structures for org documents:
+- Document schema with properties, content, headlines
+- Headline schema with level, keyword, tags, properties, planning
+- Property drawer schema
+- Validation functions
+
+*** TODO Implement headline text parser
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: high
+:WAVE: 1
+:WORKER: A
+:DEPENDS: schemas
+:END:
+Parse headline components:
+- TODO keywords (TODO, DONE, IN-PROGRESS, etc)
+- Priority markers ([#A], [#B], [#C])
+- Tags (:tag1:tag2:)
+- Title text
+
+*** TODO Implement property drawer parser
+:PROPERTIES:
+:EFFORT: S
+:PRIORITY: high
+:WAVE: 1
+:WORKER: B
+:END:
+Parse :PROPERTIES: ... :END: blocks:
+- Key-value extraction
+- Special properties (ID, CREATED, etc)
+- Custom property handling
+
+*** TODO Create test fixtures and sample org files
+:PROPERTIES:
+:EFFORT: S
+:PRIORITY: high
+:WAVE: 1
+:WORKER: C
+:END:
+Create test data:
+- Minimal org file
+- Complex nested headlines
+- Various TODO keywords
+- Property drawer variations
+- Edge cases (empty, special chars)
+
+** Phase 2: Document Parser & Writer (Wave 2)
+*** TODO Implement document-level parser
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: high
+:WAVE: 2
+:WORKER: A
+:DEPENDS: headline-parser
+:END:
+Parse file-level elements:
+- #+TITLE, #+AUTHOR, #+STARTUP
+- File-level properties
+- Comments and blank lines
+
+*** TODO Implement headline tree builder
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: high
+:WAVE: 2
+:WORKER: A
+:DEPENDS: headline-parser
+:END:
+Build nested structure from flat headlines:
+- Level-based nesting algorithm
+- Parent-child relationships
+- Sibling ordering
+
+*** TODO Implement headline writer/serializer
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: high
+:WAVE: 2
+:WORKER: B
+:DEPENDS: schemas
+:END:
+Serialize headline back to org format:
+- Stars based on level
+- TODO keyword formatting
+- Priority and tags
+- Property drawer formatting
+
+*** TODO Implement document writer
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: high
+:WAVE: 2
+:WORKER: B
+:DEPENDS: headline-writer
+:END:
+Full document serialization:
+- File-level properties
+- Headline tree traversal
+- Whitespace preservation
+
+*** TODO Add round-trip parser tests
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: high
+:WAVE: 2
+:WORKER: C
+:DEPENDS: parser, writer
+:END:
+Verify idempotent round-trips:
+- parse → write → parse = same structure
+- Test with real kanban.org
+- Property preservation
+
+** Phase 3: Query & Transform (Wave 3 - Parallelizable)
+*** TODO Implement find-by-id query
+:PROPERTIES:
+:EFFORT: S
+:PRIORITY: medium
+:WAVE: 3
+:WORKER: A
+:DEPENDS: parser
+:END:
+Find headline by :ID property.
+
+*** TODO Implement find-by-status query
+:PROPERTIES:
+:EFFORT: S
+:PRIORITY: medium
+:WAVE: 3
+:WORKER: A
+:DEPENDS: parser
+:END:
+Filter headlines by TODO keyword.
+
+*** TODO Implement find-by-property query
+:PROPERTIES:
+:EFFORT: S
+:PRIORITY: medium
+:WAVE: 3
+:WORKER: A
+:DEPENDS: parser
+:END:
+Generic property-based queries.
+
+*** TODO Implement update-headline transform
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: medium
+:WAVE: 3
+:WORKER: B
+:DEPENDS: query
+:END:
+Update headline by ID with new values.
+
+*** TODO Implement set-status transform
+:PROPERTIES:
+:EFFORT: S
+:PRIORITY: medium
+:WAVE: 3
+:WORKER: B
+:DEPENDS: query
+:END:
+Change TODO keyword on headline.
+
+*** TODO Implement set-property transform
+:PROPERTIES:
+:EFFORT: S
+:PRIORITY: medium
+:WAVE: 3
+:WORKER: B
+:DEPENDS: query
+:END:
+Add/update property on headline.
+
+*** TODO Create kanban-specific operations
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: medium
+:WAVE: 3
+:WORKER: C
+:DEPENDS: parser
+:END:
+Kanban helpers:
+- kanban-tasks: Extract level-2 as tasks
+- kanban-move-task: Change status column
+- kanban-create-task: Add new task
+
+** Phase 4: MCP Integration (Wave 4)
+*** TODO Implement org_clj_parse MCP tool
+:PROPERTIES:
+:EFFORT: S
+:PRIORITY: medium
+:WAVE: 4
+:WORKER: A
+:DEPENDS: parser
+:END:
+Parse org file to EDN/JSON.
+
+*** TODO Implement org_clj_write MCP tool
+:PROPERTIES:
+:EFFORT: S
+:PRIORITY: medium
+:WAVE: 4
+:WORKER: A
+:DEPENDS: writer
+:END:
+Write EDN back to org file.
+
+*** TODO Implement org_clj_query MCP tool
+:PROPERTIES:
+:EFFORT: S
+:PRIORITY: medium
+:WAVE: 4
+:WORKER: A
+:DEPENDS: query
+:END:
+Query headlines via MCP.
+
+*** TODO Implement org_kanban_native_status MCP tool
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: medium
+:WAVE: 4
+:WORKER: B
+:DEPENDS: kanban-ops
+:END:
+Native kanban status (replaces elisp).
+
+*** TODO Implement org_kanban_native_move MCP tool
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: medium
+:WAVE: 4
+:WORKER: B
+:DEPENDS: kanban-ops
+:END:
+Native task move operation.
+
+** Phase 5: Polish (Wave 5)
+*** TODO Add document caching layer
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: low
+:WAVE: 5
+:END:
+Cache by file path + mtime.
+
+*** TODO Add telemetry for org-clj operations
+:PROPERTIES:
+:EFFORT: S
+:PRIORITY: low
+:WAVE: 5
+:END:
+Parse time, query performance metrics.
+
+*** TODO Update org-kanban.el for native backend
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: low
+:WAVE: 5
+:END:
+Add option to use Clojure backend with elisp fallback.
+
+*** TODO Write org-clj API documentation
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: low
+:WAVE: 5
+:END:
+API reference, usage examples, integration guide.
+
+
+
+
+
+
+
+
+
+
+
+
+
+* Swarm Orchestration (Claude Fleet Control)
+:PROPERTIES:
+:ID: swarm-epic-2025
+:EPIC: swarm
+:DESCRIPTION: Enable Master Claude to spawn and control slave Claude instances for parallel task execution
+:END:
+
+** Phase 1: Core Infrastructure
+*** DONE Design swarm protocol and message format
+CLOSED: [2025-12-29]
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: high
+:END:
+Define JSON schema for master↔slave communication:
+- Task dispatch format (prompt, context, constraints)
+- Response format (result, status, errors)
+- Heartbeat/status polling
+
+See: [[file:docs/swarm-protocol.md][docs/swarm-protocol.md]]
+
+*** DONE Create emacs-mcp-swarm.el addon skeleton
+CLOSED: [2025-12-29]
+:PROPERTIES:
+:EFFORT: S
+:PRIORITY: high
+:DEPENDS: swarm-protocol
+:END:
+- Register with addon system (:init, :shutdown)
+- Define customization variables
+- Create keymap (C-c s prefix)
+- File-based presets system with custom directory support
+
+See: [[file:elisp/addons/emacs-mcp-swarm.el][elisp/addons/emacs-mcp-swarm.el]]
+See: [[file:presets/][presets/]]
+
+*** DONE Implement slave session spawning (vterm)
+CLOSED: [2025-12-29]
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: high
+:END:
+- spawn-slave: Create vterm buffer with `claude` process
+- track-slave: Register in emacs-mcp-swarm--sessions alist
+- configure-slave: Set working directory, context
+
+*** DONE Implement prompt dispatch to slave
+CLOSED: [2025-12-29]
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: high
+:END:
+- send-prompt: Use vterm-send-string
+- Handle multi-line prompts (heredoc or temp file)
+- Add task ID tracking
+
+*** DONE Implement response collection
+CLOSED: [2025-12-29]
+:PROPERTIES:
+:EFFORT: L
+:PRIORITY: high
+:END:
+- Monitor buffer for completion markers
+- Parse response from buffer content (vterm-aware: search for ● marker)
+- Handle timeouts and errors
+
+
+*** DONE Add eat terminal support (experimental)
+CLOSED: [2025-12-29]
+:PROPERTIES:
+:EFFORT: S
+:PRIORITY: low
+:END:
+- Added emacs-mcp-swarm-terminal customization (vterm/eat)
+- Updated spawn and dispatch for terminal-agnostic operation
+- Marked experimental due to input handling issues with eat
+*** DONE Implement slave lifecycle management
+CLOSED: [2025-12-29]
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: high
+:END:
+- kill-slave: Terminate specific session
+- kill-all-slaves: Cleanup on shutdown
+- restart-slave: Recover from failures
+
+** Phase 2: MCP Integration
+*** DONE Create swarm.clj MCP tool namespace
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: medium
+:DEPENDS: phase-1
+:END:
+CLOSED: [2025-12-29]
+- Define tool schemas
+- Wire to emacs-mcp elisp functions
+
+*** DONE Implement swarm_spawn MCP tool
+:PROPERTIES:
+:EFFORT: S
+:PRIORITY: medium
+:END:
+CLOSED: [2025-12-29]
+Parameters: name, cwd, initial_context
+Returns: slave_id, status
+
+*** DONE Implement swarm_dispatch MCP tool
+:PROPERTIES:
+:EFFORT: S
+:PRIORITY: medium
+:END:
+CLOSED: [2025-12-29]
+Parameters: slave_id, prompt, timeout_ms
+Returns: task_id, dispatched_at
+
+*** DONE Implement swarm_status MCP tool
+:PROPERTIES:
+:EFFORT: S
+:PRIORITY: medium
+:END:
+CLOSED: [2025-12-29]
+Parameters: slave_id (optional, all if nil)
+Returns: [{slave_id, status, current_task, uptime}]
+
+*** DONE Implement swarm_collect MCP tool
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: medium
+:END:
+CLOSED: [2025-12-29]
+Parameters: slave_id or task_id, timeout_ms
+Returns: response_text, completed_at, tokens_used
+
+*** DONE Implement swarm_broadcast MCP tool
+:PROPERTIES:
+:EFFORT: S
+:PRIORITY: medium
+:END:
+CLOSED: [2025-12-29]
+Parameters: prompt, slave_filter (optional)
+Returns: [{slave_id, task_id}]
+
+*** DONE Implement swarm_kill MCP tool
+:PROPERTIES:
+:EFFORT: S
+:PRIORITY: medium
+:END:
+CLOSED: [2025-12-29]
+Parameters: slave_id or "all"
+Returns: killed_count
+
+** Phase 3: Smart Orchestration
+*** TODO Implement task queue with priorities
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: low
+:DEPENDS: phase-2
+:END:
+- FIFO queue per slave
+- Global queue with load balancing
+- Priority levels (critical, high, normal, low)
+
+*** TODO Implement result aggregation
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: low
+:END:
+- Collect results from multiple slaves
+- Merge/combine strategies
+- Conflict resolution
+
+*** TODO Implement context sharing between slaves
+:PROPERTIES:
+:EFFORT: L
+:PRIORITY: low
+:END:
+- Shared memory via emacs-mcp-memory
+- File-based context passing
+- Git worktree isolation per slave
+
+*** TODO Add recursion safeguards
+:PROPERTIES:
+:EFFORT: S
+:PRIORITY: medium
+:END:
+- Max depth limit (default: 2)
+- Detection of recursive spawn attempts
+- Rate limiting
+
+*** TODO Implement slave specialization
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: low
+:END:
+- Role-based slaves (tester, reviewer, documenter)
+- Custom system prompts per role
+- Tool restrictions per role
+
+*** TODO Create swarm transient menu
+:PROPERTIES:
+:EFFORT: S
+:PRIORITY: low
+:END:
+- Visual overview of active slaves
+- Quick spawn/kill actions
+- Status dashboard
+
+** Phase 4: Documentation & Testing
+*** DONE Write swarm-development.md guide
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: medium
+:END:
+CLOSED: [2025-12-29]
+- Architecture overview
+- Usage examples
+- Best practices for task decomposition
+
+*** DONE Write swarm-api.md reference
+:PROPERTIES:
+:EFFORT: S
+:PRIORITY: medium
+:END:
+CLOSED: [2025-12-29]
+- All MCP tools documented
+- Elisp API documented
+- JSON schemas
+
+*** TODO Create example workflows
+:PROPERTIES:
+:EFFORT: M
+:PRIORITY: low
+:END:
+- Parallel test runner
+- Multi-file refactoring
+- Code review swarm
+
+** DONE Add org-kanban addon with dual backends
+:PROPERTIES:
+:VIBE_ID:  ee9d5a6b-afe6-4224-9543-cd448a49f2a6
+:END:
+** DONE Implement graceful degradation for eval failures
+:PROPERTIES:
+:VIBE_ID:  687f5b15-9673-411c-b086-81f9cb3ff3b0
+:END:
+** DONE Add telemetry for eval operations
+:PROPERTIES:
+:VIBE_ID:  de363cea-e8b4-46a5-ad2d-eddbd1df9408
+:END:
+** DONE Add boundary validation for eval inputs
+:PROPERTIES:
+:VIBE_ID:  6252b3bf-0a73-4173-8706-3f76d8f19336
+:END:
+** DONE Create EvaluatorFactory with mode selection
+:PROPERTIES:
+:VIBE_ID:  ba551d14-5d89-4ed4-8b85-6928f827ec44
+:END:
+** DONE Implement EmacsCiderEvaluator
+:PROPERTIES:
+:VIBE_ID:  4992fe7c-644f-4659-bb3b-9660689667ea
+:END:
+** DONE Implement DirectNreplEvaluator
+:PROPERTIES:
+:VIBE_ID:  de4cfc8c-de0d-43a3-87a7-addaa7808b24
+:END:
+** DONE Define ReplEvaluator protocol (DIP)
+:PROPERTIES:
+:VIBE_ID:  dcd6cd59-20c8-4033-827c-45974b0a440f
+:END:
+** DONE Merge feat/addon-system to staging
+:PROPERTIES:
+:VIBE_ID:  1d0e9b71-4889-4951-a1d0-6df0d270fea2
+:END:
+** DONE Test addon loading in Emacs
+:PROPERTIES:
+:VIBE_ID:  26fba8fc-2158-486d-b6cd-c4be5920ab65
+:END:
+** DONE Update README with addon system documentation
+:PROPERTIES:
+:VIBE_ID:  ee555311-f56c-4510-b657-de390f4d5d09
+:END:
+** DONE Create org-ai-mcp addon stub
+:PROPERTIES:
+:VIBE_ID:  6bcd672a-6f47-4af1-a630-9be012503da1
+:END:

@@ -31,7 +31,7 @@
 ;; Soft dependency - don't error if target package isn't installed
 (declare-function target-package-function "target-package")
 
-;;;; Customization
+;;;; Customization:
 
 (defgroup emacs-mcp-template nil
   "Integration between emacs-mcp and target-package."
@@ -43,7 +43,7 @@
   :type 'boolean
   :group 'emacs-mcp-template)
 
-;;;; Internal
+;;;; Internal:
 
 (defvar emacs-mcp-template--initialized nil
   "Whether the addon has been initialized.")
@@ -54,7 +54,7 @@
     (require 'emacs-mcp-api nil t))
   (featurep 'emacs-mcp-api))
 
-;;;; Public API
+;;;; Public API:
 
 ;;;###autoload
 (defun emacs-mcp-template-get-context ()
@@ -81,7 +81,7 @@
   (when (emacs-mcp-template--ensure-api)
     (emacs-mcp-api-memory-query type nil (or limit 10))))
 
-;;;; Integration hooks (customize these for your target package)
+;;;; Integration hooks (customize these for your target package):
 
 ;; Example: Advice to add context to a target function
 ;; (defun emacs-mcp-template--add-context-advice (orig-fun &rest args)
@@ -101,7 +101,7 @@
 ;;      "note"
 ;;      '("auto-logged"))))
 
-;;;; Minor mode (optional)
+;;;; Minor mode (optional):
 
 ;;;###autoload
 (define-minor-mode emacs-mcp-template-mode
@@ -120,7 +120,7 @@
     ;; (advice-remove 'target-function #'emacs-mcp-template--add-context-advice)
     (message "emacs-mcp-template disabled")))
 
-;;;; Transient menu (optional, requires transient.el)
+;;;; Transient menu (optional, requires transient.el):
 
 ;; (transient-define-prefix emacs-mcp-template-transient ()
 ;;   "MCP integration menu for target-package."
@@ -131,7 +131,33 @@
 ;;    ["Query"
 ;;     ("q" "Query memory" emacs-mcp-template-query-memory)]])
 
-;;;; Registration
+;;;; Addon Lifecycle Functions (NEW - recommended approach):
+
+;; These functions are called automatically by the addon system:
+
+(defun emacs-mcp-template--addon-init ()
+  "Synchronous init - runs immediately after loading.
+Use for lightweight setup that must complete before use."
+  (require 'emacs-mcp-api nil t)
+  ;; Example: setup keybindings, hooks
+  (message "emacs-mcp-template: initialized"))
+
+(defun emacs-mcp-template--addon-async-init ()
+  "Asynchronous init - runs in background after loading.
+Use for long-running startup (servers, subprocesses).
+Should return a process object if starting a subprocess."
+  ;; Example: start a server
+  ;; (when emacs-mcp-template-auto-start
+  ;;   (start-process "my-server" "*my-server*" "my-command"))
+  nil)
+
+(defun emacs-mcp-template--addon-shutdown ()
+  "Shutdown - runs when addon is unloaded.
+Use for cleanup (stopping servers, saving state)."
+  ;; Example: stop server, save state
+  (message "emacs-mcp-template: shutdown complete"))
+
+;;;; Registration:
 
 ;; Register this addon with emacs-mcp
 (with-eval-after-load 'emacs-mcp-addons
@@ -140,7 +166,11 @@
    :version "0.1.0"
    :description "Template addon for emacs-mcp"
    :requires '(emacs-mcp-api)
-   :provides '(emacs-mcp-template-mode)))
+   :provides '(emacs-mcp-template-mode)
+   ;; Lifecycle hooks (all optional):
+   :init #'emacs-mcp-template--addon-init
+   :async-init #'emacs-mcp-template--addon-async-init
+   :shutdown #'emacs-mcp-template--addon-shutdown))
 
 (provide 'emacs-mcp-addon-template)
 ;;; emacs-mcp-addon-template.el ends here

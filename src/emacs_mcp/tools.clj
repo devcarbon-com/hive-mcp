@@ -3,6 +3,12 @@
   (:require [emacs-mcp.emacsclient :as ec]
             [emacs-mcp.telemetry :as telemetry]
             [emacs-mcp.validation :as v]
+            [emacs-mcp.org-clj.parser :as org-parser]
+            [emacs-mcp.org-clj.writer :as org-writer]
+            [emacs-mcp.org-clj.query :as org-query]
+            [emacs-mcp.org-clj.transform :as org-transform]
+            [emacs-mcp.org-clj.render :as org-render]
+            [emacs-mcp.prompt-capture :as prompt-capture]
             [clojure.data.json :as json]
             [taoensso.timbre :as log]))
 
@@ -174,6 +180,39 @@
         {:type "text" :text (str "Error: " error) :isError true}))
     {:type "text" :text "Error: emacs-mcp.el is not loaded." :isError true}))
 
+(defn handle-mcp-memory-query-metadata
+  "Query project memory by type, returning only metadata (id, type, preview, tags, created).
+  Use this for efficient browsing - returns ~10x fewer tokens than full query.
+  Follow up with mcp_memory_get_full to fetch specific entries."
+  [{:keys [type tags limit]}]
+  (log/info "mcp-memory-query-metadata:" type)
+  (if (emacs-mcp-el-available?)
+    (let [tags-str (if (seq tags) (str "'" (pr-str tags)) "nil")
+          limit-val (or limit 20)
+          elisp (format "(json-encode (emacs-mcp-api-memory-query-metadata %s %s %d))"
+                        (pr-str type)
+                        tags-str
+                        limit-val)
+          {:keys [success result error]} (ec/eval-elisp elisp)]
+      (if success
+        {:type "text" :text result}
+        {:type "text" :text (str "Error: " error) :isError true}))
+    {:type "text" :text "Error: emacs-mcp.el is not loaded." :isError true}))
+
+(defn handle-mcp-memory-get-full
+  "Get full content of a memory entry by ID.
+  Use after mcp_memory_query_metadata to fetch specific entries."
+  [{:keys [id]}]
+  (log/info "mcp-memory-get-full:" id)
+  (if (emacs-mcp-el-available?)
+    (let [elisp (format "(json-encode (emacs-mcp-api-memory-get-full %s))"
+                        (pr-str id))
+          {:keys [success result error]} (ec/eval-elisp elisp)]
+      (if success
+        {:type "text" :text result}
+        {:type "text" :text (str "Error: " error) :isError true}))
+    {:type "text" :text "Error: emacs-mcp.el is not loaded." :isError true}))
+
 (defn handle-mcp-run-workflow
   "Run a user-defined workflow."
   [{:keys [name args]}]
@@ -287,10 +326,11 @@
   "Get CIDER connection status."
   [_]
   (log/info "cider-status")
-  (let [elisp "(require 'emacs-mcp-cider nil t)
-               (if (fboundp 'emacs-mcp-cider-status)
-                   (json-encode (emacs-mcp-cider-status))
-                 (json-encode (list :connected nil :error \"emacs-mcp-cider not loaded\")))"
+  (let [elisp "(progn
+                (require 'emacs-mcp-cider nil t)
+                (if (fboundp 'emacs-mcp-cider-status)
+                    (json-encode (emacs-mcp-cider-status))
+                  (json-encode (list :connected nil :error \"emacs-mcp-cider not loaded\"))))"
         {:keys [success result error]} (ec/eval-elisp elisp)]
     (if success
       {:type "text" :text result}
@@ -303,10 +343,11 @@
     (v/validate-cider-eval-request params)
     (let [{:keys [code]} params]
       (telemetry/with-eval-telemetry :cider-silent code nil
-        (let [elisp (format "(require 'emacs-mcp-cider nil t)
-                             (if (fboundp 'emacs-mcp-cider-eval-silent)
-                                 (emacs-mcp-cider-eval-silent %s)
-                               (error \"emacs-mcp-cider not loaded\"))"
+        (let [elisp (format "(progn
+                              (require 'emacs-mcp-cider nil t)
+                              (if (fboundp 'emacs-mcp-cider-eval-silent)
+                                  (emacs-mcp-cider-eval-silent %s)
+                                (error \"emacs-mcp-cider not loaded\")))"
                             (pr-str code))
               {:keys [success result error]} (ec/eval-elisp elisp)]
           (if success
@@ -324,10 +365,11 @@
     (v/validate-cider-eval-request params)
     (let [{:keys [code]} params]
       (telemetry/with-eval-telemetry :cider-explicit code nil
-        (let [elisp (format "(require 'emacs-mcp-cider nil t)
-                             (if (fboundp 'emacs-mcp-cider-eval-explicit)
-                                 (emacs-mcp-cider-eval-explicit %s)
-                               (error \"emacs-mcp-cider not loaded\"))"
+        (let [elisp (format "(progn
+                              (require 'emacs-mcp-cider nil t)
+                              (if (fboundp 'emacs-mcp-cider-eval-explicit)
+                                  (emacs-mcp-cider-eval-explicit %s)
+                                (error \"emacs-mcp-cider not loaded\")))"
                             (pr-str code))
               {:keys [success result error]} (ec/eval-elisp elisp)]
           (if success
@@ -337,6 +379,278 @@
       (if (= :validation (:type (ex-data e)))
         (v/wrap-validation-error e)
         (throw e)))))
+
+;; =============================================================================
+;; Multi-Session CIDER Tools
+;; =============================================================================
+
+(defn handle-cider-spawn-session
+  "Spawn a new named CIDER session with its own nREPL server.
+   Useful for parallel agent work where each agent needs isolated REPL."
+  [{:keys [name project_dir agent_id]}]
+  (log/info "cider-spawn-session" {:name name :agent_id agent_id})
+  (let [elisp (format "(progn
+                         (require 'emacs-mcp-cider nil t)
+                         (if (fboundp 'emacs-mcp-cider-spawn-session)
+                             (json-encode (emacs-mcp-cider-spawn-session %s %s %s))
+                           (error \"emacs-mcp-cider not loaded\")))"
+                      (pr-str name)
+                      (if project_dir (pr-str project_dir) "nil")
+                      (if agent_id (pr-str agent_id) "nil"))
+        {:keys [success result error]} (ec/eval-elisp elisp)]
+    (if success
+      {:content [{:type "text" :text result}]}
+      {:content [{:type "text" :text (format "Error: %s" error)}]})))
+
+(defn handle-cider-list-sessions
+  "List all active CIDER sessions with their status and ports."
+  [_]
+  (log/info "cider-list-sessions")
+  (let [elisp "(progn
+                 (require 'emacs-mcp-cider nil t)
+                 (if (fboundp 'emacs-mcp-cider-list-sessions)
+                     (json-encode (emacs-mcp-cider-list-sessions))
+                   (json-encode (list))))"
+        {:keys [success result error]} (ec/eval-elisp elisp)]
+    (if success
+      {:content [{:type "text" :text result}]}
+      {:content [{:type "text" :text (format "Error: %s" error)}]})))
+
+(defn handle-cider-eval-session
+  "Evaluate Clojure code in a specific named CIDER session."
+  [{:keys [session_name code]}]
+  (log/info "cider-eval-session" {:session session_name :code-length (count code)})
+  (let [elisp (format "(progn
+                         (require 'emacs-mcp-cider nil t)
+                         (if (fboundp 'emacs-mcp-cider-eval-in-session)
+                             (emacs-mcp-cider-eval-in-session %s %s)
+                           (error \"emacs-mcp-cider not loaded\")))"
+                      (pr-str session_name)
+                      (pr-str code))
+        {:keys [success result error]} (ec/eval-elisp elisp)]
+    (if success
+      {:content [{:type "text" :text result}]}
+      {:content [{:type "text" :text (format "Error: %s" error)}]})))
+
+(defn handle-cider-kill-session
+  "Kill a specific named CIDER session."
+  [{:keys [session_name]}]
+  (log/info "cider-kill-session" {:session session_name})
+  (let [elisp (format "(progn
+                         (require 'emacs-mcp-cider nil t)
+                         (if (fboundp 'emacs-mcp-cider-kill-session)
+                             (progn (emacs-mcp-cider-kill-session %s) \"killed\")
+                           (error \"emacs-mcp-cider not loaded\")))"
+                      (pr-str session_name))
+        {:keys [success result error]} (ec/eval-elisp elisp)]
+    (if success
+      {:content [{:type "text" :text (format "Session '%s' killed" session_name)}]}
+      {:content [{:type "text" :text (format "Error: %s" error)}]})))
+
+(defn handle-cider-kill-all-sessions
+  "Kill all CIDER sessions."
+  [_]
+  (log/info "cider-kill-all-sessions")
+  (let [elisp "(progn
+                 (require 'emacs-mcp-cider nil t)
+                 (if (fboundp 'emacs-mcp-cider-kill-all-sessions)
+                     (progn (emacs-mcp-cider-kill-all-sessions) \"all sessions killed\")
+                   (error \"emacs-mcp-cider not loaded\")))"
+        {:keys [success result error]} (ec/eval-elisp elisp)]
+    (if success
+      {:content [{:type "text" :text "All CIDER sessions killed"}]}
+      {:content [{:type "text" :text (format "Error: %s" error)}]})))
+
+;; ============================================================
+;; Magit Integration Tools (requires emacs-mcp-magit addon)
+;; ============================================================
+
+(defn magit-addon-available?
+  "Check if the magit addon is loaded in Emacs."
+  []
+  (let [elisp "(progn
+                (require 'emacs-mcp-magit nil t)
+                (if (featurep 'emacs-mcp-magit) t nil))"
+        {:keys [success result]} (ec/eval-elisp elisp)]
+    (and success (= result "t"))))
+
+(defn handle-magit-status
+  "Get comprehensive git repository status via magit addon."
+  [_]
+  (log/info "magit-status")
+  (let [elisp "(progn
+                 (require 'emacs-mcp-magit nil t)
+                 (if (fboundp 'emacs-mcp-magit-api-status)
+                     (let ((status (emacs-mcp-magit-api-status)))
+                       (json-encode status))
+                   (json-encode (list :error \"emacs-mcp-magit not loaded\"))))"
+        {:keys [success result error]} (ec/eval-elisp elisp)]
+    (if success
+      {:type "text" :text result}
+      {:type "text" :text (str "Error: " error) :isError true})))
+
+(defn handle-magit-branches
+  "Get branch information including current, upstream, local and remote branches."
+  [_]
+  (log/info "magit-branches")
+  (let [elisp "(progn
+                 (require 'emacs-mcp-magit nil t)
+                 (if (fboundp 'emacs-mcp-magit-api-branches)
+                     (let ((branches (emacs-mcp-magit-api-branches)))
+                       (json-encode branches))
+                   (json-encode (list :error \"emacs-mcp-magit not loaded\"))))"
+        {:keys [success result error]} (ec/eval-elisp elisp)]
+    (if success
+      {:type "text" :text result}
+      {:type "text" :text (str "Error: " error) :isError true})))
+
+(defn handle-magit-log
+  "Get recent commit log."
+  [{:keys [count]}]
+  (log/info "magit-log" {:count count})
+  (let [n (or count 10)
+        elisp (format "(progn
+                         (require 'emacs-mcp-magit nil t)
+                         (if (fboundp 'emacs-mcp-magit-api-log)
+                             (let ((commits (emacs-mcp-magit-api-log %d)))
+                               (json-encode commits))
+                           (json-encode (list :error \"emacs-mcp-magit not loaded\"))))"
+                      n)
+        {:keys [success result error]} (ec/eval-elisp elisp)]
+    (if success
+      {:type "text" :text result}
+      {:type "text" :text (str "Error: " error) :isError true})))
+
+(defn handle-magit-diff
+  "Get diff for staged, unstaged, or all changes."
+  [{:keys [target]}]
+  (log/info "magit-diff" {:target target})
+  (let [target-sym (case target
+                     "staged" "'staged"
+                     "unstaged" "'unstaged"
+                     "all" "'all"
+                     "'staged")
+        elisp (format "(progn
+                         (require 'emacs-mcp-magit nil t)
+                         (if (fboundp 'emacs-mcp-magit-api-diff)
+                             (emacs-mcp-magit-api-diff %s)
+                           \"emacs-mcp-magit not loaded\"))"
+                      target-sym)
+        {:keys [success result error]} (ec/eval-elisp elisp)]
+    (if success
+      {:type "text" :text result}
+      {:type "text" :text (str "Error: " error) :isError true})))
+
+(defn handle-magit-stage
+  "Stage files for commit. Use 'all' to stage all modified files."
+  [{:keys [files]}]
+  (log/info "magit-stage" {:files files})
+  (let [elisp (if (= files "all")
+                "(progn
+                   (require 'emacs-mcp-magit nil t)
+                   (if (fboundp 'emacs-mcp-magit-api-stage)
+                       (progn (emacs-mcp-magit-api-stage 'all) \"Staged all files\")
+                     \"emacs-mcp-magit not loaded\"))"
+                (format "(progn
+                           (require 'emacs-mcp-magit nil t)
+                           (if (fboundp 'emacs-mcp-magit-api-stage)
+                               (progn (emacs-mcp-magit-api-stage %s) \"Staged files\")
+                             \"emacs-mcp-magit not loaded\"))"
+                        (pr-str files)))
+        {:keys [success result error]} (ec/eval-elisp elisp)]
+    (if success
+      {:type "text" :text result}
+      {:type "text" :text (str "Error: " error) :isError true})))
+
+(defn handle-magit-commit
+  "Create a commit with the given message."
+  [{:keys [message all]}]
+  (log/info "magit-commit" {:message-len (count message) :all all})
+  (let [options-str (if all "'(:all t)" "nil")
+        elisp (format "(progn
+                         (require 'emacs-mcp-magit nil t)
+                         (if (fboundp 'emacs-mcp-magit-api-commit)
+                             (emacs-mcp-magit-api-commit %s %s)
+                           \"emacs-mcp-magit not loaded\"))"
+                      (pr-str message)
+                      options-str)
+        {:keys [success result error]} (ec/eval-elisp elisp)]
+    (if success
+      {:type "text" :text result}
+      {:type "text" :text (str "Error: " error) :isError true})))
+
+(defn handle-magit-push
+  "Push to remote. Optionally set upstream tracking."
+  [{:keys [set_upstream]}]
+  (log/info "magit-push" {:set_upstream set_upstream})
+  (let [options-str (if set_upstream "'(:set-upstream t)" "nil")
+        elisp (format "(progn
+                         (require 'emacs-mcp-magit nil t)
+                         (if (fboundp 'emacs-mcp-magit-api-push)
+                             (emacs-mcp-magit-api-push %s)
+                           \"emacs-mcp-magit not loaded\"))"
+                      options-str)
+        {:keys [success result error]} (ec/eval-elisp elisp)]
+    (if success
+      {:type "text" :text result}
+      {:type "text" :text (str "Error: " error) :isError true})))
+
+(defn handle-magit-pull
+  "Pull from upstream."
+  [_]
+  (log/info "magit-pull")
+  (let [elisp "(progn
+                 (require 'emacs-mcp-magit nil t)
+                 (if (fboundp 'emacs-mcp-magit-api-pull)
+                     (emacs-mcp-magit-api-pull)
+                   \"emacs-mcp-magit not loaded\"))"
+        {:keys [success result error]} (ec/eval-elisp elisp)]
+    (if success
+      {:type "text" :text result}
+      {:type "text" :text (str "Error: " error) :isError true})))
+
+(defn handle-magit-fetch
+  "Fetch from remote(s)."
+  [{:keys [remote]}]
+  (log/info "magit-fetch" {:remote remote})
+  (let [elisp (if remote
+                (format "(progn
+                           (require 'emacs-mcp-magit nil t)
+                           (if (fboundp 'emacs-mcp-magit-api-fetch)
+                               (emacs-mcp-magit-api-fetch %s)
+                             \"emacs-mcp-magit not loaded\"))"
+                        (pr-str remote))
+                "(progn
+                   (require 'emacs-mcp-magit nil t)
+                   (if (fboundp 'emacs-mcp-magit-api-fetch)
+                       (emacs-mcp-magit-api-fetch)
+                     \"emacs-mcp-magit not loaded\"))")
+        {:keys [success result error]} (ec/eval-elisp elisp)]
+    (if success
+      {:type "text" :text result}
+      {:type "text" :text (str "Error: " error) :isError true})))
+
+(defn handle-magit-feature-branches
+  "Get list of feature/fix/feat branches (for /ship and /ship-pr skills)."
+  [_]
+  (log/info "magit-feature-branches")
+  (let [elisp "(progn
+                 (require 'emacs-mcp-magit nil t)
+                 (if (fboundp 'emacs-mcp-magit-api-branches)
+                     (let* ((branches (emacs-mcp-magit-api-branches))
+                            (local (plist-get branches :local))
+                            (feature-branches 
+                              (seq-filter 
+                                (lambda (b) 
+                                  (string-match-p \"^\\\\(feature\\\\|fix\\\\|feat\\\\)/\" b))
+                                local)))
+                       (json-encode (list :current (plist-get branches :current)
+                                          :feature_branches feature-branches)))
+                   (json-encode (list :error \"emacs-mcp-magit not loaded\"))))"
+        {:keys [success result error]} (ec/eval-elisp elisp)]
+    (if success
+      {:type "text" :text result}
+      {:type "text" :text (str "Error: " error) :isError true})))
 
 ;;; ============================================================================
 ;;; Kanban Tools (org-kanban integration)
@@ -441,6 +755,275 @@
                   :text (str "Sync complete: " result)}]})
     {:content [{:type "text"
                 :text "emacs-mcp-org-kanban addon not loaded."}]}))
+
+;; =============================================================================
+;; Swarm Orchestration Tools (requires emacs-mcp-swarm addon)
+;; =============================================================================
+
+(defn swarm-addon-available?
+  "Check if emacs-mcp-swarm addon is loaded."
+  []
+  (let [{:keys [success result]} (ec/eval-elisp "(featurep 'emacs-mcp-swarm)")]
+    (and success (= result "t"))))
+
+(defn handle-swarm-spawn
+  "Spawn a new Claude slave instance."
+  [{:keys [name presets cwd role]}]
+  (if (swarm-addon-available?)
+    (let [presets-str (when (seq presets)
+                        (format "'(%s)" (clojure.string/join " " (map #(format "\"%s\"" %) presets))))
+          elisp (format "(json-encode (emacs-mcp-swarm-api-spawn \"%s\" %s %s))"
+                        (v/escape-elisp-string (or name "slave"))
+                        (or presets-str "nil")
+                        (if cwd (format "\"%s\"" (v/escape-elisp-string cwd)) "nil"))
+          result (ec/eval-elisp elisp)]
+      {:content [{:type "text"
+                  :text (str result)}]})
+    {:content [{:type "text"
+                :text "emacs-mcp-swarm addon not loaded. Run (require 'emacs-mcp-swarm)"}]}))
+
+(defn handle-swarm-dispatch
+  "Dispatch a prompt to a slave."
+  [{:keys [slave_id prompt timeout_ms]}]
+  (if (swarm-addon-available?)
+    (let [elisp (format "(json-encode (emacs-mcp-swarm-api-dispatch \"%s\" \"%s\" %s))"
+                        (v/escape-elisp-string slave_id)
+                        (v/escape-elisp-string prompt)
+                        (or timeout_ms "nil"))
+          result (ec/eval-elisp elisp)]
+      {:content [{:type "text"
+                  :text (str result)}]})
+    {:content [{:type "text"
+                :text "emacs-mcp-swarm addon not loaded."}]}))
+
+(defn handle-swarm-status
+  "Get swarm status including all slaves and their states."
+  [{:keys [slave_id]}]
+  (if (swarm-addon-available?)
+    (let [elisp (if slave_id
+                  (format "(json-encode (emacs-mcp-swarm-status \"%s\"))" slave_id)
+                  "(json-encode (emacs-mcp-swarm-api-status))")
+          {:keys [success result error]} (ec/eval-elisp elisp)]
+      (if success
+        {:content [{:type "text" :text result}]}
+        {:content [{:type "text" :text (format "Error: %s" error)}]}))
+    {:content [{:type "text"
+                :text "emacs-mcp-swarm addon not loaded."}]}))
+
+(defn handle-swarm-collect
+  "Collect response from a task."
+  [{:keys [task_id timeout_ms]}]
+  (if (swarm-addon-available?)
+    (let [elisp (format "(json-encode (emacs-mcp-swarm-api-collect \"%s\" %s))"
+                        (v/escape-elisp-string task_id)
+                        (or timeout_ms "nil"))
+          result (ec/eval-elisp elisp)]
+      {:content [{:type "text"
+                  :text (str result)}]})
+    {:content [{:type "text"
+                :text "emacs-mcp-swarm addon not loaded."}]}))
+
+(defn handle-swarm-list-presets
+  "List available swarm presets."
+  [_]
+  (if (swarm-addon-available?)
+    (let [result (ec/eval-elisp "(json-encode (emacs-mcp-swarm-api-list-presets))")]
+      {:content [{:type "text"
+                  :text (str result)}]})
+    {:content [{:type "text"
+                :text "emacs-mcp-swarm addon not loaded."}]}))
+
+(defn handle-swarm-kill
+  "Kill a slave or all slaves."
+  [{:keys [slave_id]}]
+  (if (swarm-addon-available?)
+    (let [elisp (if (= slave_id "all")
+                  "(json-encode (emacs-mcp-swarm-api-kill-all))"
+                  (format "(json-encode (emacs-mcp-swarm-api-kill \"%s\"))"
+                          (v/escape-elisp-string slave_id)))
+          result (ec/eval-elisp elisp)]
+      {:content [{:type "text"
+                  :text (str result)}]})
+    {:content [{:type "text"
+                :text "emacs-mcp-swarm addon not loaded."}]}))
+
+(defn handle-swarm-broadcast
+  "Broadcast a prompt to all slaves."
+  [{:keys [prompt]}]
+  (if (swarm-addon-available?)
+    (let [elisp (format "(json-encode (emacs-mcp-swarm-broadcast \"%s\"))"
+                        (v/escape-elisp-string prompt))
+          result (ec/eval-elisp elisp)]
+      {:content [{:type "text"
+                  :text (str result)}]})
+    {:content [{:type "text"
+                :text "emacs-mcp-swarm addon not loaded."}]}))
+
+;; ============================================================
+;; org-clj Native Org-Mode Tools
+;; ============================================================
+
+(defn handle-org-clj-parse
+  "Parse an org file and return its structure as JSON."
+  [{:keys [file_path]}]
+  (try
+    (let [content (slurp file_path)
+          doc (org-parser/parse-document content)
+          json-str (json/write-str doc)]
+      {:content [{:type "text"
+                  :text json-str}]})
+    (catch Exception e
+      {:content [{:type "text"
+                  :text (str "Error parsing org file: " (.getMessage e))}]
+       :isError true})))
+
+(defn handle-org-clj-write
+  "Write an org document structure back to a file."
+  [{:keys [file_path document]}]
+  (try
+    (let [doc (if (string? document)
+                (json/read-str document :key-fn keyword)
+                document)
+          org-text (org-writer/write-document doc)]
+      (spit file_path org-text)
+      {:content [{:type "text"
+                  :text (str "Successfully wrote " (count org-text) " characters to " file_path)}]})
+    (catch Exception e
+      {:content [{:type "text"
+                  :text (str "Error writing org file: " (.getMessage e))}]
+       :isError true})))
+
+(defn handle-org-clj-query
+  "Query headlines in a parsed org document."
+  [{:keys [file_path query_type query_value]}]
+  (try
+    (let [content (slurp file_path)
+          doc (org-parser/parse-document content)
+          results (case query_type
+                    "by_id" [(org-query/find-by-id doc query_value)]
+                    "by_vibe_id" [(org-query/find-by-vibe-id doc query_value)]
+                    "by_status" (org-query/find-by-status doc query_value)
+                    "todo" (org-query/find-todo doc)
+                    "done" (org-query/find-done doc)
+                    "in_progress" (org-query/find-in-progress doc)
+                    "stats" [(org-query/task-stats doc)]
+                    (throw (ex-info (str "Unknown query type: " query_type)
+                                    {:query_type query_type})))
+          ;; Filter out nils
+          results (filterv some? results)]
+      {:content [{:type "text"
+                  :text (json/write-str results)}]})
+    (catch Exception e
+      {:content [{:type "text"
+                  :text (str "Error querying org file: " (.getMessage e))}]
+       :isError true})))
+
+(defn handle-org-kanban-native-status
+  "Get kanban status using native Clojure parser (no elisp dependency)."
+  [{:keys [file_path]}]
+  (try
+    (let [content (slurp file_path)
+          doc (org-parser/parse-document content)
+          stats (org-query/task-stats doc)
+          todos (org-query/find-todo doc)
+          in-progress (org-query/find-in-progress doc)
+          done (org-query/find-done doc)
+          result {:stats stats
+                  :by_status {:todo (mapv #(select-keys % [:title :properties]) todos)
+                              :in_progress (mapv #(select-keys % [:title :properties]) in-progress)
+                              :done (mapv #(select-keys % [:title :properties]) done)}
+                  :file file_path
+                  :backend "org-clj-native"}]
+      {:content [{:type "text"
+                  :text (json/write-str result)}]})
+    (catch Exception e
+      {:content [{:type "text"
+                  :text (str "Error getting kanban status: " (.getMessage e))}]
+       :isError true})))
+
+(defn handle-org-kanban-native-move
+  "Move a task to a new status using native Clojure parser."
+  [{:keys [file_path task_id new_status]}]
+  (try
+    (let [content (slurp file_path)
+          doc (org-parser/parse-document content)
+          ;; Check if task exists
+          task (org-query/find-by-id doc task_id)]
+      (if task
+        (let [updated-doc (org-transform/set-status doc task_id new_status)
+              org-text (org-writer/write-document updated-doc)]
+          (spit file_path org-text)
+          {:content [{:type "text"
+                      :text (json/write-str {:success true
+                                             :task_id task_id
+                                             :old_status (:keyword task)
+                                             :new_status new_status})}]})
+        {:content [{:type "text"
+                    :text (json/write-str {:success false
+                                           :error (str "Task not found: " task_id)})}]
+         :isError true}))
+    (catch Exception e
+      {:content [{:type "text"
+                  :text (str "Error moving task: " (.getMessage e))}]
+       :isError true})))
+
+(defn handle-org-kanban-render
+  "Render a visual kanban board from an org file."
+  [{:keys [file_path format column_width max_cards]}]
+  (try
+    (let [renderer (case (or format "terminal")
+                     "terminal" (org-render/terminal-renderer
+                                 {:column-width (or column_width 28)
+                                  :max-cards (or max_cards 10)})
+                     "emacs" (org-render/emacs-renderer)
+                     (throw (ex-info (str "Unknown format: " format) {:format format})))
+          output (org-render/render-file renderer file_path)]
+      {:content [{:type "text"
+                  :text output}]})
+    (catch Exception e
+      {:content [{:type "text"
+                  :text (str "Error rendering kanban: " (.getMessage e))}]
+       :isError true})))
+
+;;; Prompt Capture Tools
+
+(defn handle-prompt-capture
+  "Capture a well-structured prompt with analysis for RAG."
+  [{:keys [prompt accomplishes well_structured improvements
+           category tags quality source model context]}]
+  (prompt-capture/handle-prompt-capture
+   {:prompt prompt
+    :accomplishes accomplishes
+    :well_structured well_structured
+    :improvements improvements
+    :category category
+    :tags tags
+    :quality quality
+    :source source
+    :model model
+    :context context}))
+
+(defn handle-prompt-list
+  "List captured prompts with optional filtering."
+  [{:keys [category quality limit]}]
+  (prompt-capture/handle-prompt-list
+   {:category category :quality quality :limit limit}))
+
+(defn handle-prompt-search
+  "Search captured prompts by keyword."
+  [{:keys [query limit]}]
+  (prompt-capture/handle-prompt-search
+   {:query query :limit limit}))
+
+(defn handle-prompt-analyze
+  "Analyze a prompt's structure without saving."
+  [{:keys [prompt]}]
+  (prompt-capture/handle-prompt-analyze {:prompt prompt}))
+
+(defn handle-prompt-stats
+  "Get statistics about captured prompts."
+  [_]
+  (prompt-capture/handle-prompt-stats nil))
 
 ;; Tool definitions
 
@@ -562,6 +1145,28 @@
                   :required ["type"]}
     :handler handle-mcp-memory-query}
 
+   {:name "mcp_memory_query_metadata"
+    :description "Query project memory by type, returning only metadata (id, type, preview, tags, created). Use this for efficient browsing - returns ~10x fewer tokens than full query. Follow up with mcp_memory_get_full to fetch specific entries. Requires emacs-mcp.el."
+    :inputSchema {:type "object"
+                  :properties {"type" {:type "string"
+                                       :enum ["note" "snippet" "convention" "decision" "conversation"]
+                                       :description "Type of memory entries to query"}
+                               "tags" {:type "array"
+                                       :items {:type "string"}
+                                       :description "Optional tags to filter by"}
+                               "limit" {:type "integer"
+                                        :description "Maximum number of results (default: 20)"}}
+                  :required ["type"]}
+    :handler handle-mcp-memory-query-metadata}
+
+   {:name "mcp_memory_get_full"
+    :description "Get full content of a memory entry by ID. Use after mcp_memory_query_metadata to fetch specific entries when you need the full content. Requires emacs-mcp.el."
+    :inputSchema {:type "object"
+                  :properties {"id" {:type "string"
+                                     :description "ID of the memory entry to retrieve"}}
+                  :required ["id"]}
+    :handler handle-mcp-memory-get-full}
+
    {:name "mcp_list_workflows"
     :description "List available user-defined workflows. Requires emacs-mcp.el."
     :inputSchema {:type "object" :properties {}}
@@ -634,6 +1239,119 @@
                   :required ["code"]}
     :handler handle-cider-eval-explicit}
 
+   ;; Multi-Session CIDER Tools (for parallel agent work)
+   {:name "cider_spawn_session"
+    :description "Spawn a new named CIDER session with its own nREPL server. Useful for parallel agent work where each agent needs an isolated REPL. Sessions auto-connect when nREPL starts."
+    :inputSchema {:type "object"
+                  :properties {"name" {:type "string"
+                                       :description "Session identifier (e.g., 'agent-1', 'task-render')"}
+                               "project_dir" {:type "string"
+                                              :description "Directory to start nREPL in (optional, defaults to current project)"}
+                               "agent_id" {:type "string"
+                                           :description "Optional swarm agent ID to link this session to"}}
+                  :required ["name"]}
+    :handler handle-cider-spawn-session}
+
+   {:name "cider_list_sessions"
+    :description "List all active CIDER sessions with their status, ports, and linked agents."
+    :inputSchema {:type "object" :properties {}}
+    :handler handle-cider-list-sessions}
+
+   {:name "cider_eval_session"
+    :description "Evaluate Clojure code in a specific named CIDER session. Use for isolated evaluation in multi-agent scenarios."
+    :inputSchema {:type "object"
+                  :properties {"session_name" {:type "string"
+                                               :description "Name of the session to evaluate in"}
+                               "code" {:type "string"
+                                       :description "Clojure code to evaluate"}}
+                  :required ["session_name" "code"]}
+    :handler handle-cider-eval-session}
+
+   {:name "cider_kill_session"
+    :description "Kill a specific named CIDER session and its nREPL server."
+    :inputSchema {:type "object"
+                  :properties {"session_name" {:type "string"
+                                               :description "Name of the session to kill"}}
+                  :required ["session_name"]}
+    :handler handle-cider-kill-session}
+
+   {:name "cider_kill_all_sessions"
+    :description "Kill all CIDER sessions. Useful for cleanup after parallel agent work."
+    :inputSchema {:type "object" :properties {}}
+    :handler handle-cider-kill-all-sessions}
+
+   ;; Magit Integration Tools (requires emacs-mcp-magit addon)
+   {:name "magit_status"
+    :description "Get comprehensive git repository status including branch, staged/unstaged/untracked files, ahead/behind counts, stashes, and recent commits. Requires emacs-mcp-magit addon."
+    :inputSchema {:type "object" :properties {}}
+    :handler handle-magit-status}
+
+   {:name "magit_branches"
+    :description "Get branch information including current branch, upstream, all local branches, and remote branches."
+    :inputSchema {:type "object" :properties {}}
+    :handler handle-magit-branches}
+
+   {:name "magit_log"
+    :description "Get recent commit log with hash, author, date, and subject."
+    :inputSchema {:type "object"
+                  :properties {"count" {:type "integer"
+                                        :description "Number of commits to return (default: 10)"}}
+                  :required []}
+    :handler handle-magit-log}
+
+   {:name "magit_diff"
+    :description "Get diff for staged, unstaged, or all changes."
+    :inputSchema {:type "object"
+                  :properties {"target" {:type "string"
+                                         :enum ["staged" "unstaged" "all"]
+                                         :description "What to diff (default: staged)"}}
+                  :required []}
+    :handler handle-magit-diff}
+
+   {:name "magit_stage"
+    :description "Stage files for commit. Use 'all' to stage all modified files, or provide a file path."
+    :inputSchema {:type "object"
+                  :properties {"files" {:type "string"
+                                        :description "File path to stage, or 'all' for all modified files"}}
+                  :required ["files"]}
+    :handler handle-magit-stage}
+
+   {:name "magit_commit"
+    :description "Create a git commit with the given message."
+    :inputSchema {:type "object"
+                  :properties {"message" {:type "string"
+                                          :description "Commit message"}
+                               "all" {:type "boolean"
+                                      :description "If true, stage all changes before committing"}}
+                  :required ["message"]}
+    :handler handle-magit-commit}
+
+   {:name "magit_push"
+    :description "Push to remote. Optionally set upstream tracking for new branches."
+    :inputSchema {:type "object"
+                  :properties {"set_upstream" {:type "boolean"
+                                               :description "Set upstream tracking if not already set"}}
+                  :required []}
+    :handler handle-magit-push}
+
+   {:name "magit_pull"
+    :description "Pull from upstream remote."
+    :inputSchema {:type "object" :properties {}}
+    :handler handle-magit-pull}
+
+   {:name "magit_fetch"
+    :description "Fetch from remote(s). Fetches all remotes if no specific remote is provided."
+    :inputSchema {:type "object"
+                  :properties {"remote" {:type "string"
+                                         :description "Specific remote to fetch from (optional)"}}
+                  :required []}
+    :handler handle-magit-fetch}
+
+   {:name "magit_feature_branches"
+    :description "Get list of feature/fix/feat branches for shipping. Used by /ship and /ship-pr skills."
+    :inputSchema {:type "object" :properties {}}
+    :handler handle-magit-feature-branches}
+
    ;; Kanban Integration Tools (requires emacs-mcp-org-kanban addon)
    {:name "mcp_kanban_status"
     :description "Get kanban status including tasks by status, progress percentage, backend info, and roadmap. Use at session start."
@@ -696,7 +1414,208 @@
    {:name "mcp_kanban_sync"
     :description "Sync tasks between vibe-kanban cloud and standalone org-file backends."
     :inputSchema {:type "object" :properties {}}
-    :handler handle-mcp-kanban-sync}])
+    :handler handle-mcp-kanban-sync}
+
+   ;; Swarm Orchestration Tools (requires emacs-mcp-swarm addon)
+   {:name "swarm_spawn"
+    :description "Spawn a new Claude slave instance for parallel task execution. Slaves run in vterm buffers with optional presets (system prompts)."
+    :inputSchema {:type "object"
+                  :properties {"name" {:type "string"
+                                       :description "Name for the slave (used in buffer name)"}
+                               "presets" {:type "array"
+                                          :items {:type "string"}
+                                          :description "List of preset names to apply (e.g., [\"tdd\", \"clarity\"])"}
+                               "cwd" {:type "string"
+                                      :description "Working directory for the slave (optional)"}
+                               "role" {:type "string"
+                                       :description "Predefined role (tester, reviewer, documenter, etc.)"}}
+                  :required ["name"]}
+    :handler handle-swarm-spawn}
+
+   {:name "swarm_dispatch"
+    :description "Send a prompt to a slave Claude instance. Returns a task_id for tracking."
+    :inputSchema {:type "object"
+                  :properties {"slave_id" {:type "string"
+                                           :description "ID of the slave to send prompt to"}
+                               "prompt" {:type "string"
+                                         :description "The prompt/task to send to the slave"}
+                               "timeout_ms" {:type "integer"
+                                             :description "Optional timeout in milliseconds"}}
+                  :required ["slave_id" "prompt"]}
+    :handler handle-swarm-dispatch}
+
+   {:name "swarm_status"
+    :description "Get swarm status including all active slaves, their states, and task counts."
+    :inputSchema {:type "object"
+                  :properties {"slave_id" {:type "string"
+                                           :description "Optional: get status of specific slave only"}}
+                  :required []}
+    :handler handle-swarm-status}
+
+   {:name "swarm_collect"
+    :description "Collect the response from a dispatched task. Waits for completion up to timeout."
+    :inputSchema {:type "object"
+                  :properties {"task_id" {:type "string"
+                                          :description "ID of the task to collect results from"}
+                               "timeout_ms" {:type "integer"
+                                             :description "How long to wait for completion (default: 5000)"}}
+                  :required ["task_id"]}
+    :handler handle-swarm-collect}
+
+   {:name "swarm_list_presets"
+    :description "List all available swarm presets (system prompts for slave specialization)."
+    :inputSchema {:type "object" :properties {}}
+    :handler handle-swarm-list-presets}
+
+   {:name "swarm_kill"
+    :description "Kill a slave instance or all slaves."
+    :inputSchema {:type "object"
+                  :properties {"slave_id" {:type "string"
+                                           :description "ID of slave to kill, or \"all\" to kill all slaves"}}
+                  :required ["slave_id"]}
+    :handler handle-swarm-kill}
+
+   {:name "swarm_broadcast"
+    :description "Send the same prompt to all active slaves simultaneously."
+    :inputSchema {:type "object"
+                  :properties {"prompt" {:type "string"
+                                         :description "The prompt to broadcast to all slaves"}}
+                  :required ["prompt"]}
+    :handler handle-swarm-broadcast}
+
+   ;; org-clj Native Org-Mode Tools (no elisp dependency)
+   {:name "org_clj_parse"
+    :description "Parse an org-mode file and return its structure as JSON. Uses native Clojure parser without elisp dependency."
+    :inputSchema {:type "object"
+                  :properties {"file_path" {:type "string"
+                                            :description "Absolute path to the org file to parse"}}
+                  :required ["file_path"]}
+    :handler handle-org-clj-parse}
+
+   {:name "org_clj_write"
+    :description "Write an org document structure back to a file. Takes a JSON document and writes org-mode formatted text."
+    :inputSchema {:type "object"
+                  :properties {"file_path" {:type "string"
+                                            :description "Absolute path to write the org file"}
+                               "document" {:type "string"
+                                           :description "JSON string representing the org document structure"}}
+                  :required ["file_path" "document"]}
+    :handler handle-org-clj-write}
+
+   {:name "org_clj_query"
+    :description "Query headlines in an org file. Supports queries by ID, status, or get statistics."
+    :inputSchema {:type "object"
+                  :properties {"file_path" {:type "string"
+                                            :description "Absolute path to the org file"}
+                               "query_type" {:type "string"
+                                             :enum ["by_id" "by_vibe_id" "by_status" "todo" "done" "in_progress" "stats"]
+                                             :description "Type of query to perform"}
+                               "query_value" {:type "string"
+                                              :description "Value for the query (ID for by_id, status string for by_status)"}}
+                  :required ["file_path" "query_type"]}
+    :handler handle-org-clj-query}
+
+   {:name "org_kanban_native_status"
+    :description "Get kanban status from an org file using native Clojure parser. Returns task counts and lists by status."
+    :inputSchema {:type "object"
+                  :properties {"file_path" {:type "string"
+                                            :description "Absolute path to the kanban org file"}}
+                  :required ["file_path"]}
+    :handler handle-org-kanban-native-status}
+
+   {:name "org_kanban_native_move"
+    :description "Move a task to a new status in an org file using native Clojure parser. Updates the file directly."
+    :inputSchema {:type "object"
+                  :properties {"file_path" {:type "string"
+                                            :description "Absolute path to the kanban org file"}
+                               "task_id" {:type "string"
+                                          :description "ID of the task to move (from :ID property)"}
+                               "new_status" {:type "string"
+                                             :description "New TODO status (e.g., TODO, IN-PROGRESS, DONE)"}}
+                  :required ["file_path" "task_id" "new_status"]}
+    :handler handle-org-kanban-native-move}
+
+   {:name "org_kanban_render"
+    :description "Render a visual kanban board from an org file. Supports terminal ASCII art or Emacs org-mode format."
+    :inputSchema {:type "object"
+                  :properties {"file_path" {:type "string"
+                                            :description "Absolute path to the kanban org file"}
+                               "format" {:type "string"
+                                         :enum ["terminal" "emacs"]
+                                         :description "Output format: 'terminal' for ASCII art, 'emacs' for org-mode (default: terminal)"}
+                               "column_width" {:type "integer"
+                                               :description "Width of each column in terminal mode (default: 28)"}
+                               "max_cards" {:type "integer"
+                                            :description "Maximum cards per column in terminal mode (default: 10)"}}
+                  :required ["file_path"]}
+    :handler handle-org-kanban-render}
+
+   ;; Prompt Capture Tools (RAG Knowledge Base)
+   {:name "prompt_capture"
+    :description "Capture a well-structured LLM prompt with analysis for RAG knowledge base. Stores prompt text, what it accomplishes, why it's well-structured, and improvement suggestions. Auto-categorizes and validates quality."
+    :inputSchema {:type "object"
+                  :properties {"prompt" {:type "string"
+                                         :description "The prompt text to capture (verbatim)"}
+                               "accomplishes" {:type "string"
+                                               :description "What this prompt accomplishes"}
+                               "well_structured" {:type "string"
+                                                  :description "Why this prompt is well-structured"}
+                               "improvements" {:type "string"
+                                               :description "How the prompt could be improved (optional, auto-generated if not provided)"}
+                               "category" {:type "string"
+                                           :enum ["coding" "debug" "planning" "meta" "research" "config" "workflow" "architecture"]
+                                           :description "Category (optional, auto-inferred from content)"}
+                               "tags" {:type "array"
+                                       :items {:type "string"}
+                                       :description "Additional tags for categorization"}
+                               "quality" {:type "string"
+                                          :enum ["success" "partial" "failure" "untested"]
+                                          :description "Quality/outcome rating (default: untested)"}
+                               "source" {:type "string"
+                                         :description "Source: 'user', 'observed', 'generated' (default: user)"}
+                               "model" {:type "string"
+                                        :description "Model used (e.g., claude-opus-4-5)"}
+                               "context" {:type "string"
+                                          :description "Additional context about the prompt"}}
+                  :required ["prompt" "accomplishes" "well_structured"]}
+    :handler handle-prompt-capture}
+
+   {:name "prompt_list"
+    :description "List captured prompts with optional filtering by category, quality, or tags."
+    :inputSchema {:type "object"
+                  :properties {"category" {:type "string"
+                                           :enum ["coding" "debug" "planning" "meta" "research" "config" "workflow" "architecture"]
+                                           :description "Filter by category"}
+                               "quality" {:type "string"
+                                          :enum ["success" "partial" "failure" "untested"]
+                                          :description "Filter by quality rating"}
+                               "limit" {:type "integer"
+                                        :description "Maximum results to return (default: 20)"}}
+                  :required []}
+    :handler handle-prompt-list}
+
+   {:name "prompt_search"
+    :description "Search captured prompts by keyword in prompt text or accomplishes field."
+    :inputSchema {:type "object"
+                  :properties {"query" {:type "string"
+                                        :description "Search keyword"}
+                               "limit" {:type "integer"
+                                        :description "Maximum results (default: 20)"}}
+                  :required ["query"]}
+    :handler handle-prompt-search}
+
+   {:name "prompt_analyze"
+    :description "Analyze a prompt's structure without saving. Returns quality score, category inference, and improvement suggestions."
+    :inputSchema {:type "object"
+                  :properties {"prompt" {:type "string"
+                                         :description "The prompt text to analyze"}}
+                  :required ["prompt"]}
+    :handler handle-prompt-analyze}
+
+   {:name "prompt_stats"
+    :description "Get statistics about captured prompts including counts by category, quality, and recent entries."
+    :inputSchema {:type "object" :properties {}}
+    :handler handle-prompt-stats}])
 
 (defn get-tool-by-name
   "Find a tool definition by name."
