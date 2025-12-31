@@ -1,67 +1,46 @@
 {
   "date": "2025-12-31",
-  "focus_area": "Prompt Capture System - RAG Knowledge Base for LLM prompt engineering",
-  "branches_created": [],
-  "tags_created": [],
-  "merged_prs": [],
+  "focus_area": "Overarch adapter fix and C4 diagram presentation",
+  "branches_created": ["fix/overarch-adapter-format"],
+  "prs_merged": ["#21 - fix(overarch): Fix adapter format for Overarch compatibility"],
   "key_files": [
-    "src/emacs_mcp/prompt_capture.clj",
-    "src/emacs_mcp/tools.clj",
-    "PROJECT_SUMMARY.md"
+    "src/emacs_mcp/diagrams/adapters/overarch.clj",
+    "test/emacs_mcp/diagrams/adapters/overarch_test.clj",
+    "docs/presentation-reveal.org",
+    "docs/images/emacs-mcp-c4-context.png"
   ],
   "completed_tasks": [
-    "Created prompt_capture.clj namespace with Malli schemas",
-    "Implemented 8-category taxonomy with auto-inference",
-    "Added quality assessment scoring (0-100)",
-    "Implemented auto-generated improvement suggestions",
-    "Integrated org-mode storage via org-clj parser/writer",
-    "Added 5 MCP tools: prompt_capture, prompt_list, prompt_search, prompt_analyze, prompt_stats",
-    "Fixed org-clj content format (vector of lines vs string)",
-    "Fixed headline->entry to parse children headlines",
-    "Fixed property key format (keywords vs strings)",
-    "Updated PROJECT_SUMMARY.md with prompt capture documentation"
+    "Fixed Overarch adapter null error - root cause was non-namespaced keywords",
+    "Added ensure-namespaced-keyword helper function",
+    "Model elements now output as set #{} instead of vector []",
+    "Views now output as set #{} with proper :ct refs",
+    "Relations auto-generate :id from from/to",
+    "All IDs get diagram/ namespace prefix",
+    "Created 7 TDD tests (16 assertions) for overarch adapter",
+    "Generated C4 context diagram for emacs-mcp architecture",
+    "Added Diagram System section to presentation with live example"
   ],
-  "in_progress_tasks": [],
+  "in_progress_tasks": [
+    "Uncommitted: presentation updates and C4 diagram image"
+  ],
   "blocking_issues": [],
   "next_actions": [
-    "Restart emacs-mcp server to load new MCP tools",
-    "Test prompt capture MCP tools via Claude",
-    "Consider elisp workflow for /capture-prompt command",
-    "Add emacs-mcp memory integration for auto-capture triggers"
+    "Commit presentation updates with diagram",
+    "Create PR for presentation changes",
+    "Test other diagram adapters (Mermaid, TikZ) end-to-end"
   ],
   "decisions_made": [
-    "Use Malli for schema validation (consistent with org-clj parser)",
-    "Store prompts in ~/.emacs.d/emacs-mcp/prompts.org",
-    "Use org-clj for storage (no elisp dependency for persistence)",
-    "8 categories: coding, debug, planning, meta, research, config, workflow, architecture",
-    "Quality ratings: success, partial, failure, untested",
-    "Auto-infer category from prompt text keywords",
-    "Auto-generate improvement suggestions based on missing elements"
+    "Overarch requires namespaced keywords (:ns/id) for all element IDs",
+    "Use 'diagram/' as default namespace prefix for generated IDs",
+    "Model/view collections must be sets #{} not vectors []",
+    "Relation IDs auto-generated as :diagram/from-to-to pattern"
   ],
   "vibe_kanban_project_id": "b70720e8-3a52-41ba-a115-964b81369bb5",
-  "git_state": {
-    "current_branch": "main",
-    "clean_working_tree": false,
-    "uncommitted_files": [
-      "src/emacs_mcp/prompt_capture.clj",
-      "src/emacs_mcp/tools.clj",
-      "PROJECT_SUMMARY.md",
-      ".claude/SESSION_CONTEXT.json"
-    ],
-    "needs_commit": true
-  },
-  "release": "v0.3.0",
-  "prompt_capture_system": {
-    "namespace": "emacs-mcp.prompt-capture",
-    "storage_file": "~/.emacs.d/emacs-mcp/prompts.org",
-    "mcp_tools": [
-      "prompt_capture",
-      "prompt_list",
-      "prompt_search",
-      "prompt_analyze",
-      "prompt_stats"
-    ],
-    "categories": ["coding", "debug", "planning", "meta", "research", "config", "workflow", "architecture"],
-    "quality_ratings": ["success", "partial", "failure", "untested"]
+  "technical_notes": {
+    "overarch_format": {
+      "model": "Set of elements with :el :id :name keys, all IDs namespaced",
+      "views": "Set of view specs with :el :id :title :ct keys",
+      "ct_refs": "Vector of {:ref :namespaced/id} pointing to model elements"
+    }
   }
 }
