@@ -5,6 +5,17 @@
             [taoensso.timbre :as log])
   (:gen-class))
 
+;; Configure Timbre to write to stderr instead of stdout
+;; This is CRITICAL for MCP servers - stdout is the JSON-RPC channel
+(log/merge-config!
+ {:appenders
+  {:println {:enabled? true
+             :async? false
+             :fn (fn [data]
+                   (let [{:keys [output_]} data]
+                     (binding [*out* *err*]
+                       (println (force output_)))))}}})
+
 ;; Convert our tool definitions to the SDK format
 (defn make-tool
   "Convert a tool definition with :handler to SDK format."
