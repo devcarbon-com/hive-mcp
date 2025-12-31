@@ -79,6 +79,7 @@
 | cider | Clojure REPL |
 | org-kanban | Task management |
 | swarm | Multi-agent |
+| diagrams | C4/Mermaid/TikZ |
 | melpazoid | MELPA testing |
 | presentation | Slides |
 
@@ -118,6 +119,33 @@
 
 ;; Broadcast to all
 (emacs-mcp-swarm-broadcast "Report status")
+#+end_src
+
+** Diagram System
+:PROPERTIES:
+:reveal_background: #1a1a2e
+:END:
+*** Architecture Visualization
+#+ATTR_REVEAL: :frag (appear)
+- *Overarch* — C4 diagrams (context, container, component)
+- *Mermaid* — Flowcharts, sequence diagrams
+- *TikZ* — LaTeX-quality vector graphics
+
+*** C4 Context Example
+#+ATTR_HTML: :width 600px
+[[file:images/emacs-mcp-c4-context.png]]
+
+*** Code That Generated It
+#+begin_src clojure
+{:type :c4-context
+ :title "emacs-mcp System Context"
+ :elements [{:id :developer :name "Developer" :el :person}
+            {:id :claude :name "Claude AI" :el :system :external? true}
+            {:id :emacs-mcp :name "emacs-mcp" :el :system}
+            {:id :emacs :name "Emacs" :el :system}]
+ :relations [{:from :developer :to :emacs :name "edits code"}
+             {:from :claude :to :emacs-mcp :name "MCP protocol"}
+             {:from :emacs-mcp :to :emacs :name "emacsclient"}]}
 #+end_src
 
 * org-clj Library
