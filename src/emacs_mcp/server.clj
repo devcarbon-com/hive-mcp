@@ -35,12 +35,24 @@
 (defn init-embedding-provider!
   "Initialize the embedding provider for semantic memory search.
   Attempts to configure Ollama embeddings for Chroma.
-  Fails gracefully if Ollama or Chroma are not available."
+  Fails gracefully if Ollama or Chroma are not available.
+  
+  Configuration via environment variables:
+    CHROMA_HOST - Chroma server host (default: localhost)
+    CHROMA_PORT - Chroma server port (default: 8000)
+    OLLAMA_HOST - Ollama server URL (default: http://localhost:11434)"
   []
   (try
-    (let [provider (ollama/->provider)]
+    ;; Configure Chroma connection - read from env or use defaults
+    (let [chroma-host (or (System/getenv "CHROMA_HOST") "localhost")
+          chroma-port (or (some-> (System/getenv "CHROMA_PORT") Integer/parseInt) 8000)]
+      (chroma/configure! {:host chroma-host :port chroma-port})
+      (log/info "Chroma configured:" chroma-host ":" chroma-port))
+    ;; Configure Ollama embedding provider
+    (let [ollama-host (or (System/getenv "OLLAMA_HOST") "http://localhost:11434")
+          provider (ollama/->provider {:host ollama-host})]
       (chroma/set-embedding-provider! provider)
-      (log/info "Embedding provider initialized: Ollama with nomic-embed-text")
+      (log/info "Embedding provider initialized: Ollama at" ollama-host)
       true)
     (catch Exception e
       (log/warn "Could not initialize embedding provider:"
