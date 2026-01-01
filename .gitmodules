@@ -1,0 +1,6 @@
+[submodule "clojure-chroma-client"]
+	path = clojure-chroma-client
+	url = https://github.com/BuddhiLW/clojure-chroma-client.git
+[submodule "mcp-clojure-sdk"]
+	path = mcp-clojure-sdk
+	url = https://github.com/BuddhiLW/mcp-clojure-sdk.git

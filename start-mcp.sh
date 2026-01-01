@@ -19,5 +19,11 @@ fi
 
 cd "$SCRIPT_DIR"
 
+# Chroma configuration - override via environment or Emacs config
+# These can be set in your shell profile, Emacs config, or systemd unit
+export CHROMA_HOST="${CHROMA_HOST:-localhost}"
+export CHROMA_PORT="${CHROMA_PORT:-8000}"
+export OLLAMA_HOST="${OLLAMA_HOST:-http://localhost:11434}"
+
 # Run the MCP server
 exec clojure -X:mcp

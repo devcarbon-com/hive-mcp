@@ -109,13 +109,25 @@ Directories are scanned recursively for .md files only."
                  (const :tag "eat (experimental)" eat))
   :group 'emacs-mcp-swarm)
 
-(defcustom emacs-mcp-swarm-max-slaves 5
+(defcustom emacs-mcp-swarm-max-slaves 30
   "Maximum number of concurrent slave instances."
   :type 'integer
   :group 'emacs-mcp-swarm)
 
-(defcustom emacs-mcp-swarm-max-depth 2
-  "Maximum recursion depth (slaves spawning slaves)."
+(defcustom emacs-mcp-swarm-max-depth 3
+  "Maximum recursion depth (slaves spawning slaves).
+Depth 0 = master, 1 = child, 2 = grandchild, 3 = great-grandchild.
+Beyond this depth, spawn attempts are blocked to prevent runaway recursion."
+  :type 'integer
+  :group 'emacs-mcp-swarm)
+
+(defcustom emacs-mcp-swarm-rate-limit-window 60
+  "Time window in seconds for rate limiting spawn attempts."
+  :type 'integer
+  :group 'emacs-mcp-swarm)
+
+(defcustom emacs-mcp-swarm-rate-limit-max-spawns 10
+  "Maximum number of spawns allowed within `emacs-mcp-swarm-rate-limit-window'."
   :type 'integer
   :group 'emacs-mcp-swarm)
 
@@ -153,6 +165,12 @@ Directories are scanned recursively for .md files only."
 
 (defvar emacs-mcp-swarm--current-depth 0
   "Current recursion depth (set via environment).")
+
+(defvar emacs-mcp-swarm--spawn-timestamps nil
+  "List of recent spawn timestamps for rate limiting.")
+
+(defvar emacs-mcp-swarm--ancestry nil
+  "Ancestry chain: list of (slave-id . master-id) for loop detection.")
 
 ;;;; Preset Management:
 
@@ -231,18 +249,59 @@ Returns hash-table of name -> content."
           (replace-regexp-in-string "^swarm-" "" slave-id)
           emacs-mcp-swarm--task-counter))
 
+(defun emacs-mcp-swarm--depth-label (depth)
+  "Return human-readable label for DEPTH level."
+  (pcase depth
+    (0 "master")
+    (1 "child")
+    (2 "grandchild")
+    (3 "great-grandchild")
+    (_ (format "depth-%d" depth))))
+
 (defun emacs-mcp-swarm--check-depth ()
-  "Check if we can spawn at current depth."
-  (let ((depth (string-to-number (or (getenv "CLAUDE_SWARM_DEPTH") "0"))))
+  "Check if we can spawn at current depth.
+Returns the current depth if allowed, signals error if blocked."
+  (let* ((depth (string-to-number (or (getenv "CLAUDE_SWARM_DEPTH") "0")))
+         (master-id (getenv "CLAUDE_SWARM_MASTER"))
+         (my-id (getenv "CLAUDE_SWARM_SLAVE_ID")))
     (setq emacs-mcp-swarm--current-depth depth)
+    ;; Track ancestry for loop detection
+    (when (and my-id master-id)
+      (push (cons my-id master-id) emacs-mcp-swarm--ancestry))
     (when (>= depth emacs-mcp-swarm-max-depth)
-      (error "Maximum swarm depth (%d) reached. Cannot spawn more slaves"
-             emacs-mcp-swarm-max-depth))))
+      (error "Recursion limit reached: %s (depth %d) cannot spawn children.
+Maximum depth is %d (master → child → grandchild → great-grandchild).
+This limit prevents runaway recursive spawning."
+             (emacs-mcp-swarm--depth-label depth)
+             depth
+             emacs-mcp-swarm-max-depth))
+    depth))
+
+(defun emacs-mcp-swarm--check-rate-limit ()
+  "Check if spawn rate limit allows a new spawn.
+Removes old timestamps and checks count within window."
+  (let* ((now (float-time))
+         (window-start (- now emacs-mcp-swarm-rate-limit-window)))
+    ;; Prune old timestamps
+    (setq emacs-mcp-swarm--spawn-timestamps
+          (cl-remove-if (lambda (ts) (< ts window-start))
+                        emacs-mcp-swarm--spawn-timestamps))
+    ;; Check limit
+    (when (>= (length emacs-mcp-swarm--spawn-timestamps)
+              emacs-mcp-swarm-rate-limit-max-spawns)
+      (error "Rate limit exceeded: %d spawns in %d seconds.
+Wait before spawning more slaves to prevent spawn storms."
+             emacs-mcp-swarm-rate-limit-max-spawns
+             emacs-mcp-swarm-rate-limit-window))
+    ;; Record this spawn attempt
+    (push now emacs-mcp-swarm--spawn-timestamps)))
 
 (defun emacs-mcp-swarm--check-slave-limit ()
   "Check if we can spawn more slaves."
   (when (>= (hash-table-count emacs-mcp-swarm--slaves) emacs-mcp-swarm-max-slaves)
-    (error "Maximum slave count (%d) reached" emacs-mcp-swarm-max-slaves)))
+    (error "Maximum slave count (%d) reached.
+Kill some slaves with `emacs-mcp-swarm-kill' before spawning more."
+           emacs-mcp-swarm-max-slaves)))
 
 (cl-defun emacs-mcp-swarm-spawn (name &key presets cwd role)
   "Spawn a new Claude slave with NAME.
@@ -257,8 +316,9 @@ Returns the slave-id."
          :presets (completing-read-multiple
                    "Presets: "
                    (emacs-mcp-swarm-list-presets))))
-  ;; Safety checks
+  ;; Safety checks (order matters: depth → rate → slave count)
   (emacs-mcp-swarm--check-depth)
+  (emacs-mcp-swarm--check-rate-limit)
   (emacs-mcp-swarm--check-slave-limit)
 
   ;; Resolve role to presets if provided
@@ -321,22 +381,32 @@ Returns the slave-id."
                             ;; Use carriage return for eat terminals
                             (eat-term-send-string eat-terminal "\r"))))))))
 
-    ;; Store slave state
-    (puthash slave-id
-             (list :slave-id slave-id
-                   :name name
-                   :role role
-                   :presets presets
-                   :status 'starting
-                   :buffer buffer
-                   :cwd work-dir
-                   :current-task nil
-                   :task-queue '()
-                   :tasks-completed 0
-                   :tasks-failed 0
-                   :spawned-at (format-time-string "%FT%TZ")
-                   :last-activity (format-time-string "%FT%TZ"))
-             emacs-mcp-swarm--slaves)
+    ;; Store slave state with ancestry info
+    (let ((parent-id (or (getenv "CLAUDE_SWARM_SLAVE_ID") "master"))
+          (spawn-depth (1+ emacs-mcp-swarm--current-depth)))
+      (puthash slave-id
+               (list :slave-id slave-id
+                     :name name
+                     :role role
+                     :presets presets
+                     :status 'starting
+                     :buffer buffer
+                     :cwd work-dir
+                     :depth spawn-depth
+                     :parent-id parent-id
+                     :current-task nil
+                     :task-queue '()
+                     :tasks-completed 0
+                     :tasks-failed 0
+                     :spawned-at (format-time-string "%FT%TZ")
+                     :last-activity (format-time-string "%FT%TZ"))
+               emacs-mcp-swarm--slaves)
+      ;; Telemetry: log spawn event
+      (message "[swarm] Spawned %s (%s) at depth %d, parent: %s"
+               slave-id
+               (emacs-mcp-swarm--depth-label spawn-depth)
+               spawn-depth
+               parent-id))
 
     ;; Schedule status check
     (run-at-time
@@ -439,19 +509,31 @@ Returns task-id."
                (with-current-buffer buffer (point-max)))
 
     ;; Send prompt to slave (terminal-agnostic)
-    (with-current-buffer buffer
-      (goto-char (point-max))
-      (pcase emacs-mcp-swarm-terminal
-        ('vterm
-         (vterm-send-string prompt)
-         (vterm-send-return))
-        ('eat
-         (if (and (boundp 'eat-terminal) eat-terminal)
-             (progn
-               (eat-term-send-string eat-terminal prompt)
-               ;; Use carriage return for eat terminals
-               (eat-term-send-string eat-terminal "\r"))
-           (error "Eat-terminal not available in buffer %s" (buffer-name buffer))))))
+    ;; Use run-at-time to ensure vterm has fully initialized and is ready for input
+    (let ((target-buffer buffer)
+          (term-type emacs-mcp-swarm-terminal)
+          (prompt-text prompt))
+      (run-at-time 0.1 nil
+                   (lambda ()
+                     (when (buffer-live-p target-buffer)
+                       (with-current-buffer target-buffer
+                         (goto-char (point-max))
+                         (pcase term-type
+                           ('vterm
+                            (vterm-send-string prompt-text)
+                            ;; Small delay before sending return to ensure string is processed
+                            (run-at-time 0.05 nil
+                                         (lambda ()
+                                           (when (buffer-live-p target-buffer)
+                                             (with-current-buffer target-buffer
+                                               (vterm-send-return))))))
+                           ('eat
+                            (if (and (boundp 'eat-terminal) eat-terminal)
+                                (progn
+                                  (eat-term-send-string eat-terminal prompt-text)
+                                  ;; Use carriage return for eat terminals
+                                  (eat-term-send-string eat-terminal "\r"))
+                              (error "Eat-terminal not available in buffer %s" (buffer-name target-buffer))))))))))
 
     (when (called-interactively-p 'any)
       (message "Dispatched task %s to %s" task-id slave-id))
@@ -575,6 +657,8 @@ Otherwise return aggregate status."
          (push (list :slave-id id
                      :name (plist-get slave :name)
                      :status (plist-get slave :status)
+                     :depth (plist-get slave :depth)
+                     :parent-id (plist-get slave :parent-id)
                      :current-task (plist-get slave :current-task)
                      :tasks-completed (plist-get slave :tasks-completed))
                slaves-detail))
@@ -582,6 +666,12 @@ Otherwise return aggregate status."
 
       (let ((status `(:session-id ,emacs-mcp-swarm--session-id
                       :status ,(if (> total 0) "active" "inactive")
+                      :current-depth ,emacs-mcp-swarm--current-depth
+                      :safeguards (:max-depth ,emacs-mcp-swarm-max-depth
+                                   :max-slaves ,emacs-mcp-swarm-max-slaves
+                                   :rate-limit (:window-seconds ,emacs-mcp-swarm-rate-limit-window
+                                                :max-spawns ,emacs-mcp-swarm-rate-limit-max-spawns
+                                                :recent-spawns ,(length emacs-mcp-swarm--spawn-timestamps)))
                       :slaves (:total ,total :idle ,idle :working ,working :error ,error-count)
                       :tasks (:total ,(hash-table-count emacs-mcp-swarm--tasks))
                       :slaves-detail ,(nreverse slaves-detail))))

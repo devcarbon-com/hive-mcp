@@ -4,10 +4,11 @@
         org.clojure/data.json {:mvn/version "2.5.1"}
         org.clojure/core.async {:mvn/version "1.7.701"}
 
-        ;; MCP SDK from unravel-team
+        ;; MCP SDK - using local fork with async handler fix
+        ;; Original: https://github.com/unravel-team/mcp-clojure-sdk.git
+        ;; Fix: p/promise → p/future + discarding-stdout in jsonrpc4clj
         io.modelcontextprotocol/mcp-clojure-sdk
-        {:git/url "https://github.com/unravel-team/mcp-clojure-sdk.git"
-         :git/sha "039cf220ac6bb3858f71e823016035e257a5380d"}
+        {:local/root "mcp-clojure-sdk"}
 
         ;; nREPL client support
         nrepl/bencode {:mvn/version "1.2.0"}
@@ -17,7 +18,12 @@
         com.fzakaria/slf4j-timbre {:mvn/version "0.4.1"}
 
         ;; Schema validation for org-clj
-        metosin/malli {:mvn/version "0.16.4"}}
+        metosin/malli {:mvn/version "0.16.4"}
+
+        ;; Chroma vector database client for semantic memory search
+        ;; Using local fork with v2 API support (pending upstream PR)
+        io.github.levand/clojure-chroma-client
+        {:local/root "clojure-chroma-client"}}
 
  :aliases
  {:mcp
