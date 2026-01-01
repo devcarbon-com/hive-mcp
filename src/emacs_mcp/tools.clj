@@ -408,6 +408,20 @@
         {:type "text" :text (str "Error: " error) :isError true}))
     {:type "text" :text "Error: emacs-mcp.el is not loaded." :isError true}))
 
+(defn handle-mcp-memory-check-duplicate
+  "Check if content already exists in memory (duplicate detection)."
+  [{:keys [type content]}]
+  (log/info "mcp-memory-check-duplicate:" type)
+  (if (emacs-mcp-el-available?)
+    (let [elisp (el/require-and-call-json "emacs-mcp-api"
+                                          "emacs-mcp-api-memory-check-duplicate"
+                                          type content)
+          {:keys [success result error]} (ec/eval-elisp elisp)]
+      (if success
+        {:type "text" :text result}
+        {:type "text" :text (str "Error: " error) :isError true}))
+    {:type "text" :text "Error: emacs-mcp.el is not loaded." :isError true}))
+
 (defn handle-mcp-run-workflow
   "Run a user-defined workflow."
   [{:keys [name args]}]
@@ -1250,6 +1264,109 @@
     (catch Exception e
       (mcp-error (str "Error during JVM cleanup: " (.getMessage e))))))
 
+(defn get-memory-usage
+  "Get current RAM usage from /proc/meminfo. Returns {:total :used :available :percent-used}."
+  []
+  (try
+    (let [meminfo (slurp "/proc/meminfo")
+          parse-kb (fn [pattern]
+                     (when-let [m (re-find (re-pattern (str pattern ":\\s+(\\d+)")) meminfo)]
+                       (Long/parseLong (second m))))
+          total-kb (parse-kb "MemTotal")
+          available-kb (parse-kb "MemAvailable")
+          used-kb (- total-kb available-kb)
+          percent-used (double (* 100 (/ used-kb total-kb)))]
+      {:total-mb (quot total-kb 1024)
+       :used-mb (quot used-kb 1024)
+       :available-mb (quot available-kb 1024)
+       :percent-used (Math/round percent-used)})
+    (catch Exception e
+      {:error (.getMessage e)})))
+
+(defn handle-resource-guard
+  "Check system resources and automatically clean up orphaned JVMs if memory is high.
+   
+   WORKFLOW:
+   1. Check current RAM usage
+   2. If above threshold (default 80%), run jvm_cleanup automatically
+   3. Re-check memory after cleanup
+   4. Return spawn permission based on final memory state
+   
+   Use this BEFORE spawning new Claude swarm slaves to prevent OOM.
+   
+   Parameters:
+   - ram_threshold: Percentage threshold (default 80)
+   - min_available_mb: Minimum available RAM in MB (default 2048)
+   - auto_cleanup: Whether to auto-run jvm_cleanup when high (default true)
+   - cleanup_dry_run: If auto_cleanup, whether to actually kill (default false)"
+  [{:keys [ram_threshold min_available_mb auto_cleanup cleanup_dry_run]}]
+  (try
+    (let [threshold (or ram_threshold 80)
+          min-available (or min_available_mb 2048)
+          auto-clean (if (nil? auto_cleanup) true auto_cleanup)
+          cleanup-dry (if (nil? cleanup_dry_run) false cleanup_dry_run)
+
+          ;; Initial memory check
+          initial-mem (get-memory-usage)
+
+          _ (when (:error initial-mem)
+              (throw (Exception. (str "Cannot read memory: " (:error initial-mem)))))
+
+          initial-high? (or (>= (:percent-used initial-mem) threshold)
+                            (< (:available-mb initial-mem) min-available))
+
+          ;; Auto cleanup if needed
+          cleanup-result (when (and initial-high? auto-clean)
+                           (log/info "Memory high (" (:percent-used initial-mem) "%), running jvm_cleanup...")
+                           (handle-jvm-cleanup {:dry_run cleanup-dry
+                                                :true_orphans_only true}))
+
+          ;; Parse cleanup result
+          cleanup-data (when cleanup-result
+                         (try
+                           (json/read-str (:text cleanup-result) :key-fn keyword)
+                           (catch Exception _ nil)))
+
+          orphans-killed (when cleanup-data
+                           (count (:killed cleanup-data)))
+
+          ;; Re-check memory after cleanup
+          final-mem (if (and cleanup-data (pos? (or orphans-killed 0)))
+                      (do
+                        (Thread/sleep 500) ;; Wait for processes to fully exit
+                        (get-memory-usage))
+                      initial-mem)
+
+          final-high? (or (>= (:percent-used final-mem) threshold)
+                          (< (:available-mb final-mem) min-available))
+
+          ;; Determine spawn permission
+          can-spawn (not final-high?)
+
+          summary {:can-spawn can-spawn
+                   :memory {:initial initial-mem
+                            :final final-mem
+                            :threshold-percent threshold
+                            :min-available-mb min-available}
+                   :status (cond
+                             (not initial-high?) :healthy
+                             (and initial-high? (not final-high?)) :recovered-after-cleanup
+                             :else :capacity-reached)
+                   :cleanup (when cleanup-data
+                              {:ran true
+                               :dry-run cleanup-dry
+                               :orphans-found (:orphans-found cleanup-data)
+                               :killed (count (:killed cleanup-data))})
+                   :recommendation (cond
+                                     can-spawn "Safe to spawn new processes"
+                                     (not auto-clean) "Memory high - consider enabling auto_cleanup"
+                                     cleanup-dry "Memory high - set cleanup_dry_run=false to actually kill orphans"
+                                     :else "Capacity reached - wait for running tasks to complete")}]
+
+      (mcp-json summary))
+    (catch Exception e
+      (mcp-error (str "Resource guard error: " (.getMessage e))))))
+
 ;; ============================================================
 ;; org-clj Native Org-Mode Tools
 ;; ============================================================
@@ -1599,6 +1716,34 @@
                                        :description "Number of days to look ahead (default: 7)"}}
                   :required []}
     :handler handle-mcp-memory-expiring-soon}
+
+   ;; Memory Audit Log Tools
+   {:name "mcp_memory_log_access"
+    :description "Log access to a memory entry. Increments access-count and updates last-accessed timestamp. Call this when retrieving memory for use."
+    :inputSchema {:type "object"
+                  :properties {"id" {:type "string"
+                                     :description "Memory entry ID to log access for"}}
+                  :required ["id"]}
+    :handler handle-mcp-memory-log-access}
+
+   {:name "mcp_memory_feedback"
+    :description "Submit helpfulness feedback for a memory entry. Use after using a memory to indicate if it was helpful or not. Enables data-driven cleanup decisions."
+    :inputSchema {:type "object"
+                  :properties {"id" {:type "string"
+                                     :description "Memory entry ID to provide feedback for"}
+                               "feedback" {:type "string"
+                                           :enum ["helpful" "unhelpful"]
+                                           :description "Whether the memory was helpful or unhelpful"}}
+                  :required ["id" "feedback"]}
+    :handler handle-mcp-memory-feedback}
+
+   {:name "mcp_memory_helpfulness_ratio"
+    :description "Get the helpfulness ratio for a memory entry. Returns helpful/(helpful+unhelpful) as a float between 0-1, or null if no feedback has been given. Low ratio (< 0.3) suggests candidate for demotion."
+    :inputSchema {:type "object"
+                  :properties {"id" {:type "string"
+                                     :description "Memory entry ID to get helpfulness ratio for"}}
+                  :required ["id"]}
+    :handler handle-mcp-memory-helpfulness-ratio}
 
    {:name "mcp_list_workflows"
     :description "List available user-defined workflows. Requires emacs-mcp.el."
