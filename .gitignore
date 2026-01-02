@@ -30,3 +30,6 @@ test-output/
 # Generated diagrams
 overarch/
 melpa/
+
+# Vector index backups
+backups/
