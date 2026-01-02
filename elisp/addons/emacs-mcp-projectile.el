@@ -4,13 +4,20 @@
 ;; Author: Pedro G. Branquinho <pedrogbranquinho@gmail.com>
 ;; URL: https://github.com/BuddhiLW/emacs-mcp
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "28.1") (projectile "2.0"))
+;; Package-Requires: ((emacs "28.1"))
 ;; Keywords: tools, project, mcp
 ;; SPDX-License-Identifier: MIT
 
 ;;; Commentary:
 ;;
 ;; This addon integrates Projectile (project management) with emacs-mcp.
+;;
+;; OPTIONAL DEPENDENCIES:
+;; - projectile (https://github.com/bbatsov/projectile)
+;;   Install via: M-x package-install RET projectile RET
+;;
+;; This addon activates automatically when projectile is loaded.
+;; Without projectile, the addon is silently disabled.
 ;;
 ;; Features:
 ;; - Get current project root and info
@@ -343,7 +350,11 @@
 ;;;; Addon Lifecycle:
 
 (defun emacs-mcp-projectile--addon-init ()
-  "Initialize projectile addon."
+  "Initialize projectile addon.
+Does nothing if projectile is not available."
+  (unless (featurep 'projectile)
+    (message "emacs-mcp-projectile: projectile package not found, addon disabled")
+    (cl-return-from emacs-mcp-projectile--addon-init nil))
   (require 'emacs-mcp-api nil t)
   (setq emacs-mcp-projectile--initialized t)
   (message "emacs-mcp-projectile: initialized"))

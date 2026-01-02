@@ -4,7 +4,7 @@
 ;; Author: Pedro G. Branquinho <pedrogbranquinho@gmail.com>
 ;; URL: https://github.com/BuddhiLW/emacs-mcp
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "28.1") (org "9.0"))
+;; Package-Requires: ((emacs "28.1"))
 ;; Keywords: tools, kanban, org-mode, mcp, project-management
 ;; SPDX-License-Identifier: MIT
 

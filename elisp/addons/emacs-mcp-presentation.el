@@ -3,7 +3,7 @@
 ;; Copyright (C) 2025 Pedro G. Branquinho
 ;; Author: Pedro G. Branquinho <pedro.branquinho@usp.br>
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "28.1") (emacs-mcp "0.1.0") (transient "0.4.0"))
+;; Package-Requires: ((emacs "28.1"))
 ;; Keywords: tools, presentations, org-mode, beamer, reveal
 ;; SPDX-License-Identifier: MIT
 

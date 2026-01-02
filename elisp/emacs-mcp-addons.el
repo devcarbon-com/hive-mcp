@@ -29,6 +29,38 @@
 
 (require 'cl-lib)
 
+;;;; Optional Dependency Support:
+
+(defmacro emacs-mcp-addons-with-dep (feature &rest body)
+  "Execute BODY only if FEATURE is available.
+If FEATURE cannot be loaded, log a message and return nil.
+This macro is used for graceful degradation when optional
+dependencies are not installed."
+  (declare (indent 1))
+  `(if (require ',feature nil t)
+       (progn ,@body)
+     (message "emacs-mcp: skipping code requiring %s (not installed)"
+              (symbol-name ',feature))
+     nil))
+
+(defun emacs-mcp-addons-dep-available-p (feature)
+  "Return non-nil if FEATURE is available (can be required).
+Use this to check for optional dependencies before attempting to use them."
+  (require feature nil t))
+
+(defun emacs-mcp-addons-check-deps (addon deps)
+  "Check if all DEPS are available for ADDON.
+Returns a list of missing dependencies, or nil if all are satisfied.
+DEPS should be a list of feature symbols."
+  (let (missing)
+    (dolist (dep deps)
+      (unless (require dep nil t)
+        (push dep missing)))
+    (when missing
+      (message "emacs-mcp %s: missing dependencies: %s"
+               addon (mapconcat #'symbol-name (nreverse missing) ", ")))
+    (nreverse missing)))
+
 ;;;; Customization:
 
 (defgroup emacs-mcp-addons nil

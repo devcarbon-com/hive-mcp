@@ -3,13 +3,20 @@
 ;; Copyright (C) 2025 Pedro G. Branquinho
 ;; Author: Pedro G. Branquinho <pedrogbranquinho@gmail.com>
 ;; Version: 0.2.0
-;; Package-Requires: ((emacs "28.1") (cider "1.0"))
+;; Package-Requires: ((emacs "28.1"))
 ;; Keywords: tools, clojure, mcp
 ;; SPDX-License-Identifier: MIT
 
 ;;; Commentary:
 ;;
 ;; This addon integrates CIDER (Clojure IDE for Emacs) with emacs-mcp.
+;;
+;; OPTIONAL DEPENDENCIES:
+;; - cider (https://github.com/clojure-emacs/cider)
+;;   Install via: M-x package-install RET cider RET
+;;
+;; This addon activates automatically when cider is loaded.
+;; Without cider, the addon is silently disabled.
 ;;
 ;; Features:
 ;; - Add Clojure namespace/project context to MCP
@@ -621,7 +628,11 @@ Shows output in REPL buffer for collaborative debugging."
 
 (defun emacs-mcp-cider--addon-init ()
   "Synchronous init for cider addon.
-Sets up keybindings and loads required features."
+Sets up keybindings and loads required features.
+Does nothing if cider is not available."
+  (unless (featurep 'cider)
+    (message "emacs-mcp-cider: cider package not found, addon disabled")
+    (cl-return-from emacs-mcp-cider--addon-init nil))
   (require 'emacs-mcp-api nil t)
   (message "emacs-mcp-cider: initialized"))
 
