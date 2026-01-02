@@ -518,21 +518,25 @@
 ;; ============================================================
 
 (defn get-memory-usage
-  "Get current RAM usage from /proc/meminfo. Returns {:total :used :available :percent-used}."
+  "Get current RAM usage from /proc/meminfo. Returns {:total :used :available :percent-used}.
+   Uses shell command instead of slurp due to JVM issues with procfs."
   []
   (try
-    (let [meminfo (slurp "/proc/meminfo")
-          parse-kb (fn [pattern]
-                     (when-let [m (re-find (re-pattern (str pattern ":\\s+(\\d+)")) meminfo)]
-                       (Long/parseLong (second m))))
-          total-kb (parse-kb "MemTotal")
-          available-kb (parse-kb "MemAvailable")
-          used-kb (- total-kb available-kb)
-          percent-used (double (* 100 (/ used-kb total-kb)))]
-      {:total-mb (quot total-kb 1024)
-       :used-mb (quot used-kb 1024)
-       :available-mb (quot available-kb 1024)
-       :percent-used (Math/round percent-used)})
+    (let [{:keys [exit out]} (shell/sh "cat" "/proc/meminfo")]
+      (if (zero? exit)
+        (let [meminfo out
+              parse-kb (fn [pattern]
+                         (when-let [m (re-find (re-pattern (str pattern ":\\s+(\\d+)")) meminfo)]
+                           (Long/parseLong (second m))))
+              total-kb (parse-kb "MemTotal")
+              available-kb (parse-kb "MemAvailable")
+              used-kb (- total-kb available-kb)
+              percent-used (double (* 100 (/ used-kb total-kb)))]
+          {:total-mb (quot total-kb 1024)
+           :used-mb (quot used-kb 1024)
+           :available-mb (quot available-kb 1024)
+           :percent-used (Math/round percent-used)})
+        {:error "Failed to read /proc/meminfo"}))
     (catch Exception e
       {:error (.getMessage e)})))
 
