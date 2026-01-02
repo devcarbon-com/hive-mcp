@@ -13,6 +13,21 @@
   "Default timeout for emacsclient calls in milliseconds."
   5000)
 
+(defn- unwrap-emacs-string
+  "Unwrap emacsclient print format quoting.
+   Emacs wraps string results in quotes: \"foo\" -> \"\\\"foo\\\"\"
+   This undoes that wrapping for JSON and other string results."
+  [s]
+  (if (and (string? s)
+           (>= (count s) 2)
+           (str/starts-with? s "\"")
+           (str/ends-with? s "\""))
+    ;; Parse the outer quotes away using Clojure reader
+    (try
+      (read-string s)
+      (catch Exception _ s))
+    s))
+
 (defn eval-elisp-with-timeout
   "Execute elisp code with a timeout. Returns immediately if the operation
    takes longer than timeout-ms milliseconds.
@@ -27,7 +42,7 @@
              (try
                (let [{:keys [exit out err]} (sh *emacsclient-path* "--eval" code)]
                  (if (zero? exit)
-                   {:success true :result (str/trim out)}
+                   {:success true :result (unwrap-emacs-string (str/trim out))}
                    {:success false :error (str/trim err)}))
                (catch Exception e
                  {:success false :error (str "Failed to execute emacsclient: " (.getMessage e))})))]
@@ -70,7 +85,7 @@
             (log/debug :emacsclient-success {:duration-ms duration
                                              :result-length (count out)})
             {:success true
-             :result (str/trim out)
+             :result (unwrap-emacs-string (str/trim out))
              :duration-ms duration})
           (do
             (log/warn :emacsclient-failure {:duration-ms duration
