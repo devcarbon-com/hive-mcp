@@ -306,93 +306,111 @@
 ;;;; MCP API Functions:
 
 ;;;###autoload
-(defun emacs-mcp-magit-api-status ()
-  "Return comprehensive repository status as plist."
-  (emacs-mcp-magit--ensure-repo)
-  (let ((branch (emacs-mcp-magit--get-current-branch))
-        (upstream (emacs-mcp-magit--get-upstream-branch))
-        (ahead-behind (emacs-mcp-magit--get-ahead-behind)))
-    (list :repository (emacs-mcp-magit--repo-root)
-          :branch branch
-          :upstream upstream
-          :ahead (plist-get ahead-behind :ahead)
-          :behind (plist-get ahead-behind :behind)
-          :staged (emacs-mcp-magit--get-staged-files)
-          :staged-count (length (emacs-mcp-magit--get-staged-files))
-          :unstaged (emacs-mcp-magit--get-unstaged-files)
-          :unstaged-count (length (emacs-mcp-magit--get-unstaged-files))
-          :untracked (emacs-mcp-magit--get-untracked-files)
-          :untracked-count (length (emacs-mcp-magit--get-untracked-files))
-          :stashes (emacs-mcp-magit--get-stash-list)
-          :recent-commits (emacs-mcp-magit--get-recent-commits 5)
-          :clean (and (null (emacs-mcp-magit--get-staged-files))
-                      (null (emacs-mcp-magit--get-unstaged-files))
-                      (null (emacs-mcp-magit--get-untracked-files)))
-          :magit-available (emacs-mcp-magit--magit-available-p))))
+(defun emacs-mcp-magit-api-status (&optional directory)
+  "Return comprehensive repository status as plist.
+DIRECTORY overrides `default-directory' if provided."
+  (let ((default-directory (or directory default-directory)))
+    (emacs-mcp-magit--ensure-repo)
+    (let ((branch (emacs-mcp-magit--get-current-branch))
+          (upstream (emacs-mcp-magit--get-upstream-branch))
+          (ahead-behind (emacs-mcp-magit--get-ahead-behind)))
+      (list :repository (emacs-mcp-magit--repo-root)
+            :branch branch
+            :upstream upstream
+            :ahead (plist-get ahead-behind :ahead)
+            :behind (plist-get ahead-behind :behind)
+            :staged (emacs-mcp-magit--get-staged-files)
+            :staged-count (length (emacs-mcp-magit--get-staged-files))
+            :unstaged (emacs-mcp-magit--get-unstaged-files)
+            :unstaged-count (length (emacs-mcp-magit--get-unstaged-files))
+            :untracked (emacs-mcp-magit--get-untracked-files)
+            :untracked-count (length (emacs-mcp-magit--get-untracked-files))
+            :stashes (emacs-mcp-magit--get-stash-list)
+            :recent-commits (emacs-mcp-magit--get-recent-commits 5)
+            :clean (and (null (emacs-mcp-magit--get-staged-files))
+                        (null (emacs-mcp-magit--get-unstaged-files))
+                        (null (emacs-mcp-magit--get-untracked-files)))
+            :magit-available (emacs-mcp-magit--magit-available-p)))))
 
 ;;;###autoload
-(defun emacs-mcp-magit-api-branches ()
-  "Return branch information as plist."
-  (emacs-mcp-magit--ensure-repo)
-  (list :current (emacs-mcp-magit--get-current-branch)
-        :upstream (emacs-mcp-magit--get-upstream-branch)
-        :local (emacs-mcp-magit--list-local-branches)
-        :remote (emacs-mcp-magit--list-remote-branches)))
+(defun emacs-mcp-magit-api-branches (&optional directory)
+  "Return branch information as plist.
+DIRECTORY overrides `default-directory' if provided."
+  (let ((default-directory (or directory default-directory)))
+    (emacs-mcp-magit--ensure-repo)
+    (list :current (emacs-mcp-magit--get-current-branch)
+          :upstream (emacs-mcp-magit--get-upstream-branch)
+          :local (emacs-mcp-magit--list-local-branches)
+          :remote (emacs-mcp-magit--list-remote-branches))))
 
 ;;;###autoload
-(defun emacs-mcp-magit-api-log (&optional count)
-  "Return recent COUNT commits."
-  (emacs-mcp-magit--ensure-repo)
-  (emacs-mcp-magit--get-recent-commits count))
+(defun emacs-mcp-magit-api-log (&optional count directory)
+  "Return recent COUNT commits.
+DIRECTORY overrides `default-directory' if provided."
+  (let ((default-directory (or directory default-directory)))
+    (emacs-mcp-magit--ensure-repo)
+    (emacs-mcp-magit--get-recent-commits count)))
 
 ;;;###autoload
-(defun emacs-mcp-magit-api-diff (&optional target)
-  "Return diff for TARGET (staged, unstaged, or all)."
-  (emacs-mcp-magit--ensure-repo)
-  (pcase target
-    ((or 'nil 'staged) (emacs-mcp-magit--diff-staged))
-    ('unstaged (emacs-mcp-magit--diff-unstaged))
-    ('all (concat (emacs-mcp-magit--diff-staged)
-                  "\n---\n"
-                  (emacs-mcp-magit--diff-unstaged)))
-    (_ (emacs-mcp-magit--diff-staged))))
+(defun emacs-mcp-magit-api-diff (&optional target directory)
+  "Return diff for TARGET (staged, unstaged, or all).
+DIRECTORY overrides `default-directory' if provided."
+  (let ((default-directory (or directory default-directory)))
+    (emacs-mcp-magit--ensure-repo)
+    (pcase target
+      ((or 'nil 'staged) (emacs-mcp-magit--diff-staged))
+      ('unstaged (emacs-mcp-magit--diff-unstaged))
+      ('all (concat (emacs-mcp-magit--diff-staged)
+                    "\n---\n"
+                    (emacs-mcp-magit--diff-unstaged)))
+      (_ (emacs-mcp-magit--diff-staged)))))
 
 ;;;###autoload
-(defun emacs-mcp-magit-api-stage (files)
-  "Stage FILES for commit."
-  (emacs-mcp-magit--ensure-repo)
-  (cond
-   ((eq files 'all) (emacs-mcp-magit--stage-all))
-   ((stringp files) (emacs-mcp-magit--stage-file files))
-   ((listp files) (dolist (f files) (emacs-mcp-magit--stage-file f)))))
+(defun emacs-mcp-magit-api-stage (files &optional directory)
+  "Stage FILES for commit.
+DIRECTORY overrides `default-directory' if provided."
+  (let ((default-directory (or directory default-directory)))
+    (emacs-mcp-magit--ensure-repo)
+    (cond
+     ((eq files 'all) (emacs-mcp-magit--stage-all))
+     ((stringp files) (emacs-mcp-magit--stage-file files))
+     ((listp files) (dolist (f files) (emacs-mcp-magit--stage-file f))))))
 
 ;;;###autoload
-(defun emacs-mcp-magit-api-commit (message &optional options)
+(defun emacs-mcp-magit-api-commit (message &optional options directory)
   "Create commit with MESSAGE.
-OPTIONS may contain :all to stage all changes first."
-  (emacs-mcp-magit--ensure-repo)
-  (if (plist-get options :all)
-      (emacs-mcp-magit--commit-all message)
-    (emacs-mcp-magit--commit message)))
+OPTIONS may contain :all to stage all changes first.
+DIRECTORY overrides `default-directory' if provided."
+  (let ((default-directory (or directory default-directory)))
+    (emacs-mcp-magit--ensure-repo)
+    (if (plist-get options :all)
+        (emacs-mcp-magit--commit-all message)
+      (emacs-mcp-magit--commit message))))
 
 ;;;###autoload
-(defun emacs-mcp-magit-api-push (&optional options)
+(defun emacs-mcp-magit-api-push (&optional options directory)
   "Push to remote.
-OPTIONS may contain :set-upstream to set tracking."
-  (emacs-mcp-magit--ensure-repo)
-  (emacs-mcp-magit--push (plist-get options :set-upstream)))
+OPTIONS may contain :set-upstream to set tracking.
+DIRECTORY overrides `default-directory' if provided."
+  (let ((default-directory (or directory default-directory)))
+    (emacs-mcp-magit--ensure-repo)
+    (emacs-mcp-magit--push (plist-get options :set-upstream))))
 
 ;;;###autoload
-(defun emacs-mcp-magit-api-pull ()
-  "Pull from upstream."
-  (emacs-mcp-magit--ensure-repo)
-  (emacs-mcp-magit--pull))
+(defun emacs-mcp-magit-api-pull (&optional directory)
+  "Pull from upstream.
+DIRECTORY overrides `default-directory' if provided."
+  (let ((default-directory (or directory default-directory)))
+    (emacs-mcp-magit--ensure-repo)
+    (emacs-mcp-magit--pull)))
 
 ;;;###autoload
-(defun emacs-mcp-magit-api-fetch (&optional remote)
-  "Fetch from REMOTE (default: all remotes)."
-  (emacs-mcp-magit--ensure-repo)
-  (emacs-mcp-magit--fetch remote))
+(defun emacs-mcp-magit-api-fetch (&optional remote directory)
+  "Fetch from REMOTE (default: all remotes).
+DIRECTORY overrides `default-directory' if provided."
+  (let ((default-directory (or directory default-directory)))
+    (emacs-mcp-magit--ensure-repo)
+    (emacs-mcp-magit--fetch remote)))
 
 ;;;; Interactive Commands:
 
