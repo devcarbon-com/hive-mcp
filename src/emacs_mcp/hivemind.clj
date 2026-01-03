@@ -13,7 +13,7 @@
    Architecture: Pure push via channel.clj, accumulated state via atoms.
    Coordinator queries get-status when ready - no polling loops needed."
   (:require [emacs-mcp.channel :as channel]
-            [clojure.core.async :as async :refer [<!! >!! chan alt!!]]
+            [clojure.core.async :as async :refer [<!! >!! chan timeout alt!!]]
             [clojure.data.json :as json]
             [taoensso.timbre :as log]))
 
