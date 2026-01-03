@@ -18,7 +18,7 @@
      (subscribe! :task-completed (fn [event] (println event)))
    "
   (:require [clojure.core.async :as async :refer [go go-loop <! >! chan pub sub unsub close!]]
-            [nrepl.bencode :as bencode]
+            [bencode.core :as bencode]
             [taoensso.timbre :as log])
   (:import [java.net UnixDomainSocketAddress StandardProtocolFamily InetSocketAddress Socket ServerSocket]
            [java.nio.channels SocketChannel ServerSocketChannel Channels]
