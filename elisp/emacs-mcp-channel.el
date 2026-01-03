@@ -427,7 +427,7 @@ N defaults to 10. TYPE-FILTER is a keyword like :task-completed."
 
 ;;;; Auto-connect Support
 
-(defcustom emacs-mcp-channel-auto-connect nil
+(defcustom emacs-mcp-channel-auto-connect t
   "If non-nil, automatically connect when emacs-mcp loads.
 Set to t to enable auto-connect on startup."
   :type 'boolean
