@@ -38,7 +38,7 @@
   :group 'emacs-mcp
   :prefix "emacs-mcp-channel-")
 
-(defcustom emacs-mcp-channel-type 'unix
+(defcustom emacs-mcp-channel-type 'tcp
   "Channel transport type."
   :type '(choice (const :tag "Unix socket" unix)
                  (const :tag "TCP" tcp))
@@ -244,7 +244,11 @@ Returns t if a message was decoded, nil otherwise."
 ;;;; Event Dispatch
 
 (defun emacs-mcp-channel--dispatch (msg)
-  "Dispatch MSG to registered handlers."
+  "Dispatch MSG to registered handlers.
+All messages are stored in event history for retrieval."
+  ;; Always store in history
+  (emacs-mcp-channel--store-event msg)
+  ;; Then dispatch to type-specific handlers
   (let* ((type-str (or (cdr (assoc "type" msg))
                        (cdr (assoc 'type msg))))
          (type (when type-str
