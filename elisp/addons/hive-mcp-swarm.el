@@ -68,6 +68,12 @@
 (require 'subr-x)
 (require 'hive-mcp-graceful)
 
+;; Load modular components from swarm/ directory
+(require 'hive-mcp-swarm-events)
+(require 'hive-mcp-swarm-prompts)
+(require 'hive-mcp-swarm-presets)
+(require 'hive-mcp-swarm-terminal)
+
 ;; Soft dependency on channel for push events
 (declare-function hive-mcp-channel-connected-p "hive-mcp-channel")
 (declare-function hive-mcp-channel-send "hive-mcp-channel")
@@ -237,9 +243,6 @@ This alerts the human even when running master Claude in a terminal."
 (defvar hive-mcp-swarm--tasks (make-hash-table :test 'equal)
   "Hash table of task-id -> task plist.")
 
-(defvar hive-mcp-swarm--presets-cache nil
-  "Cache of loaded presets (name -> content).")
-
 (defvar hive-mcp-swarm--task-counter 0
   "Counter for generating unique task IDs.")
 
@@ -255,428 +258,122 @@ This alerts the human even when running master Claude in a terminal."
 (defvar hive-mcp-swarm--ancestry nil
   "Ancestry chain: list of (slave-id . master-id) for loop detection.")
 
-(defvar hive-mcp-swarm--auto-approve-timer nil
-  "Timer for auto-approve watcher.")
-
-(defvar hive-mcp-swarm--last-approve-positions (make-hash-table :test 'equal)
-  "Hash of slave-id -> last checked position to avoid re-approving.")
-
-(defvar hive-mcp-swarm--pending-prompts nil
-  "List of pending prompts awaiting human decision.
-Each entry is a plist: (:slave-id ID :prompt TEXT :buffer BUF :timestamp TIME)")
+;; NOTE: The following state is now managed by submodules:
+;; - Presets cache: hive-mcp-swarm-presets module
+;; - Auto-approve timer: hive-mcp-swarm-prompts module
+;; - Last approve positions: hive-mcp-swarm-prompts module
+;; - Pending prompts: hive-mcp-swarm-prompts module
 
 ;;;; Channel Event Emission (Push-based updates):
+;; Delegated to hive-mcp-swarm-events module for centralized event handling.
 
 (defun hive-mcp-swarm--channel-available-p ()
   "Check if the bidirectional channel is available and connected."
-  (and (require 'hive-mcp-channel nil t)
-       (fboundp 'hive-mcp-channel-connected-p)
-       (hive-mcp-channel-connected-p)))
+  (hive-mcp-swarm-events-channel-available-p))
 
 (defun hive-mcp-swarm--emit-event (event-type data)
-  "Emit EVENT-TYPE with DATA through the channel if connected.
-EVENT-TYPE should be a string like \"task-completed\".
-DATA is an alist of additional event properties."
-  (when (hive-mcp-swarm--channel-available-p)
-    (let ((event `(("type" . ,event-type)
-                   ("timestamp" . ,(float-time))
-                   ("session-id" . ,hive-mcp-swarm--session-id)
-                   ,@data)))
-      (condition-case err
-          (hive-mcp-channel-send event)
-        (error
-         (message "[swarm] Channel emit error: %s" (error-message-string err)))))))
+  "Emit EVENT-TYPE with DATA through the channel if connected."
+  (hive-mcp-swarm-events-emit event-type data))
 
 (defun hive-mcp-swarm--emit-task-completed (task-id slave-id result)
   "Emit task-completed event for TASK-ID from SLAVE-ID with RESULT."
-  (hive-mcp-swarm--emit-event
-   "task-completed"
-   `(("task-id" . ,task-id)
-     ("slave-id" . ,slave-id)
-     ("result" . ,result))))
+  (hive-mcp-swarm-events-emit-task-completed task-id slave-id result))
 
 (defun hive-mcp-swarm--emit-task-failed (task-id slave-id error-msg)
   "Emit task-failed event for TASK-ID from SLAVE-ID with ERROR-MSG."
-  (hive-mcp-swarm--emit-event
-   "task-failed"
-   `(("task-id" . ,task-id)
-     ("slave-id" . ,slave-id)
-     ("error" . ,error-msg))))
+  (hive-mcp-swarm-events-emit-task-failed task-id slave-id error-msg))
 
 (defun hive-mcp-swarm--emit-prompt-shown (slave-id prompt-text)
   "Emit prompt-shown event for SLAVE-ID with PROMPT-TEXT."
-  (hive-mcp-swarm--emit-event
-   "prompt-shown"
-   `(("slave-id" . ,slave-id)
-     ("prompt" . ,prompt-text))))
+  (hive-mcp-swarm-events-emit-prompt-shown slave-id prompt-text))
 
 (defun hive-mcp-swarm--emit-state-changed (slave-id old-state new-state)
   "Emit state-changed event for SLAVE-ID from OLD-STATE to NEW-STATE."
-  (hive-mcp-swarm--emit-event
-   "state-changed"
-   `(("slave-id" . ,slave-id)
-     ("old-state" . ,(symbol-name old-state))
-     ("new-state" . ,(symbol-name new-state)))))
+  (hive-mcp-swarm-events-emit-state-changed slave-id old-state new-state))
 
 (defun hive-mcp-swarm--emit-slave-spawned (slave-id name presets)
   "Emit slave-spawned event for SLAVE-ID with NAME and PRESETS."
-  (hive-mcp-swarm--emit-event
-   "slave-spawned"
-   `(("slave-id" . ,slave-id)
-     ("name" . ,name)
-     ("presets" . ,(or presets [])))))
+  (hive-mcp-swarm-events-emit-slave-spawned slave-id name presets))
 
 (defun hive-mcp-swarm--emit-slave-killed (slave-id)
   "Emit slave-killed event for SLAVE-ID."
-  (hive-mcp-swarm--emit-event
-   "slave-killed"
-   `(("slave-id" . ,slave-id))))
+  (hive-mcp-swarm-events-emit-slave-killed slave-id))
 
 ;;;; Auto-Approve Watcher:
+;; Delegated to hive-mcp-swarm-prompts module for centralized prompt handling.
 
-(defun hive-mcp-swarm--check-for-prompts (buffer)
-  "Check BUFFER for permission prompts and return position if found."
-  (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (save-excursion
-        (goto-char (point-max))
-        ;; Look back at most 500 chars for prompt
-        (let ((search-start (max (point-min) (- (point-max) 500))))
-          (goto-char search-start)
-          (cl-loop for pattern in hive-mcp-swarm-auto-approve-patterns
-                   when (re-search-forward pattern nil t)
-                   return (point)))))))
-
-(defun hive-mcp-swarm--send-approval (buffer term-type)
-  "Send 'y' approval to BUFFER using TERM-TYPE."
-  (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (goto-char (point-max))
-      (pcase term-type
-        ('vterm
-         (vterm-send-string "y")
-         (run-at-time 0.05 nil
-                      (lambda ()
-                        (when (buffer-live-p buffer)
-                          (with-current-buffer buffer
-                            (vterm-send-return))))))
-        ('eat
-         (when (and (boundp 'eat-terminal) eat-terminal)
-           (eat-term-send-string eat-terminal "y")
-           (run-at-time 0.05 nil
-                        (lambda ()
-                          (when (and (buffer-live-p buffer)
-                                     (boundp 'eat-terminal)
-                                     eat-terminal)
-                            (eat-term-send-string eat-terminal "\r"))))))))))
-
-(defun hive-mcp-swarm--auto-approve-tick ()
-  "Check all slave buffers for permission prompts.
-Action depends on `hive-mcp-swarm-prompt-mode':
-- bypass: do nothing (CLI handles it)
-- auto: auto-approve prompts
-- human: forward prompts to master for decision"
-  (pcase hive-mcp-swarm-prompt-mode
-    ('bypass nil)  ; Nothing to do, CLI bypasses permissions
-    ('auto
-     ;; Legacy timer-based auto-approve
-     (when hive-mcp-swarm-auto-approve
-       (maphash
-        (lambda (slave-id slave)
-          (let* ((buffer (plist-get slave :buffer))
-                 (term-type (or (plist-get slave :terminal) hive-mcp-swarm-terminal))
-                 (last-pos (gethash slave-id hive-mcp-swarm--last-approve-positions 0)))
-            (when (and (buffer-live-p buffer)
-                       (eq (plist-get slave :status) 'working))
-              (let ((prompt-pos (hive-mcp-swarm--check-for-prompts buffer)))
-                (when (and prompt-pos (> prompt-pos last-pos))
-                  (message "[swarm] Auto-approving prompt in %s" slave-id)
-                  (puthash slave-id prompt-pos hive-mcp-swarm--last-approve-positions)
-                  (hive-mcp-swarm--send-approval buffer term-type))))))
-        hive-mcp-swarm--slaves)))
-    ('human
-     ;; Forward prompts to master for human decision
-     (hive-mcp-swarm--human-prompt-tick))))
+(defun hive-mcp-swarm--get-terminal-type (slave)
+  "Get terminal type for SLAVE plist."
+  (or (plist-get slave :terminal) hive-mcp-swarm-terminal))
 
 (defun hive-mcp-swarm-start-auto-approve ()
   "Start the auto-approve watcher timer."
   (interactive)
-  (hive-mcp-swarm-stop-auto-approve)
-  (setq hive-mcp-swarm--auto-approve-timer
-        (run-with-timer 1 2 #'hive-mcp-swarm--auto-approve-tick))
+  (hive-mcp-swarm-prompts-start-watcher
+   hive-mcp-swarm--slaves
+   #'hive-mcp-swarm--get-terminal-type)
   (message "[swarm] Auto-approve watcher started"))
 
 (defun hive-mcp-swarm-stop-auto-approve ()
   "Stop the auto-approve watcher timer."
   (interactive)
-  (when hive-mcp-swarm--auto-approve-timer
-    (cancel-timer hive-mcp-swarm--auto-approve-timer)
-    (setq hive-mcp-swarm--auto-approve-timer nil)
-    (message "[swarm] Auto-approve watcher stopped")))
+  (hive-mcp-swarm-prompts-stop-watcher)
+  (message "[swarm] Auto-approve watcher stopped"))
 
 ;;;; Human Mode - Prompt Hooks:
-
-(defun hive-mcp-swarm--extract-prompt (buffer)
-  "Extract prompt text and position from BUFFER.
-Returns plist (:text TEXT :pos POS) or nil."
-  (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (save-excursion
-        (goto-char (point-max))
-        (let ((search-start (max (point-min) (- (point-max) 500))))
-          (when (re-search-backward
-                 (regexp-opt hive-mcp-swarm-auto-approve-patterns)
-                 search-start t)
-            (let ((line-start (line-beginning-position))
-                  (line-end (line-end-position)))
-              (list :text (buffer-substring-no-properties line-start line-end)
-                    :pos (match-beginning 0)))))))))
-
-(defun hive-mcp-swarm--display-prompt (slave-id prompt-text)
-  "Display PROMPT-TEXT from SLAVE-ID in the prompts buffer."
-  (let ((buf (get-buffer-create hive-mcp-swarm-prompts-buffer-name)))
-    (with-current-buffer buf
-      (goto-char (point-max))
-      (insert (format "\n[%s] %s\n  %s\n"
-                      (format-time-string "%H:%M:%S")
-                      slave-id
-                      prompt-text))
-      (insert "  → Awaiting response (C-c m s y/n/p or MCP tool)\n"))
-    (display-buffer buf '(display-buffer-in-side-window
-                          (side . bottom)
-                          (slot . 0)
-                          (window-height . 8)))))
-
-(defun hive-mcp-swarm--send-desktop-notification (title body)
-  "Send desktop notification with TITLE and BODY via notify-send."
-  (when (and hive-mcp-swarm-desktop-notify
-             (executable-find "notify-send"))
-    (start-process "swarm-notify" nil "notify-send"
-                   "--urgency=critical"
-                   "--app-name=Swarm"
-                   title body)))
-
-(defun hive-mcp-swarm--queue-prompt (slave-id prompt-text buffer)
-  "Add a prompt to the pending queue and notify user.
-Sends both Emacs message and desktop notification for immediate awareness.
-Also emits prompt-shown event via channel for push-based updates."
-  (push (list :slave-id slave-id
-              :prompt prompt-text
-              :buffer buffer
-              :timestamp (current-time))
-        hive-mcp-swarm--pending-prompts)
-  (hive-mcp-swarm--display-prompt slave-id prompt-text)
-  ;; Emacs message
-  (when hive-mcp-swarm-prompt-notify
-    (message "[swarm] Prompt from %s: %s"
-             slave-id
-             (truncate-string-to-width prompt-text 50)))
-  ;; Desktop notification (immediate hook - not polling!)
-  (hive-mcp-swarm--send-desktop-notification
-   (format "🐝 Swarm Prompt: %s" slave-id)
-   (truncate-string-to-width prompt-text 100))
-  ;; Push event via channel (sub-100ms notification to master)
-  (hive-mcp-swarm--emit-prompt-shown slave-id prompt-text))
+;; Delegated to hive-mcp-swarm-prompts module for centralized prompt handling.
+;; These wrappers maintain backward compatibility.
 
 (defun hive-mcp-swarm--update-prompts-buffer ()
   "Refresh the prompts buffer with current pending prompts."
-  (when-let* ((buf (get-buffer hive-mcp-swarm-prompts-buffer-name)))
-    (with-current-buffer buf
-      (erase-buffer)
-      (insert (format "=== Pending Swarm Prompts (%d) ===\n"
-                      (length hive-mcp-swarm--pending-prompts)))
-      (if hive-mcp-swarm--pending-prompts
-          (dolist (prompt (reverse hive-mcp-swarm--pending-prompts))
-            (insert (format "\n[%s] %s\n  %s\n"
-                            (format-time-string "%H:%M:%S"
-                                                (plist-get prompt :timestamp))
-                            (plist-get prompt :slave-id)
-                            (plist-get prompt :prompt))))
-        (insert "\nNo pending prompts.\n")))))
-
-(defun hive-mcp-swarm--human-prompt-tick ()
-  "Check all slave buffers for prompts in human mode."
-  (maphash
-   (lambda (slave-id slave)
-     (let* ((buffer (plist-get slave :buffer))
-            (last-pos (gethash slave-id hive-mcp-swarm--last-approve-positions 0)))
-       (when (and (buffer-live-p buffer)
-                  (eq (plist-get slave :status) 'working))
-         (let ((prompt-info (hive-mcp-swarm--extract-prompt buffer)))
-           (when (and prompt-info
-                      (> (plist-get prompt-info :pos) last-pos)
-                      ;; Not already in queue
-                      (not (cl-find slave-id hive-mcp-swarm--pending-prompts
-                                    :key (lambda (p) (plist-get p :slave-id))
-                                    :test #'equal)))
-             (puthash slave-id (plist-get prompt-info :pos)
-                      hive-mcp-swarm--last-approve-positions)
-             (hive-mcp-swarm--queue-prompt
-              slave-id
-              (plist-get prompt-info :text)
-              buffer))))))
-   hive-mcp-swarm--slaves))
-
-(defun hive-mcp-swarm--send-response (buffer response)
-  "Send RESPONSE to slave BUFFER."
-  (when (buffer-live-p buffer)
-    (let ((term-type (with-current-buffer buffer
-                       (cond ((derived-mode-p 'vterm-mode) 'vterm)
-                             ((derived-mode-p 'eat-mode) 'eat)))))
-      (pcase term-type
-        ('vterm
-         (with-current-buffer buffer
-           (vterm-send-string response)
-           (sit-for 0.05)
-           (vterm-send-return)))
-        ('eat
-         (with-current-buffer buffer
-           (when (and (boundp 'eat-terminal) eat-terminal)
-             (eat-term-send-string eat-terminal response)
-             (eat-term-send-string eat-terminal "\r"))))))))
+  (hive-mcp-swarm-prompts-update-buffer))
 
 (defun hive-mcp-swarm-respond ()
   "Respond to the next pending prompt interactively."
   (interactive)
-  (if-let* ((prompt (car hive-mcp-swarm--pending-prompts)))
-      (let* ((slave-id (plist-get prompt :slave-id))
-             (text (plist-get prompt :prompt))
-             (response (read-string (format "[%s] %s → " slave-id text))))
-        (pop hive-mcp-swarm--pending-prompts)
-        (hive-mcp-swarm--send-response (plist-get prompt :buffer) response)
-        (hive-mcp-swarm--update-prompts-buffer)
-        (message "[swarm] Sent response to %s" slave-id))
-    (message "[swarm] No pending prompts")))
+  (hive-mcp-swarm-prompts-respond))
 
 (defun hive-mcp-swarm-approve ()
   "Approve (send \\='y\\=') to the next pending prompt."
   (interactive)
-  (if-let* ((prompt (pop hive-mcp-swarm--pending-prompts)))
-      (progn
-        (hive-mcp-swarm--send-response (plist-get prompt :buffer) "y")
-        (hive-mcp-swarm--update-prompts-buffer)
-        (message "[swarm] Approved: %s" (plist-get prompt :slave-id)))
-    (message "[swarm] No pending prompts")))
+  (hive-mcp-swarm-prompts-approve))
 
 (defun hive-mcp-swarm-deny ()
   "Deny (send \\='n\\=') to the next pending prompt."
   (interactive)
-  (if-let* ((prompt (pop hive-mcp-swarm--pending-prompts)))
-      (progn
-        (hive-mcp-swarm--send-response (plist-get prompt :buffer) "n")
-        (hive-mcp-swarm--update-prompts-buffer)
-        (message "[swarm] Denied: %s" (plist-get prompt :slave-id)))
-    (message "[swarm] No pending prompts")))
+  (hive-mcp-swarm-prompts-deny))
 
 (defun hive-mcp-swarm-list-prompts ()
   "List all pending prompts in the prompts buffer."
   (interactive)
-  (hive-mcp-swarm--update-prompts-buffer)
-  (display-buffer (get-buffer-create hive-mcp-swarm-prompts-buffer-name)))
+  (hive-mcp-swarm-prompts-list))
 
 ;;;; Preset Management:
-
-(defun hive-mcp-swarm--scan-presets-dir (dir)
-  "Recursively scan DIR for .md files, return alist of (name . path)."
-  (when (and dir (file-directory-p dir))
-    (let ((files (directory-files-recursively dir "\\.md$" nil)))
-      (mapcar (lambda (f)
-                (cons (file-name-sans-extension (file-name-nondirectory f)) f))
-              files))))
-
-(defun hive-mcp-swarm--load-all-presets ()
-  "Load all presets from built-in and custom directories.
-Returns hash-table of name -> content."
-  (let ((presets (make-hash-table :test 'equal)))
-    ;; Built-in presets
-    (dolist (entry (hive-mcp-swarm--scan-presets-dir hive-mcp-swarm-presets-dir))
-      (puthash (car entry) (cdr entry) presets))
-    ;; Custom presets (can override built-in)
-    (dolist (dir hive-mcp-swarm-custom-presets-dirs)
-      (dolist (entry (hive-mcp-swarm--scan-presets-dir dir))
-        (puthash (car entry) (cdr entry) presets)))
-    presets))
+;; Delegated to hive-mcp-swarm-presets module.
+;; These wrappers maintain backward compatibility.
 
 (defun hive-mcp-swarm-reload-presets ()
   "Reload all presets from disk."
   (interactive)
-  (setq hive-mcp-swarm--presets-cache (hive-mcp-swarm--load-all-presets))
-  (message "Loaded %d presets" (hash-table-count hive-mcp-swarm--presets-cache)))
-
-(defun hive-mcp-swarm--list-memory-presets ()
-  "List preset names from memory system (conventions tagged swarm-preset)."
-  (when (fboundp 'hive-mcp-memory-query)
-    (let ((entries (hive-mcp-memory-query 'convention
-                                            '("swarm-preset")
-                                            nil 100 nil nil)))
-      (cl-remove-duplicates
-       (cl-remove-if-not
-        #'identity
-        (mapcar (lambda (e)
-                  (cl-find-if (lambda (tag)
-                                (and (not (string-prefix-p "scope:" tag))
-                                     (not (string= tag "swarm-preset"))))
-                              (plist-get e :tags)))
-                entries))
-       :test #'string=))))
+  (hive-mcp-swarm-presets-reload))
 
 (defun hive-mcp-swarm-list-presets ()
   "List all available presets (file-based + memory-based)."
   (interactive)
-  (unless hive-mcp-swarm--presets-cache
-    (hive-mcp-swarm-reload-presets))
-  (let* ((file-presets (hash-table-keys hive-mcp-swarm--presets-cache))
-         (memory-presets (hive-mcp-swarm--list-memory-presets))
-         (all-names (cl-remove-duplicates
-                     (append file-presets memory-presets)
-                     :test #'string=)))
-    (if (called-interactively-p 'any)
-        (message "Available presets: %s (file: %d, memory: %d)"
-                 (string-join (sort all-names #'string<) ", ")
-                 (length file-presets)
-                 (length memory-presets))
-      all-names)))
-
-(defun hive-mcp-swarm--get-preset-from-memory (name)
-  "Get preset NAME from memory system (conventions tagged swarm-preset).
-Memory-based presets allow project-scoped and semantically searchable presets."
-  (when (fboundp 'hive-mcp-memory-query)
-    (let ((entries (hive-mcp-memory-query 'convention
-                                            (list "swarm-preset" name)
-                                            nil 1 nil nil)))
-      (when entries
-        (plist-get (car entries) :content)))))
-
-(defun hive-mcp-swarm--get-preset-content (name)
-  "Get content of preset NAME.
-Priority: memory-based (project-scoped) → file-based (.md fallback).
-This allows project-specific overrides of global file presets."
-  ;; Try memory first (supports project scope)
-  (or (hive-mcp-swarm--get-preset-from-memory name)
-      ;; Fallback to file-based preset
-      (progn
-        (unless hive-mcp-swarm--presets-cache
-          (hive-mcp-swarm-reload-presets))
-        (when-let* ((path (gethash name hive-mcp-swarm--presets-cache)))
-          (with-temp-buffer
-            (insert-file-contents path)
-            (buffer-string))))))
+  (hive-mcp-swarm-presets-list))
 
 (defun hive-mcp-swarm--build-system-prompt (presets)
   "Build combined system prompt from list of PRESETS."
-  (let ((contents '()))
-    (dolist (preset presets)
-      (when-let* ((content (hive-mcp-swarm--get-preset-content preset)))
-        (push content contents)))
-    (if contents
-        (mapconcat #'identity (nreverse contents) "\n\n---\n\n")
-      nil)))
+  (hive-mcp-swarm-presets-build-system-prompt presets))
 
 (defun hive-mcp-swarm-add-custom-presets-dir (dir)
   "Add DIR to custom preset directories and reload."
   (interactive "DPresets directory: ")
-  (add-to-list 'hive-mcp-swarm-custom-presets-dirs dir)
-  (hive-mcp-swarm-reload-presets))
+  (hive-mcp-swarm-presets-add-custom-dir dir))
+
+(defun hive-mcp-swarm--role-to-presets (role)
+  "Convert ROLE to list of preset names."
+  (hive-mcp-swarm-presets-role-to-presets role))
 
 ;;;; Slave Management:
 
@@ -937,21 +634,6 @@ Called async from `hive-mcp-swarm-spawn'.  Updates slave status as work progress
          (when (memq (plist-get s :status) '(starting spawning))
            (plist-put s :status 'idle)))))))
 
-(defun hive-mcp-swarm--role-to-presets (role)
-  "Convert ROLE to list of preset names."
-  (pcase role
-    ("tester" '("tester" "tdd"))
-    ("reviewer" '("reviewer" "solid" "clarity"))
-    ("documenter" '("documenter"))
-    ("refactorer" '("refactorer" "solid" "clarity"))
-    ("researcher" '("researcher"))
-    ("fixer" '("fixer" "tdd"))
-    ("clarity-dev" '("clarity" "solid" "ddd" "tdd"))
-    ("coordinator" '("task-coordinator"))
-    ("ling" '("ling" "minimal"))
-    ("worker" '("ling"))
-    (_ (list role))))
-
 (defun hive-mcp-swarm--project-root ()
   "Get current project root."
   (or (when (fboundp 'project-root)
@@ -992,7 +674,8 @@ Emits slave-killed event via channel for push-based updates."
     ;; Emit slave-killed event via channel before cleanup
     (hive-mcp-swarm--emit-slave-killed slave-id)
     (remhash slave-id hive-mcp-swarm--slaves)
-    (remhash slave-id hive-mcp-swarm--last-approve-positions)
+    ;; Clear prompt tracking for this slave
+    (hive-mcp-swarm-prompts-clear-slave slave-id)
     (message "Killed slave: %s" slave-id)))
 
 (defun hive-mcp-swarm-kill-all ()
@@ -1547,34 +1230,26 @@ Returns result plist. Never fails."
   "API: Get list of pending prompts awaiting human decision.
 Returns list of prompts with slave-id, prompt text, and timestamp."
   (hive-mcp-with-fallback
-      (let ((prompts
-             (mapcar (lambda (p)
-                       `(:slave-id ,(plist-get p :slave-id)
-                         :prompt ,(plist-get p :prompt)
-                         :timestamp ,(format-time-string
-                                      "%Y-%m-%dT%H:%M:%S"
-                                      (plist-get p :timestamp))))
-                     hive-mcp-swarm--pending-prompts)))
+      (let* ((pending (hive-mcp-swarm-prompts-get-pending))
+             (prompts
+              (mapcar (lambda (p)
+                        `(:slave-id ,(plist-get p :slave-id)
+                          :prompt ,(plist-get p :prompt)
+                          :timestamp ,(format-time-string
+                                       "%Y-%m-%dT%H:%M:%S"
+                                       (plist-get p :timestamp))))
+                      pending)))
         `(:count ,(length prompts)
           :prompts ,prompts
-          :mode ,hive-mcp-swarm-prompt-mode))
+          :mode ,hive-mcp-swarm-prompts-mode))
     `(:error "pending-prompts-failed" :count 0 :prompts nil)))
 
 (defun hive-mcp-swarm-api-respond-prompt (slave-id response)
   "API: Send RESPONSE to the pending prompt from SLAVE-ID.
 Returns result plist indicating success or failure."
   (hive-mcp-with-fallback
-      (if-let* ((prompt (cl-find slave-id hive-mcp-swarm--pending-prompts
-                                 :key (lambda (p) (plist-get p :slave-id))
-                                 :test #'equal)))
-          (let ((buffer (plist-get prompt :buffer)))
-            (setq hive-mcp-swarm--pending-prompts
-                  (cl-remove slave-id hive-mcp-swarm--pending-prompts
-                             :key (lambda (p) (plist-get p :slave-id))
-                             :test #'equal))
-            (hive-mcp-swarm--send-response buffer response)
-            (hive-mcp-swarm--update-prompts-buffer)
-            `(:success t :slave-id ,slave-id :response ,response))
+      (if (hive-mcp-swarm-prompts-respond-to slave-id response)
+          `(:success t :slave-id ,slave-id :response ,response)
         `(:success nil :error "no-pending-prompt" :slave-id ,slave-id))
     `(:error "respond-prompt-failed" :slave-id ,slave-id)))
 
@@ -1631,26 +1306,37 @@ Returns result plist indicating success or failure."
               (format "session-%s-%04x"
                       (format-time-string "%Y%m%d")
                       (random 65535)))
-        (hive-mcp-swarm-reload-presets)
+        ;; Initialize modules
+        (hive-mcp-swarm-events-init hive-mcp-swarm--session-id)
+        (hive-mcp-swarm-presets-init)
+        (hive-mcp-swarm-prompts-init)
+        ;; Start watcher if enabled
         (when hive-mcp-swarm-auto-approve
           (hive-mcp-swarm-start-auto-approve))
-        (message "Emacs-mcp-swarm enabled (session: %s, %d presets, auto-approve: %s)"
+        (message "hive-mcp-swarm enabled (session: %s, auto-approve: %s)"
                  hive-mcp-swarm--session-id
-                 (hash-table-count hive-mcp-swarm--presets-cache)
                  (if hive-mcp-swarm-auto-approve "on" "off")))
+    ;; Shutdown
     (hive-mcp-swarm-stop-auto-approve)
     (hive-mcp-swarm-kill-all)
-    (message "Emacs-mcp-swarm disabled")))
+    (hive-mcp-swarm-prompts-shutdown)
+    (hive-mcp-swarm-presets-shutdown)
+    (hive-mcp-swarm-events-shutdown)
+    (message "hive-mcp-swarm disabled")))
 
 ;;;; Addon Lifecycle:
 
 (defun hive-mcp-swarm--addon-init ()
   "Initialize swarm addon."
-  (hive-mcp-swarm-reload-presets)
   (setq hive-mcp-swarm--session-id
         (format "session-%s-%04x"
                 (format-time-string "%Y%m%d")
                 (random 65535)))
+  ;; Initialize modules
+  (hive-mcp-swarm-events-init hive-mcp-swarm--session-id)
+  (hive-mcp-swarm-presets-init)
+  (hive-mcp-swarm-prompts-init)
+  ;; Start watcher if enabled
   (when hive-mcp-swarm-auto-approve
     (hive-mcp-swarm-start-auto-approve)))
 
@@ -1658,8 +1344,10 @@ Returns result plist indicating success or failure."
   "Shutdown swarm addon - kill all slaves."
   (hive-mcp-swarm-stop-auto-approve)
   (hive-mcp-swarm-kill-all)
-  (clrhash hive-mcp-swarm--last-approve-positions)
-  (setq hive-mcp-swarm--presets-cache nil)
+  ;; Shutdown modules
+  (hive-mcp-swarm-prompts-shutdown)
+  (hive-mcp-swarm-presets-shutdown)
+  (hive-mcp-swarm-events-shutdown)
   (setq hive-mcp-swarm--session-id nil))
 
 ;; Register with addon system
