@@ -608,27 +608,27 @@ Called async from `hive-mcp-swarm-spawn'.  Updates slave status as work progress
                                  buffer
                                  (format "/system-prompt %s"
                                          (shell-quote-argument prompt-to-send))
-                                 'claude-code-ide)))))))))
-      ('vterm
-       (with-current-buffer buffer
-         (vterm-mode)
+                                 'claude-code-ide))))))))
+        ('vterm
+         (with-current-buffer buffer
+           (vterm-mode)
+           (run-at-time 0.5 nil
+                        (lambda ()
+                          (when (buffer-live-p buffer)
+                            (with-current-buffer buffer
+                              (vterm-send-string claude-cmd)
+                              (vterm-send-return)))))))
+        ('eat
+         (with-current-buffer buffer
+           (eat-mode)
+           (eat-exec buffer "swarm-shell" "/bin/bash" nil '("-l")))
          (run-at-time 0.5 nil
                       (lambda ()
                         (when (buffer-live-p buffer)
                           (with-current-buffer buffer
-                            (vterm-send-string claude-cmd)
-                            (vterm-send-return)))))))
-      ('eat
-       (with-current-buffer buffer
-         (eat-mode)
-         (eat-exec buffer "swarm-shell" "/bin/bash" nil '("-l")))
-       (run-at-time 0.5 nil
-                    (lambda ()
-                      (when (buffer-live-p buffer)
-                        (with-current-buffer buffer
-                          (when (and (boundp 'eat-terminal) eat-terminal)
-                            (eat-term-send-string eat-terminal claude-cmd)
-                            (eat-term-send-string eat-terminal "\r")))))))))
+                            (when (and (boundp 'eat-terminal) eat-terminal)
+                              (eat-term-send-string eat-terminal claude-cmd)
+                              (eat-term-send-string eat-terminal "\r"))))))))))
 
   ;; Log completion
   (message "[swarm] Spawned %s buffer created" slave-id)
