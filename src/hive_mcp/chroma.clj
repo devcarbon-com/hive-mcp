@@ -146,7 +146,7 @@
   (reset! collection-cache nil))
 
 ;;; ============================================================
-;;; Memory Indexing
+;;; Memory Indexing & Full CRUD (Chroma as Source of Truth)
 ;;; ============================================================
 
 (defn- memory-to-document
@@ -158,31 +158,238 @@
                      content
                      (json/write-str content))))
 
+(defn- generate-id
+  "Generate a unique ID for memory entries (timestamp + random hex)."
+  []
+  (let [ts (java.time.LocalDateTime/now)
+        fmt (java.time.format.DateTimeFormatter/ofPattern "yyyyMMddHHmmss")
+        random-hex (format "%08x" (rand-int Integer/MAX_VALUE))]
+    (str (.format ts fmt) "-" random-hex)))
+
+(defn- iso-timestamp
+  "Return current ISO 8601 timestamp."
+  []
+  (str (java.time.ZonedDateTime/now
+        (java.time.ZoneId/systemDefault))))
+
+(defn- expired?
+  "Check if an entry has expired based on :expires metadata."
+  [metadata]
+  (when-let [expires (:expires metadata)]
+    (when (and (string? expires) (not (empty? expires)))
+      (try
+        (let [expires-instant (java.time.ZonedDateTime/parse expires)
+              now (java.time.ZonedDateTime/now)]
+          (.isBefore expires-instant now))
+        (catch Exception _ false)))))
+
 (defn index-memory-entry!
-  "Index a memory entry in Chroma for semantic search.
-   Entry should have :id, :content, :type, and optionally :tags, :created.
+  "Index a memory entry in Chroma (full storage, not just search).
+   Entry should have :id, :content, :type, and optionally :tags, :created, etc.
    Returns the entry ID on success.
-   
+
+   Full metadata stored: type, tags, content, content-hash, created, updated,
+   duration, expires, access-count, helpful-count, unhelpful-count, project-id.
+
    Note: Tags are stored as comma-separated string since Chroma metadata
    only supports scalar values (string, int, float, bool)."
-  [{:keys [id content type tags created] :as entry}]
+  [{:keys [id content type tags created updated duration expires
+           content-hash access-count helpful-count unhelpful-count project-id]
+    :as entry}]
   (when-not (embedding-configured?)
     (throw (ex-info "Embedding provider not configured" {:type :no-embedding-provider})))
   (let [coll (get-or-create-collection)
         provider @embedding-provider
+        entry-id (or id (generate-id))
+        now (iso-timestamp)
         doc-text (memory-to-document entry)
         embedding (embed-text provider doc-text)
         ;; Chroma metadata only supports scalar values, convert tags to string
-        tags-str (when (seq tags) (clojure.string/join "," tags))]
-    @(chroma/add coll [{:id id
+        tags-str (when (seq tags) (clojure.string/join "," tags))
+        ;; Serialize content if it's not a string
+        content-str (if (string? content) content (json/write-str content))]
+    @(chroma/add coll [{:id entry-id
                         :embedding embedding
                         :document doc-text
-                        :metadata {:type type
+                        :metadata {:type (or type "note")
                                    :tags (or tags-str "")
-                                   :created (or created "")}}]
+                                   :content content-str
+                                   :content-hash (or content-hash "")
+                                   :created (or created now)
+                                   :updated (or updated now)
+                                   :duration (or duration "long-term")
+                                   :expires (or expires "")
+                                   :access-count (or access-count 0)
+                                   :helpful-count (or helpful-count 0)
+                                   :unhelpful-count (or unhelpful-count 0)
+                                   :project-id (or project-id "global")}}]
                  :upsert? true)
-    (log/debug "Indexed memory entry:" id)
-    id))
+    (log/debug "Indexed memory entry:" entry-id)
+    entry-id))
+
+(defn get-entry-by-id
+  "Get a specific memory entry by ID from Chroma.
+   Returns the full entry as a map with :id, :content, :type, :tags, etc.
+   Returns nil if not found."
+  [id]
+  (when-not (embedding-configured?)
+    (throw (ex-info "Embedding provider not configured" {:type :no-embedding-provider})))
+  (let [coll (get-or-create-collection)
+        results @(chroma/get coll :ids [id] :include #{:documents :metadatas})]
+    (when-let [entry (first results)]
+      (let [metadata (:metadata entry)
+            tags-str (:tags metadata)
+            content-str (:content metadata)]
+        {:id (:id entry)
+         :type (:type metadata)
+         :content (if (and content-str
+                           (or (clojure.string/starts-with? content-str "{")
+                               (clojure.string/starts-with? content-str "[")))
+                    (try (json/read-str content-str :key-fn keyword)
+                         (catch Exception _ content-str))
+                    content-str)
+         :tags (when (and tags-str (not (empty? tags-str)))
+                 (clojure.string/split tags-str #","))
+         :content-hash (:content-hash metadata)
+         :created (:created metadata)
+         :updated (:updated metadata)
+         :duration (:duration metadata)
+         :expires (:expires metadata)
+         :access-count (:access-count metadata)
+         :helpful-count (:helpful-count metadata)
+         :unhelpful-count (:unhelpful-count metadata)
+         :project-id (:project-id metadata)
+         :document (:document entry)}))))
+
+(defn query-entries
+  "Query memory entries from Chroma with filtering.
+   Options:
+     :type - Filter by type (note, snippet, convention, decision)
+     :project-id - Filter by project
+     :limit - Max results (default: 100)
+     :include-expired? - Include expired entries (default: false)
+
+   Returns seq of entry maps."
+  [& {:keys [type project-id limit include-expired?]
+      :or {limit 100 include-expired? false}}]
+  (when-not (embedding-configured?)
+    (throw (ex-info "Embedding provider not configured" {:type :no-embedding-provider})))
+  (let [coll (get-or-create-collection)
+        ;; Build where clause
+        where-clause (cond-> {}
+                       type (assoc :type type)
+                       project-id (assoc :project-id project-id))
+        where (when (seq where-clause) where-clause)
+        ;; Get all matching entries
+        results @(chroma/get coll
+                             :where where
+                             :include #{:documents :metadatas}
+                             :limit limit)]
+    (->> results
+         (map (fn [entry]
+                (let [metadata (:metadata entry)
+                      tags-str (:tags metadata)
+                      content-str (:content metadata)]
+                  {:id (:id entry)
+                   :type (:type metadata)
+                   :content (if (and content-str
+                                     (or (clojure.string/starts-with? content-str "{")
+                                         (clojure.string/starts-with? content-str "[")))
+                              (try (json/read-str content-str :key-fn keyword)
+                                   (catch Exception _ content-str))
+                              content-str)
+                   :tags (when (and tags-str (not (empty? tags-str)))
+                           (clojure.string/split tags-str #","))
+                   :content-hash (:content-hash metadata)
+                   :created (:created metadata)
+                   :updated (:updated metadata)
+                   :duration (:duration metadata)
+                   :expires (:expires metadata)
+                   :access-count (:access-count metadata)
+                   :helpful-count (:helpful-count metadata)
+                   :unhelpful-count (:unhelpful-count metadata)
+                   :project-id (:project-id metadata)})))
+         ;; Filter expired unless include-expired?
+         (remove #(and (not include-expired?) (expired? %)))
+         ;; Sort by created desc
+         (sort-by :created #(compare %2 %1))
+         (take limit)
+         vec)))
+
+(defn update-entry!
+  "Update a memory entry in Chroma.
+   ID is required. Updates only provided fields.
+   Returns the updated entry."
+  [id updates]
+  (when-not (embedding-configured?)
+    (throw (ex-info "Embedding provider not configured" {:type :no-embedding-provider})))
+  (when-let [existing (get-entry-by-id id)]
+    (let [merged (merge existing updates {:updated (iso-timestamp)})
+          ;; Re-index with merged data
+          _ (index-memory-entry! merged)]
+      (get-entry-by-id id))))
+
+(defn find-duplicate
+  "Find entry with matching content-hash in the given type.
+   Returns the existing entry or nil."
+  [type content-hash & {:keys [project-id]}]
+  (when-not (embedding-configured?)
+    (throw (ex-info "Embedding provider not configured" {:type :no-embedding-provider})))
+  (let [entries (query-entries :type type :project-id project-id :limit 1000)]
+    (first (filter #(= (:content-hash %) content-hash) entries))))
+
+(defn content-hash
+  "Compute SHA-256 hash of content for deduplication.
+   Normalizes content (trim, collapse whitespace) before hashing."
+  [content]
+  (let [text (if (string? content)
+               content
+               (json/write-str content))
+        normalized (-> text
+                       clojure.string/trim
+                       (clojure.string/replace #"[ \t]+" " ")
+                       (clojure.string/replace #"\n+" "\n"))]
+    (let [md (java.security.MessageDigest/getInstance "SHA-256")
+          hash-bytes (.digest md (.getBytes normalized "UTF-8"))]
+      (apply str (map #(format "%02x" %) hash-bytes)))))
+
+(defn cleanup-expired!
+  "Delete all expired entries from Chroma.
+   Returns count of deleted entries."
+  []
+  (when-not (embedding-configured?)
+    (throw (ex-info "Embedding provider not configured" {:type :no-embedding-provider})))
+  (let [coll (get-or-create-collection)
+        ;; Get all entries including expired
+        all-entries @(chroma/get coll :include #{:metadatas} :limit 10000)
+        expired-ids (->> all-entries
+                         (filter #(expired? (:metadata %)))
+                         (map :id))]
+    (when (seq expired-ids)
+      @(chroma/delete coll :ids expired-ids)
+      (log/info "Cleaned up" (count expired-ids) "expired entries"))
+    (count expired-ids)))
+
+(defn entries-expiring-soon
+  "Get entries expiring within the given number of days.
+   Returns seq of entry maps."
+  [days & {:keys [project-id]}]
+  (when-not (embedding-configured?)
+    (throw (ex-info "Embedding provider not configured" {:type :no-embedding-provider})))
+  (let [threshold (-> (java.time.ZonedDateTime/now)
+                      (.plusDays days))
+        entries (query-entries :project-id project-id :limit 10000 :include-expired? false)]
+    (->> entries
+         (filter (fn [entry]
+                   (when-let [expires (:expires entry)]
+                     (when (and (string? expires) (not (empty? expires)))
+                       (try
+                         (let [exp-time (java.time.ZonedDateTime/parse expires)]
+                           (and (.isAfter exp-time (java.time.ZonedDateTime/now))
+                                (.isBefore exp-time threshold)))
+                         (catch Exception _ false))))))
+         (sort-by :expires)
+         vec)))
 
 (defn index-memory-entries!
   "Index multiple memory entries in batch.

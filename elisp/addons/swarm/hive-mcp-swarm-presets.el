@@ -7,7 +7,7 @@
 ;;; Commentary:
 ;;
 ;; Preset management for hive-mcp-swarm.
-;; Handles loading presets from disk (.md files) and memory system.
+;; Handles loading presets from multiple sources with fallback chain.
 ;;
 ;; Design principles (SOLID/CLARITY):
 ;; - Single Responsibility: Only handles preset loading/building
@@ -15,8 +15,9 @@
 ;; - Liskov Substitution: All preset sources return same format
 ;;
 ;; Preset sources (priority order):
-;; 1. Memory-based (project-scoped conventions tagged "swarm-preset")
-;; 2. File-based (.md files from preset directories)
+;; 1. Chroma vector DB (semantic search, requires MCP server)
+;; 2. Memory-based (project-scoped conventions tagged "swarm-preset")
+;; 3. File-based (.md files from preset directories)
 
 ;;; Code:
 
@@ -44,6 +45,18 @@
   "List of custom directories to scan for preset .md files.
 Directories are scanned recursively for .md files only."
   :type '(repeat directory)
+  :group 'hive-mcp-swarm-presets)
+
+(defcustom hive-mcp-swarm-presets-use-chroma t
+  "Whether to use Chroma vector DB for preset lookup.
+When non-nil, presets are first searched in Chroma, with file/memory fallback.
+Requires the MCP server to be running with Chroma configured."
+  :type 'boolean
+  :group 'hive-mcp-swarm-presets)
+
+(defcustom hive-mcp-swarm-presets-chroma-timeout 5
+  "Timeout in seconds for Chroma preset queries."
+  :type 'integer
   :group 'hive-mcp-swarm-presets)
 
 ;;;; Internal State:
@@ -93,6 +106,84 @@ Returns hash-table of name -> file-path."
       (insert-file-contents path)
       (buffer-string))))
 
+;;;; Chroma-Based Presets:
+
+(declare-function hive-mcp-api-call-tool "hive-mcp-api")
+
+(defvar hive-mcp-swarm-presets--chroma-available nil
+  "Cache for Chroma availability check. nil = not checked, t/`error' = result.")
+
+(defun hive-mcp-swarm-presets--chroma-available-p ()
+  "Check if Chroma preset lookup is available.
+Caches result to avoid repeated MCP calls."
+  (when hive-mcp-swarm-presets-use-chroma
+    (cond
+     ((eq hive-mcp-swarm-presets--chroma-available t) t)
+     ((eq hive-mcp-swarm-presets--chroma-available 'error) nil)
+     (t
+      ;; Check availability via MCP tool
+      (condition-case nil
+          (when (fboundp 'hive-mcp-api-call-tool)
+            (let ((result (hive-mcp-api-call-tool "preset_status" nil)))
+              (when (and result (not (plist-get result :error)))
+                (setq hive-mcp-swarm-presets--chroma-available
+                      (if (plist-get result :chroma-configured?) t 'error))
+                (eq hive-mcp-swarm-presets--chroma-available t))))
+        (error
+         (setq hive-mcp-swarm-presets--chroma-available 'error)
+         nil))))))
+
+(defun hive-mcp-swarm-presets--get-chroma-content (name)
+  "Get preset NAME from Chroma vector DB via MCP.
+Returns content string or nil if not found/unavailable."
+  (when (hive-mcp-swarm-presets--chroma-available-p)
+    (condition-case err
+        (when (fboundp 'hive-mcp-api-call-tool)
+          (let ((result (hive-mcp-api-call-tool
+                         "preset_get"
+                         `(:name ,name))))
+            (when (and result (not (plist-get result :error)))
+              (let ((preset (plist-get result :preset)))
+                (when preset
+                  (plist-get preset :content))))))
+      (error
+       (message "hive-mcp-swarm-presets: Chroma lookup failed: %s" err)
+       nil))))
+
+(defun hive-mcp-swarm-presets--list-chroma ()
+  "List preset names from Chroma vector DB."
+  (when (hive-mcp-swarm-presets--chroma-available-p)
+    (condition-case nil
+        (when (fboundp 'hive-mcp-api-call-tool)
+          (let ((result (hive-mcp-api-call-tool "preset_list" nil)))
+            (when (and result (not (plist-get result :error)))
+              (mapcar (lambda (p) (plist-get p :name))
+                      (plist-get result :presets)))))
+      (error nil))))
+
+(defun hive-mcp-swarm-presets-search (query &optional limit)
+  "Search presets using semantic similarity via Chroma.
+QUERY is a natural language description of desired preset.
+LIMIT is max results (default 5).
+Returns list of matching preset names or nil if Chroma unavailable."
+  (when (hive-mcp-swarm-presets--chroma-available-p)
+    (condition-case nil
+        (when (fboundp 'hive-mcp-api-call-tool)
+          (let ((result (hive-mcp-api-call-tool
+                         "preset_search"
+                         `(:query ,query :limit ,(or limit 5)))))
+            (when (and result (not (plist-get result :error)))
+              (mapcar (lambda (r) (plist-get r :name))
+                      (plist-get result :results)))))
+      (error nil))))
+
+(defun hive-mcp-swarm-presets-reset-chroma-cache ()
+  "Reset the Chroma availability cache.
+Call this after Chroma configuration changes."
+  (interactive)
+  (setq hive-mcp-swarm-presets--chroma-available nil)
+  (message "Chroma availability cache reset"))
+
 ;;;; Memory-Based Presets:
 
 (defun hive-mcp-swarm-presets--list-memory ()
@@ -125,26 +216,30 @@ Memory-based presets allow project-scoped and semantically searchable presets."
 ;;;; Public API:
 
 (defun hive-mcp-swarm-presets-list ()
-  "List all available presets (file-based + memory-based)."
+  "List all available presets (chroma + file-based + memory-based)."
   (interactive)
   (hive-mcp-swarm-presets--ensure-loaded)
-  (let* ((file-presets (hash-table-keys hive-mcp-swarm-presets--cache))
+  (let* ((chroma-presets (hive-mcp-swarm-presets--list-chroma))
+         (file-presets (hash-table-keys hive-mcp-swarm-presets--cache))
          (memory-presets (hive-mcp-swarm-presets--list-memory))
          (all-names (cl-remove-duplicates
-                     (append file-presets memory-presets)
+                     (append chroma-presets file-presets memory-presets)
                      :test #'string=)))
     (if (called-interactively-p 'any)
-        (message "Available presets: %s (file: %d, memory: %d)"
+        (message "Available presets: %s (chroma: %d, file: %d, memory: %d)"
                  (string-join (sort all-names #'string<) ", ")
+                 (length chroma-presets)
                  (length file-presets)
                  (length memory-presets))
       all-names)))
 
 (defun hive-mcp-swarm-presets-get (name)
   "Get content of preset NAME.
-Priority: memory-based (project-scoped) -> file-based (.md fallback).
-This allows project-specific overrides of global file presets."
-  (or (hive-mcp-swarm-presets--get-memory-content name)
+Priority: chroma -> memory-based (project-scoped) -> file-based (.md fallback).
+This allows Chroma-indexed presets with semantic search, project-specific
+overrides via memory, and file-based fallback."
+  (or (hive-mcp-swarm-presets--get-chroma-content name)
+      (hive-mcp-swarm-presets--get-memory-content name)
       (hive-mcp-swarm-presets--get-file-content name)))
 
 (defun hive-mcp-swarm-presets-build-system-prompt (presets)
@@ -194,7 +289,8 @@ Each entry is (ROLE . PRESETS-LIST)."
 
 (defun hive-mcp-swarm-presets-shutdown ()
   "Shutdown presets module."
-  (setq hive-mcp-swarm-presets--cache nil))
+  (setq hive-mcp-swarm-presets--cache nil)
+  (setq hive-mcp-swarm-presets--chroma-available nil))
 
 (provide 'hive-mcp-swarm-presets)
 ;;; hive-mcp-swarm-presets.el ends here

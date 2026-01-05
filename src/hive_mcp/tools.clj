@@ -30,6 +30,7 @@
             [hive-mcp.tools.swarm :as swarm]
             [hive-mcp.tools.org :as org]
             [hive-mcp.tools.prompt :as prompt]
+            [hive-mcp.tools.presets :as presets-tools]
             [hive-mcp.hivemind :as hivemind]
             [hive-mcp.channel :as channel]))
 
@@ -1542,6 +1543,7 @@
                swarm/tools
                org/tools
                prompt/tools
+               presets-tools/tools
                hivemind/tools
                channel/channel-tools)))
 
