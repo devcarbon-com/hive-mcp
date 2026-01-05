@@ -13,6 +13,10 @@
         ;; nREPL client support
         nrepl/bencode {:mvn/version "1.2.0"}
 
+        ;; Aleph for robust async TCP/networking (replaces custom sockets)
+        aleph/aleph {:mvn/version "0.9.3"}
+        manifold/manifold {:mvn/version "0.5.0"}
+
         ;; Logic programming for swarm hivemind coordination
         org.clojure/core.logic {:mvn/version "1.1.1"}
 

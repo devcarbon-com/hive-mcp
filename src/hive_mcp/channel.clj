@@ -1,52 +1,36 @@
 (ns hive-mcp.channel
   "Bidirectional communication channel between Clojure and Emacs.
 
-   Provides persistent socket connection for push-based events,
-   replacing polling-based communication patterns.
+   Built on Aleph/Manifold for robust async networking.
 
    Architecture:
-   - IChannel protocol abstracts transport (Unix socket, TCP)
-   - EventBus (core.async) for pub/sub within Clojure
-   - Bencode message format (compatible with nREPL)
-
-   Uses JDK 16+ native Unix domain sockets - no external dependencies.
+   - Aleph TCP server accepts Emacs connections
+   - Manifold streams handle bidirectional communication
+   - Bencode message format (compatible with nREPL/Emacs)
+   - core.async pub/sub for internal event routing
 
    Usage:
-     (def ch (unix-channel \"/tmp/hive-mcp.sock\"))
-     (connect! ch)
-     (send! ch {:op \"event\" :type \"task-completed\" :task-id \"123\"})
-     (subscribe! :task-completed (fn [event] (println event)))
+     (start-server! {:type :tcp :port 9998})
+     (broadcast! {:type :hivemind-progress :data {...}})
+     (subscribe! :hivemind-progress) ; => core.async channel
    "
-  (:require [clojure.core.async :as async :refer [go go-loop <! >! chan pub sub unsub close!]]
+  (:require [aleph.tcp :as tcp]
+            [manifold.stream :as s]
+            [manifold.deferred :as d]
+            [clojure.core.async :as async :refer [go go-loop <! >! chan pub sub unsub close!]]
             [nrepl.bencode :as bencode]
             [taoensso.timbre :as log])
-  (:import [java.net UnixDomainSocketAddress StandardProtocolFamily InetSocketAddress Socket ServerSocket]
-           [java.nio.channels SocketChannel ServerSocketChannel Channels]
-           [java.nio.file Files]
-           [java.io IOException BufferedInputStream BufferedOutputStream
-            PushbackInputStream DataOutputStream ByteArrayOutputStream]))
+  (:import [java.io ByteArrayOutputStream ByteArrayInputStream PushbackInputStream]))
 
 ;; =============================================================================
-;; Protocol Definition
-;; =============================================================================
-
-(defprotocol IChannel
-  "Bidirectional communication channel abstraction."
-  (connect! [this] "Establish connection. Returns true on success.")
-  (disconnect! [this] "Close connection gracefully.")
-  (send! [this msg] "Send bencode message. Returns true on success.")
-  (recv! [this] "Receive next bencode message. Blocks until available.")
-  (connected? [this] "Check if channel is connected."))
-
-;; =============================================================================
-;; Event Bus (core.async pub/sub)
+;; Event Bus (core.async pub/sub for internal routing)
 ;; =============================================================================
 
 (defonce ^:private event-chan (chan 1024))
 (defonce ^:private event-pub (pub event-chan :type))
 
 (defn publish!
-  "Publish event to the event bus.
+  "Publish event to the internal event bus.
    Event must have :type key for routing."
   [event]
   (when-not (:type event)
@@ -55,14 +39,7 @@
 
 (defn subscribe!
   "Subscribe to events of given type.
-   Returns a channel that receives matching events.
-
-   Example:
-     (let [ch (subscribe! :task-completed)]
-       (go-loop []
-         (when-let [event (<! ch)]
-           (println \"Task completed:\" event)
-           (recur))))"
+   Returns a core.async channel that receives matching events."
   [event-type]
   (let [ch (chan 256)]
     (sub event-pub event-type ch)
@@ -86,7 +63,7 @@
     (.toByteArray baos)))
 
 (defn- bytes->str
-  "Convert byte array to string if needed."
+  "Convert byte arrays to strings recursively."
   [v]
   (cond
     (bytes? v) (String. ^bytes v "UTF-8")
@@ -95,254 +72,89 @@
     :else v))
 
 (defn- decode-msg
-  "Decode bencode from input stream to Clojure map.
-   Converts byte arrays to strings for easier handling."
-  [^PushbackInputStream in]
+  "Decode bencode bytes to Clojure map."
+  [^bytes data]
   (try
-    (-> (bencode/read-bencode in)
-        bytes->str)
+    (let [in (PushbackInputStream. (ByteArrayInputStream. data))]
+      (-> (bencode/read-bencode in)
+          bytes->str))
     (catch Exception e
       (log/debug "Bencode decode error:" (.getMessage e))
       nil)))
 
 ;; =============================================================================
-;; TCP Channel Implementation (using atoms for mutable state)
-;; =============================================================================
-
-(defrecord TcpChannel [host port state]
-  ;; state is an atom containing {:socket nil :in nil :out nil}
-  IChannel
-  (connect! [this]
-    (try
-      (let [sock (Socket.)]
-        (.connect sock (InetSocketAddress. ^String host ^int port) 5000)
-        (reset! state
-                {:socket sock
-                 :in (PushbackInputStream. (BufferedInputStream. (.getInputStream sock)))
-                 :out (DataOutputStream. (BufferedOutputStream. (.getOutputStream sock)))})
-        (log/info "TCP channel connected to" (str host ":" port))
-        true)
-      (catch IOException e
-        (log/error "TCP connect failed:" (.getMessage e))
-        false)))
-
-  (disconnect! [this]
-    (when-let [{:keys [socket]} @state]
-      (try
-        (.close ^Socket socket)
-        (log/info "TCP channel disconnected")
-        (catch IOException e
-          (log/warn "TCP disconnect error:" (.getMessage e))))
-      (reset! state {:socket nil :in nil :out nil})))
-
-  (send! [this msg]
-    (let [{:keys [socket out]} @state]
-      (when (and socket out)
-        (try
-          (let [bytes (encode-msg msg)]
-            (.write ^DataOutputStream out bytes)
-            (.flush ^DataOutputStream out)
-            true)
-          (catch IOException e
-            (log/error "TCP send failed:" (.getMessage e))
-            false)))))
-
-  (recv! [this]
-    (let [{:keys [socket in]} @state]
-      (when (and socket in)
-        (decode-msg in))))
-
-  (connected? [this]
-    (when-let [{:keys [socket]} @state]
-      (and socket (not (.isClosed ^Socket socket))))))
-
-(defn tcp-channel
-  "Create a TCP channel to host:port."
-  [host port]
-  (->TcpChannel host port (atom {:socket nil :in nil :out nil})))
-
-;; =============================================================================
-;; Unix Socket Channel Implementation (JDK 16+ Native)
-;; =============================================================================
-
-(defrecord UnixChannel [path state]
-  ;; state is an atom containing {:channel nil :in nil :out nil}
-  IChannel
-  (connect! [this]
-    (try
-      (let [addr (UnixDomainSocketAddress/of ^String path)
-            ch (SocketChannel/open StandardProtocolFamily/UNIX)]
-        (.connect ch addr)
-        (reset! state
-                {:channel ch
-                 :in (PushbackInputStream.
-                      (BufferedInputStream.
-                       (Channels/newInputStream ch)))
-                 :out (DataOutputStream.
-                       (BufferedOutputStream.
-                        (Channels/newOutputStream ch)))})
-        (log/info "Unix channel connected to" path)
-        true)
-      (catch IOException e
-        (log/error "Unix connect failed:" (.getMessage e))
-        false)))
-
-  (disconnect! [this]
-    (when-let [{:keys [channel]} @state]
-      (try
-        (.close ^SocketChannel channel)
-        (log/info "Unix channel disconnected")
-        (catch IOException e
-          (log/warn "Unix disconnect error:" (.getMessage e))))
-      (reset! state {:channel nil :in nil :out nil})))
-
-  (send! [this msg]
-    (let [{:keys [channel out]} @state]
-      (when (and channel out)
-        (try
-          (let [bytes (encode-msg msg)]
-            (.write ^DataOutputStream out bytes)
-            (.flush ^DataOutputStream out)
-            true)
-          (catch IOException e
-            (log/error "Unix send failed:" (.getMessage e))
-            false)))))
-
-  (recv! [this]
-    (let [{:keys [channel in]} @state]
-      (when (and channel in)
-        (decode-msg in))))
-
-  (connected? [this]
-    (when-let [{:keys [channel]} @state]
-      (and channel (.isConnected ^SocketChannel channel)))))
-
-(defn unix-channel
-  "Create a Unix domain socket channel to path."
-  [path]
-  (->UnixChannel path (atom {:channel nil :in nil :out nil})))
-
-;; =============================================================================
-;; Channel Server (Emacs connects to this)
+;; Server State
 ;; =============================================================================
 
 (defonce ^:private server-state (atom nil))
 
 (defn- handle-client
-  "Handle incoming client connection."
-  [channel client-id]
-  (go-loop []
-    (when (connected? channel)
-      (when-let [msg (recv! channel)]
-        (log/debug "Received from" client-id ":" msg)
-        ;; Route incoming messages to event bus
-        ;; Note: bencode returns string keys, so check for "type" not :type
-        (when-let [type-str (get msg "type")]
-          (let [event-type (keyword type-str)]
-            (publish! (assoc msg :type event-type :client-id client-id))))
-        (recur)))))
+  "Handle incoming messages from a client stream."
+  [stream client-id]
+  (d/loop []
+    (d/chain
+     (s/take! stream)
+     (fn [data]
+       (when data
+         (when-let [msg (decode-msg data)]
+           (log/debug "Received from" client-id ":" msg)
+           ;; Route to internal pub/sub
+           (when-let [type-str (get msg "type")]
+             (publish! (assoc msg :type (keyword type-str) :client-id client-id))))
+         (d/recur))))))
+
+(defn- client-handler
+  "Handler function for new client connections."
+  [stream info]
+  (let [client-id (str (gensym "client-"))
+        clients (:clients @server-state)]
+    (log/info "Client connected:" client-id "from" (:remote-addr info))
+    (swap! clients assoc client-id stream)
+
+    ;; Handle incoming messages
+    (handle-client stream client-id)
+
+    ;; Cleanup on disconnect
+    (s/on-closed stream
+                 (fn []
+                   (log/info "Client disconnected:" client-id)
+                   (swap! clients dissoc client-id)))))
+
+;; =============================================================================
+;; Public API
+;; =============================================================================
 
 (defn start-server!
-  "Start channel server on Unix socket or TCP port.
+  "Start the channel server on TCP port.
    Emacs will connect to this server.
 
    Options:
-     :type - :unix (default) or :tcp
-     :path - Unix socket path (for :unix)
-     :port - TCP port (for :tcp)
+     :port - TCP port (default: 9998)
 
    Returns server state map."
-  [{:keys [type path port] :or {type :unix path "/tmp/hive-mcp-channel.sock"}}]
+  [{:keys [port] :or {port 9998}}]
   (if @server-state
     (do
       (log/warn "Server already running")
       @server-state)
-    (let [;; Create server and accept-fn together so we can store the server socket
-          {:keys [server-socket accept-fn]}
-          (case type
-            :unix
-            (let [socket-path (java.nio.file.Path/of path (into-array String []))
-                  _ (when (Files/exists socket-path (into-array java.nio.file.LinkOption []))
-                      (Files/delete socket-path))
-                  addr (UnixDomainSocketAddress/of ^String path)
-                  server (ServerSocketChannel/open StandardProtocolFamily/UNIX)]
-              (.bind server addr)
-              (log/info "Unix server listening on" path)
-              {:server-socket server
-               :accept-fn (fn []
-                            (let [client (.accept server)
-                                  ch-state (atom {:channel client
-                                                  :in (PushbackInputStream.
-                                                       (BufferedInputStream.
-                                                        (Channels/newInputStream client)))
-                                                  :out (DataOutputStream.
-                                                        (BufferedOutputStream.
-                                                         (Channels/newOutputStream client)))})]
-                              (->UnixChannel path ch-state)))})
-
-            :tcp
-            (let [server (ServerSocket. ^int port)]
-              (log/info "TCP server listening on port" port)
-              {:server-socket server
-               :accept-fn (fn []
-                            (let [client (.accept server)
-                                  ch-state (atom {:socket client
-                                                  :in (PushbackInputStream.
-                                                       (BufferedInputStream. (.getInputStream client)))
-                                                  :out (DataOutputStream.
-                                                        (BufferedOutputStream. (.getOutputStream client)))})]
-                              (->TcpChannel "localhost" port ch-state)))}))
-
-          clients (atom {})
-          running (atom true)
-
-          accept-loop
-          (future
-            (while @running
-              (try
-                (let [client-ch (accept-fn)
-                      client-id (str (gensym "client-"))]
-                  (swap! clients assoc client-id client-ch)
-                  (log/info "Client connected:" client-id)
-                  (handle-client client-ch client-id))
-                (catch IOException e
-                  (when @running
-                    (log/error "Accept error:" (.getMessage e)))))))]
-
+    (let [clients (atom {})
+          server (tcp/start-server client-handler {:port port})]
+      (log/info "Aleph TCP server listening on port" port)
       (reset! server-state
-              {:type type
-               :path path
+              {:server server
                :port port
-               :server-socket server-socket
-               :clients clients
-               :running running
-               :accept-loop accept-loop})
+               :clients clients})
       @server-state)))
 
 (defn stop-server!
   "Stop the channel server."
   []
-  (when-let [{:keys [running clients path type server-socket]} @server-state]
-    (reset! running false)
-    ;; Close the server socket to unblock the accept loop
-    (when server-socket
-      (try
-        (cond
-          (instance? ServerSocket server-socket)
-          (.close ^ServerSocket server-socket)
-
-          (instance? ServerSocketChannel server-socket)
-          (.close ^ServerSocketChannel server-socket))
-        (catch IOException e
-          (log/warn "Error closing server socket:" (.getMessage e)))))
-    ;; Close all client connections
-    (doseq [[id ch] @clients]
-      (disconnect! ch))
-    ;; Clean up Unix socket file
-    (when (= type :unix)
-      (let [socket-path (java.nio.file.Path/of path (into-array String []))]
-        (when (Files/exists socket-path (into-array java.nio.file.LinkOption []))
-          (Files/delete socket-path))))
+  (when-let [{:keys [server clients]} @server-state]
+    ;; Close all client streams
+    (doseq [[id stream] @clients]
+      (s/close! stream))
+    ;; Stop the server
+    (.close ^java.io.Closeable server)
     (reset! server-state nil)
     (log/info "Server stopped")))
 
@@ -350,15 +162,25 @@
   "Send message to all connected clients."
   [msg]
   (when-let [{:keys [clients]} @server-state]
-    (doseq [[id ch] @clients]
-      (when (connected? ch)
-        (send! ch msg)))))
+    (let [encoded (encode-msg msg)]
+      (doseq [[id stream] @clients]
+        (when-not (s/closed? stream)
+          (d/catch
+           (s/put! stream encoded)
+           (fn [e]
+             (log/warn "Broadcast to" id "failed:" (.getMessage e)))))))))
 
 (defn server-connected?
   "Check if the channel server is running and has connected clients."
   []
-  (when-let [{:keys [running clients]} @server-state]
-    (and @running (some #(connected? (second %)) @clients))))
+  (when-let [{:keys [clients]} @server-state]
+    (some #(not (s/closed? (second %))) @clients)))
+
+(defn client-count
+  "Return number of connected clients."
+  []
+  (when-let [{:keys [clients]} @server-state]
+    (count (filter #(not (s/closed? (second %))) @clients))))
 
 ;; =============================================================================
 ;; Convenience Functions
@@ -366,40 +188,33 @@
 
 (defn emit-event!
   "Emit an event to all connected clients and local subscribers.
-   Uses string keys for consistency with bencode format.
 
    Example:
      (emit-event! :task-completed {:task-id \"123\" :result \"done\"})"
   [event-type data]
-  ;; Convert keyword keys to strings for consistency with bencode
   (let [string-data (into {} (map (fn [[k v]] [(name k) v]) data))
         event (assoc string-data
                      "type" (name event-type)
                      "timestamp" (System/currentTimeMillis)
-                     :type event-type)] ; Keep :type for pub/sub routing
+                     :type event-type)]
     ;; Local pub/sub
     (publish! event)
-    ;; Broadcast to connected Emacs clients
+    ;; Broadcast to Emacs clients
     (broadcast! event)))
 
 (comment
   ;; Development REPL examples
 
-  ;; Start Unix socket server (JDK 16+ native)
-  (start-server! {:type :unix :path "/tmp/hive-mcp-channel.sock"})
+  ;; Start server
+  (start-server! {:port 9998})
 
-  ;; Start TCP server (default port 9998)
-  (start-server! {:type :tcp :port 9998})
+  ;; Check status
+  (server-connected?)
+  (client-count)
 
-  ;; Subscribe to events
-  (let [ch (subscribe! :task-completed)]
-    (go-loop []
-      (when-let [event (<! ch)]
-        (println "Received:" event)
-        (recur))))
-
-  ;; Emit test event
-  (emit-event! :task-completed {:task-id "test-123" :result "success"})
+  ;; Test broadcast
+  (broadcast! {:type :hivemind-progress
+               :data {:agent-id "test" :message "hello"}})
 
   ;; Stop server
   (stop-server!))
@@ -407,8 +222,6 @@
 ;; =============================================================================
 ;; MCP Tool Definitions
 ;; =============================================================================
-
-;; Note: Default port is 9998, matching HIVE_MCP_CHANNEL_PORT env var
 
 (def channel-tools
   "Channel-related MCP tools - currently empty as channel operations
