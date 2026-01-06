@@ -38,11 +38,11 @@
   :group 'hive-mcp
   :prefix "hive-mcp-channel-")
 
-(defcustom hive-mcp-channel-type 'tcp
+(defcustom hive-mcp-channel-type 'unix
   "Channel transport type.
-TCP is the default as it's more portable and was the working configuration."
-  :type '(choice (const :tag "TCP" tcp)
-                 (const :tag "Unix socket" unix))
+Unix sockets are the default as they're more efficient for local IPC."
+  :type '(choice (const :tag "Unix socket (recommended)" unix)
+                 (const :tag "TCP" tcp))
   :group 'hive-mcp-channel)
 
 (defcustom hive-mcp-channel-socket-path "/tmp/hive-mcp-channel.sock"
