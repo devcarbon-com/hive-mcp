@@ -120,18 +120,17 @@ Ensures terminal processes text before return is sent."
                          (eat-term-send-string eat-terminal "\r"))))))))
 
 (defun hive-mcp-swarm-terminal--send-claude-code-ide (buffer text)
-  "Send TEXT via claude-code-ide abstraction. Non-blocking."
+  "Send TEXT via claude-code-ide abstraction.
+Uses synchronous sit-for like claude-code-ide-send-prompt does.
+Blocking is OK for individual slaves since they're isolated."
   (with-current-buffer buffer
     (if (fboundp 'claude-code-ide--terminal-send-string)
         (progn
           (claude-code-ide--terminal-send-string text)
-          ;; claude-code-ide handles timing internally
-          (run-at-time 0.1 nil
-                       (lambda ()
-                         (when (buffer-live-p buffer)
-                           (with-current-buffer buffer
-                             (when (fboundp 'claude-code-ide--terminal-send-return)
-                               (claude-code-ide--terminal-send-return)))))))
+          ;; Use sit-for like claude-code-ide-send-prompt - this works reliably
+          (sit-for 0.1)
+          (when (fboundp 'claude-code-ide--terminal-send-return)
+            (claude-code-ide--terminal-send-return)))
       (error "claude-code-ide terminal functions not available"))))
 
 ;;;; Public API:
