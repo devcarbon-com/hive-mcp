@@ -59,6 +59,14 @@ Requires the MCP server to be running with Chroma configured."
   :type 'integer
   :group 'hive-mcp-swarm-presets)
 
+(defcustom hive-mcp-swarm-default-presets '("ling" "mcp-first")
+  "Default presets applied to all spawned swarm slaves.
+These presets are merged with any explicit presets passed to spawn.
+Explicit presets take priority (listed first in system prompt).
+Set to nil to disable default presets."
+  :type '(repeat string)
+  :group 'hive-mcp-swarm-presets)
+
 ;;;; Internal State:
 
 (defvar hive-mcp-swarm-presets--cache nil
@@ -214,6 +222,16 @@ Memory-based presets allow project-scoped and semantically searchable presets."
         (plist-get (car entries) :content)))))
 
 ;;;; Public API:
+
+(defun hive-mcp-swarm-presets-merge-defaults (explicit-presets)
+  "Merge EXPLICIT-PRESETS with default presets.
+Returns combined list with explicit presets first, then defaults.
+Duplicates are removed, preserving first occurrence (explicit wins)."
+  (let ((defaults (or hive-mcp-swarm-default-presets '())))
+    (cl-remove-duplicates
+     (append explicit-presets defaults)
+     :test #'string=
+     :from-end t)))
 
 (defun hive-mcp-swarm-presets-list ()
   "List all available presets (chroma + file-based + memory-based)."
