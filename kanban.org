@@ -451,6 +451,111 @@ Implementation: Add to presets.el TDD template: "Before committing, run M-x byte
 :AGENT:    emacs-378780
 :SESSION:  20260110-223346
 :END:
+** DONE Reconcile crystal/graph.clj with hive_mcp.graph.* modules
+:PROPERTIES:
+:ID:       bc416fd0-7856-4429-a8bf-f8bedd1db4d2
+:CREATED:  2026-01-11 00:35
+:DESCRIPTION: TWO graph implementations exist: crystal/graph.clj (core.logic pldb) and new hive_mcp.graph.* (Datascript). Need to migrate crystal/graph.clj to use GraphStore protocol, extend schema for recall-tracking entities, unify persistence layer.
+:AGENT:    emacs-1640257
+:SESSION:  20260111-003546
+:UPDATED:  2026-01-11 17:39
+:LAST_AGENT: emacs-1303659
+:END:
+** DONE Extend codanna with Clojure + Elisp Tree-sitter support
+:PROPERTIES:
+:ID:       f282c88e-2741-4849-99b0-4ae6dea8aea9
+:CREATED:  2026-01-11 00:35
+:DESCRIPTION: Codanna uses LanguageDefinition trait for extensibility. Tree-sitter crates exist: tree-sitter-clojure (sogaiu), tree-sitter-elisp (Wilfred). Need 6 files per language: mod.rs, parser.rs, behavior.rs, definition.rs, resolution.rs, audit.rs. CLOJURE LIMITATION: Grammar is syntax-only (no defn/defmacro nodes - must match list patterns manually).
+:AGENT:    emacs-1640257
+:SESSION:  20260111-003547
+:UPDATED:  2026-01-11 17:39
+:LAST_AGENT: emacs-1303659
+:END:
+** TODO Implement channel client-side API
+:PROPERTIES:
+:ID:       32d190f4-d4b5-4663-b7ce-fafec277a5ab
+:CREATED:  2026-01-11 00:35
+:DESCRIPTION: Tests exist for unix-channel, tcp-channel, connect!, disconnect!, send!, recv! but functions never implemented. Either implement client API or remove tests permanently. Server-side (start-server!, broadcast!, etc.) works.
+:AGENT:    emacs-1640257
+:SESSION:  20260111-003547
+:END:
+** TODO Fix infra_test.clj - dbus-client var missing
+:PROPERTIES:
+:ID:       f07719dd-6e85-4d5c-b1a9-76ac9fcde266
+:CREATED:  2026-01-11 00:35
+:DESCRIPTION: test/hive_mcp/prompts/infra_test.clj references @#'infra/dbus-client which doesn't exist in the infra namespace. Tests try to reset internal state for D-Bus mocking. Either add the var or remove/fix the tests.
+:AGENT:    emacs-1640257
+:SESSION:  20260111-003547
+:END:
+** DONE Add GraphStore tests to crystal module
+:PROPERTIES:
+:ID:       629ef6a2-5247-4a8b-ad99-19531b4f1f5b
+:CREATED:  2026-01-11 00:35
+:DESCRIPTION: Crystal module (crystal/core.clj, crystal/graph.clj, crystal/recall.clj, crystal/hooks.clj) has no tests. After reconciling with GraphStore, add comprehensive tests. hooks.clj line 233 has incomplete promotion integration TODO.
+:AGENT:    emacs-1640257
+:SESSION:  20260111-003547
+:UPDATED:  2026-01-11 17:39
+:LAST_AGENT: emacs-1303659
+:END:
+** TODO BUG: wrap_crystallize NullPointerException after crystal reconciliation
+:PROPERTIES:
+:ID:       580a709f-519e-48e9-80ad-ddf2918c4aed
+:CREATED:  2026-01-11 17:52
+:DESCRIPTION: wrap_crystallize throws: "Cannot invoke \"java.lang.CharSequence.length()\" because \"this.text\" is null". Likely caused by crystal module migration to Datascript. Need to: 1) Add tests for wrap_gather/wrap_crystallize, 2) Debug the null text field, 3) Ensure all crystal functions handle nil content gracefully.
+:AGENT:    emacs-1303659
+:SESSION:  20260111-175201
+:END:
+** TODO [EPIC] Datascript port for elisp - unified in-memory graph DB
+:PROPERTIES:
+:ID:       1095de3b-5e42-4bef-b846-e81fdf4adc44
+:CREATED:  2026-01-11 18:03
+:DESCRIPTION: Port Datascript concepts to elisp for unified in-memory graph database across Clojure and elisp layers. Benefits: consistent query semantics, transactional updates, reactive UI. Implementation: Either via elisp-native implementation or MCP bridge to Clojure Datascript. Research: cl-lib structures, plists as entities, pattern matching for queries.
+:AGENT:    emacs-1303659
+:SESSION:  20260111-180303
+:END:
+** TODO Fix swarm_status slaves-detail truncation (shows 1 of N lings)
+:PROPERTIES:
+:ID:       e79a1c55-6466-4a07-8568-95f8aa33971f
+:CREATED:  2026-01-11 18:10
+:DESCRIPTION: Priority 1: swarm_status slaves-detail only displays first ling. Need terminal introspection to enumerate all active vterm/eat buffers. Affects hivemind coordination visibility.
+:AGENT:    emacs-1303659
+:SESSION:  20260111-181048
+:END:
+** TODO Add auto-shout on ling task completion
+:PROPERTIES:
+:ID:       e6c253d9-f2d6-46ad-8940-9748ed5332d1
+:CREATED:  2026-01-11 18:10
+:DESCRIPTION: Priority 2: Lings should automatically call hivemind_shout when completing tasks. Options: (1) Inject shout instruction in preset footer, (2) Terminal output pattern detection, (3) MCP response hook. Reduces need for manual status polling.
+:AGENT:    emacs-1303659
+:SESSION:  20260111-181048
+:END:
+** TODO [EPIC] Live ling dashboard for swarm monitoring
+:PROPERTIES:
+:ID:       eaba5cb1-92d6-463d-994e-b118c516bdfd
+:CREATED:  2026-01-11 18:10
+:DESCRIPTION: Priority 3: Real-time dashboard showing all lings with status, current task, last shout. Options: tabulated-list-mode buffer, org-mode table, or separate emacs --daemon=swarm. Part of dedicated daemon architecture epic. Dependencies: fix swarm_status first.
+:AGENT:    emacs-1303659
+:SESSION:  20260111-181048
+:END:
+** TODO Add type safety layer for Clojure↔elisp serialization
+:PROPERTIES:
+:ID:       56b79383-b611-4c21-b9ee-3f97d48de224
+:CREATED:  2026-01-11 18:10
+:DESCRIPTION: Priority 4: Prevent vector/list mismatches at boundaries. Options: (1) Clojure-side elisp serializer, (2) elisp-side defensive converters (ensure-list pattern), (3) JSON schema validation. Related: tags->elisp-list helper in hooks.clj.
+:AGENT:    emacs-1303659
+:SESSION:  20260111-181048
+:END:
+
+
+
+
+
+
+
+
+
+
+
 
 
 
