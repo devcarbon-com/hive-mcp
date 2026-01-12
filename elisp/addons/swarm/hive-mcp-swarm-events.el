@@ -65,13 +65,16 @@ DATA is an alist of additional event properties."
 
 ;;;; Typed Event Emitters:
 
-(defun hive-mcp-swarm-events-emit-slave-spawned (slave-id name presets)
-  "Emit slave-spawned event for SLAVE-ID with NAME and PRESETS."
+(defun hive-mcp-swarm-events-emit-slave-spawned (slave-id name presets &optional cwd)
+  "Emit slave-spawned event for SLAVE-ID with NAME, PRESETS, and CWD.
+CWD is the working directory of the slave (optional but recommended for
+registry sync per ADR-001 Phase 2)."
   (hive-mcp-swarm-events-emit
    "slave-spawned"
    `(("slave-id" . ,slave-id)
      ("name" . ,name)
-     ("presets" . ,(or presets [])))))
+     ("presets" . ,(or presets []))
+     ("cwd" . ,(or cwd "")))))
 
 (defun hive-mcp-swarm-events-emit-slave-killed (slave-id)
   "Emit slave-killed event for SLAVE-ID."

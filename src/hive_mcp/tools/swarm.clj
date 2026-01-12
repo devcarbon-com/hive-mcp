@@ -10,12 +10,14 @@
    not connected."
   (:require [hive-mcp.tools.swarm.jvm :as jvm]
             [hive-mcp.tools.swarm.channel :as channel]
+            [hive-mcp.channel :as ch]
             [hive-mcp.emacsclient :as ec]
             [hive-mcp.validation :as v]
             [hive-mcp.swarm.coordinator :as coord]
             [hive-mcp.hivemind :as hivemind]
             [clojure.data.json :as json]
             [clojure.string :as str]
+            [clojure.core.async :as async :refer [go-loop <!]]
             [taoensso.timbre :as log]))
 
 ;; ============================================================
@@ -44,6 +46,86 @@
   "Get all registered lings."
   []
   @lings-registry)
+
+;; ============================================================
+;; ADR-001 Phase 2: Event-Driven Registry Sync
+;; ============================================================
+;; Subscribes to channel events from elisp to keep lings-registry in sync.
+;; Events: slave-spawned, slave-killed (from hive-mcp-swarm-events.el)
+;; This replaces manual registration in handle-swarm-spawn.
+
+(defonce ^:private registry-sync-state
+  (atom {:running false
+         :subscriptions []}))
+
+(defn- handle-ling-registered
+  "Handle slave-spawned event from elisp (registry sync).
+   Event: {:slave-id :name :presets :cwd}
+   Registers the ling in lings-registry."
+  [event]
+  (let [slave-id (or (get event "slave-id") (:slave-id event))
+        name (or (get event "name") (:name event))
+        presets (or (get event "presets") (:presets event) [])
+        cwd (or (get event "cwd") (:cwd event))]
+    (when slave-id
+      (log/info "Registry sync: registering ling" slave-id "via event")
+      (register-ling! slave-id {:name name :presets presets :cwd cwd}))))
+
+(defn- handle-ling-unregistered
+  "Handle slave-killed event from elisp (registry sync).
+   Event: {:slave-id}
+   Unregisters the ling from lings-registry."
+  [event]
+  (let [slave-id (or (get event "slave-id") (:slave-id event))]
+    (when slave-id
+      (log/info "Registry sync: unregistering ling" slave-id "via event")
+      (unregister-ling! slave-id))))
+
+(defn- subscribe-to-registry-event!
+  "Subscribe to a registry sync event type with handler.
+   Returns the subscription channel."
+  [event-type handler]
+  (let [sub-ch (ch/subscribe! event-type)]
+    (go-loop []
+      (when-let [event (<! sub-ch)]
+        (try
+          (handler event)
+          (catch Exception e
+            (log/error "Registry sync handler error for" event-type ":" (.getMessage e))))
+        (recur)))
+    sub-ch))
+
+(defn start-registry-sync!
+  "Start event-driven synchronization of lings-registry.
+   Subscribes to slave-spawned and slave-killed events
+   from elisp channel to keep Clojure registry in sync.
+
+   CLARITY: Yield safe failure - handles channel not available gracefully."
+  []
+  (if (:running @registry-sync-state)
+    (do
+      (log/warn "Registry sync already running")
+      @registry-sync-state)
+    (try
+      (let [subs [(subscribe-to-registry-event! :slave-spawned handle-ling-registered)
+                  (subscribe-to-registry-event! :slave-killed handle-ling-unregistered)]]
+        (reset! registry-sync-state
+                {:running true
+                 :subscriptions subs})
+        (log/info "Registry sync started - 2 event subscriptions active")
+        @registry-sync-state)
+      (catch Exception e
+        (log/warn "Registry sync failed to start (channel may not be available):" (.getMessage e))
+        @registry-sync-state))))
+
+(defn stop-registry-sync!
+  "Stop event-driven registry synchronization."
+  []
+  (when (:running @registry-sync-state)
+    (doseq [sub (:subscriptions @registry-sync-state)]
+      (async/close! sub))
+    (reset! registry-sync-state {:running false :subscriptions []})
+    (log/info "Registry sync stopped")))
 
 ;; ============================================================
 ;; State Sync: Query slave working status from hivemind events
@@ -129,7 +211,10 @@
 (defn handle-swarm-spawn
   "Spawn a new Claude slave instance.
    Uses timeout to prevent MCP blocking.
-   Registers successful spawns in lings-registry for easy lookup."
+
+   ADR-001 Phase 2: Registration now handled by event-driven sync.
+   The slave-spawned event from elisp triggers register-ling! via
+   channel subscription (see start-registry-sync!)."
   [{:keys [name presets cwd role terminal]}]
   (if (swarm-addon-available?)
     (let [presets-str (when (seq presets)
@@ -150,15 +235,10 @@
          :isError true}
 
         success
-        (do
-          ;; Parse result to extract slave_id and register
-          (try
-            (let [parsed (json/read-str result :key-fn keyword)]
-              (when-let [slave-id (or (:slave_id parsed) (:slave-id parsed))]
-                (register-ling! slave-id {:name name :presets presets :cwd cwd})))
-            (catch Exception e
-              (log/warn "Failed to parse spawn result for registry:" (ex-message e))))
-          {:type "text" :text result})
+        ;; ADR-001 Phase 2: No manual registration here.
+        ;; Registration is handled by event-driven sync when elisp emits
+        ;; slave-spawned event via channel (see start-registry-sync!).
+        {:type "text" :text result}
 
         :else
         {:type "text" :text (str "Error: " error) :isError true}))
@@ -445,21 +525,88 @@
         {:type "text" :text (str "Error: " error) :isError true}))
     {:type "text" :text "hive-mcp-swarm addon not loaded." :isError true}))
 
+;; ============================================================
+;; Elisp Fallback Query for Lings (ADR-001 Phase 1 Fix)
+;; ============================================================
+
+(defn query-elisp-lings
+  "Query elisp for list of lings when Clojure registry is empty.
+   Returns parsed lings data or nil on failure.
+
+   This function exists because:
+   - Lings spawned directly via elisp won't be in Clojure registry
+   - Registration at spawn time may fail (JSON parse error)
+   - Provides fallback to ensure lings are always discoverable
+
+   Complexity target: <10 (CLARITY/SCC)"
+  []
+  (when (swarm-addon-available?)
+    (let [{:keys [success result timed-out]}
+          (ec/eval-elisp-with-timeout
+           "(json-encode (hive-mcp-swarm-list-lings))" 3000)]
+      (when (and success (not timed-out))
+        (try
+          (let [parsed (json/read-str result :key-fn keyword)]
+            (when (sequential? parsed)
+              parsed))
+          (catch Exception e
+            (log/debug "Failed to parse elisp lings:" (ex-message e))
+            nil))))))
+
+(defn format-lings-for-response
+  "Format lings data for MCP response.
+   Accepts either registry map or elisp vector format.
+
+   Complexity target: <10 (CLARITY/SCC)"
+  [lings-data]
+  (cond
+    ;; Registry format: {slave-id {:name, :presets, :cwd, :spawned-at}}
+    (map? lings-data)
+    (into {}
+          (map (fn [[id info]]
+                 [id (assoc info
+                            :age-minutes (quot (- (System/currentTimeMillis)
+                                                  (or (:spawned-at info) 0))
+                                               60000))])
+               lings-data))
+
+    ;; Elisp format: [{:slave-id, :name, :presets, :cwd, :status}]
+    (sequential? lings-data)
+    (into {}
+          (map (fn [ling]
+                 [(or (:slave-id ling) (:slave_id ling))
+                  {:name (:name ling)
+                   :presets (:presets ling)
+                   :cwd (:cwd ling)
+                   :status (:status ling)
+                   :age-minutes nil}])  ;; Unknown age for elisp-sourced
+               lings-data))
+
+    :else {}))
+
 (defn handle-lings-available
   "List all available lings (spawned slaves) with their metadata.
-   Returns lings from registry, no Emacs call needed."
+
+   Strategy (ADR-001 Phase 1):
+   1. First check Clojure registry (fast path)
+   2. If empty, fallback to elisp query (catches direct elisp spawns)
+   3. Return merged/formatted response
+
+   Complexity target: <15 (CLARITY/SCC)"
   [_]
-  (let [lings (get-available-lings)
-        formatted (into {}
-                        (map (fn [[id info]]
-                               [id (assoc info
-                                          :age-minutes (quot (- (System/currentTimeMillis)
-                                                                (:spawned-at info))
-                                                             60000))])
-                             lings))]
+  (let [registry-lings (get-available-lings)
+        ;; ADR-001: Fallback to elisp when registry empty
+        lings-data (if (empty? registry-lings)
+                     (or (query-elisp-lings) {})
+                     registry-lings)
+        formatted (format-lings-for-response lings-data)
+        source (if (empty? registry-lings)
+                 (if (seq lings-data) "elisp-fallback" "empty")
+                 "registry")]
     {:type "text"
-     :text (json/write-str {:count (count lings)
-                            :lings formatted})}))
+     :text (json/write-str {:count (count formatted)
+                            :lings formatted
+                            :source source})}))
 
 (defn handle-swarm-broadcast
   "Broadcast a prompt to all slaves.
