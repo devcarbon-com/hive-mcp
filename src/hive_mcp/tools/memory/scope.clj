@@ -96,3 +96,65 @@
     (= scope "all") nil
     (some? scope) scope
     :else (make-scope-tag project-id)))
+
+;; ============================================================
+;; Hierarchical Scope Support
+;; ============================================================
+
+(defn- extract-project-hierarchy
+  "Extract project hierarchy from a scope tag.
+   'scope:project:funeraria:sisf-sync:sisf-caixa-fe' -> ['funeraria' 'sisf-sync' 'sisf-caixa-fe']"
+  [scope-tag]
+  (when (and scope-tag (str/starts-with? scope-tag "scope:project:"))
+    (-> scope-tag
+        (str/replace #"^scope:project:" "")
+        (str/split #":"))))
+
+(defn- build-ancestor-scopes
+  "Build all ancestor scope tags from a project hierarchy.
+   ['funeraria' 'sisf-sync' 'sisf-caixa-fe'] ->
+   ['scope:project:funeraria'
+    'scope:project:funeraria:sisf-sync'
+    'scope:project:funeraria:sisf-sync:sisf-caixa-fe']"
+  [hierarchy]
+  (when (seq hierarchy)
+    (loop [parts hierarchy
+           acc []
+           path []]
+      (if (empty? parts)
+        acc
+        (let [new-path (conj path (first parts))
+              scope-tag (str "scope:project:" (str/join ":" new-path))]
+          (recur (rest parts) (conj acc scope-tag) new-path))))))
+
+(defn derive-hierarchy-scope-filter
+  "Derive hierarchical scope filter that includes ancestors.
+
+   Returns a set of valid scope tags:
+   - nil if scope is 'all' (no filtering)
+   - set including scope + ancestors + global if hierarchical
+   - single scope set if not hierarchical"
+  [scope]
+  (cond
+    (= scope "all") nil
+    (nil? scope) nil  ;; Let caller handle nil -> auto mode
+    (= scope "global") #{"scope:global"}
+    :else
+    (let [hierarchy (extract-project-hierarchy scope)
+          ancestors (build-ancestor-scopes hierarchy)]
+      (if (seq ancestors)
+        (set (conj ancestors "scope:global"))
+        #{scope "scope:global"}))))
+
+(defn matches-hierarchy-scopes?
+  "Check if entry matches any of the hierarchical scope filters.
+
+   Entry matches if it has:
+   - scope:global tag (always matches)
+   - Any scope tag in the valid-scopes set
+   - An ancestor scope (entries at parent level are visible to children)"
+  [entry valid-scopes]
+  (if (nil? valid-scopes)
+    true  ;; No filter = match all
+    (let [tags (set (or (:tags entry) []))]
+      (some tags valid-scopes))))
