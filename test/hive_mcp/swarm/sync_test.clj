@@ -1,7 +1,7 @@
 (ns hive-mcp.swarm.sync-test
   "Tests for swarm sync module, especially Layer 4 hook integration.
 
-   Layer 4 of 4-layer defense-in-depth:
+   Layer 4 of 4-layer convergence pattern:
    - ARCHITECTURAL GUARANTEE that task completion emits a shout
    - Even if ling forgot to call hivemind_shout, synthetic shout fires
    - Ensures coordinator always sees task completion"

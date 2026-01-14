@@ -59,7 +59,7 @@
 (defn- execute-shout-action!
   "Execute a :shout action returned by a hook handler.
 
-   Layer 4 of 4-layer defense-in-depth: If ling forgot to shout,
+   Layer 4 of 4-layer convergence pattern: If ling forgot to shout,
    this synthetic shout ensures visibility to the coordinator.
 
    Action shape: {:action :shout :event-type keyword :message string :data map}"
@@ -75,7 +75,7 @@
 
    ARCHITECTURAL GUARANTEE: This function ensures a shout is emitted
    on task completion, regardless of whether the ling explicitly called
-   hivemind_shout. Part of 4-layer defense-in-depth.
+   hivemind_shout. Part of 4-layer convergence pattern.
 
    Returns: Vector of hook results"
   [task-id slave-id]

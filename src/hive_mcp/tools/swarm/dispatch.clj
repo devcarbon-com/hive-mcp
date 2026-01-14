@@ -23,7 +23,7 @@
   "Mandatory suffix appended to ALL dispatch prompts.
    Ensures lings always know to report completion status.
 
-   This is Layer 3 of the 4-Layer Defense Pattern:
+   This is Layer 3 of the 4-Layer Convergence Pattern:
    - Layer 1: Preset footer (system prompt)
    - Layer 2: Terminal introspection (detect idle)
    - Layer 3: Dispatch wrapper (THIS - inject reminder)

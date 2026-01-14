@@ -24,7 +24,7 @@
 ;; - auto-started: Task auto-detected as starting (terminal send)
 ;; - auto-completed: Task auto-detected as finished (terminal ready transition)
 ;; - auto-error: Error auto-detected in terminal output (pattern matching)
-;; - idle-timeout: Ling went silent without shouting (Layer 2 defense)
+;; - idle-timeout: Ling went silent without shouting (Layer 2 convergence)
 
 ;;; Code:
 
@@ -158,7 +158,7 @@ ERROR-PREVIEW is a truncated version of the error text (first 200 chars)."
      ("detection-method" . "terminal-pattern-match"))))
 
 (defun hive-mcp-swarm-events-emit-idle-timeout (slave-id idle-duration-secs)
-  "Emit idle-timeout event for SLAVE-ID (Layer 2 defense).
+  "Emit idle-timeout event for SLAVE-ID (Layer 2 convergence).
 This is emitted when a working ling goes silent without shouting.
 Used to detect hung or crashed lings that forgot to report completion.
 
@@ -174,7 +174,7 @@ This event alerts the coordinator that a ling may need attention:
      ("idle-duration-secs" . ,(or idle-duration-secs 0))
      ("detection-method" . "terminal-introspection")
      ("layer" . 2)
-     ("defense-pattern" . "4-layer-defense"))))
+     ("convergence-pattern" . "4-layer-convergence"))))
 
 ;;;; Session Management:
 

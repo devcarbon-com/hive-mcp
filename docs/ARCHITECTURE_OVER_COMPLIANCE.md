@@ -73,9 +73,17 @@ clojure -M:dev:test -n hive-mcp.swarm.datascript-test
 | "Check if work was already done" | Broadcast notifies all lings |
 | "Report when task is complete" | DataScript tracks state |
 
-### The 4-Layer Defense Pattern
+### The 4-Layer Convergence Pattern
 
-For any critical behavior, apply multiple layers. Example: **Guaranteed Completion Detection**
+For any critical behavior, apply multiple layers that **converge** to deterministic outcomes.
+
+**Philosophy:** Multiple probabilistic mechanisms converge to guarantee outcomes.
+- Layer 1 works ~70% → great
+- Layer 2 adds ~20% → now 90%
+- Layer 3 adds ~5% → now 95%
+- Layer 4 guarantees the rest → 100%
+
+Example: **Guaranteed Completion Detection**
 
 | Layer | Mechanism | Reliability | Implementation |
 |-------|-----------|-------------|----------------|
@@ -123,9 +131,9 @@ Adds instruction at dispatch time. Still depends on compliance but increases sur
 ```
 System enforces behavior regardless of ling compliance. **This is the guarantee.**
 
-### Defense in Depth
+### Convergence in Action
 
-The layers compound:
+The layers converge to deterministic outcomes:
 - If Layer 1 works → great, ling shouted
 - If Layer 1 fails, Layer 2 detects → system shouts
 - If Layer 2 misses, Layer 3 retries → ling prompted again
@@ -139,7 +147,7 @@ The layers compound:
 | 3 | Low | ~50/dispatch | +5% |
 | 4 | Medium | 0 | +5% (to 100%) |
 
-Layer 4 is the only one that provides a **guarantee**. Layers 1-3 are optimizations that reduce load on Layer 4
+Layer 4 is the only one that provides a **guarantee**. Layers 1-3 are optimizations that converge probability toward 100%, reducing load on Layer 4.
 
 ### Fail-Safe Defaults
 
@@ -165,9 +173,9 @@ Layer 4 is the only one that provides a **guarantee**. Layers 1-3 are optimizati
 | Layer | Component | Status |
 |-------|-----------|--------|
 | Layer 1 | Preset instructions | ✅ Complete (in presets/*.md) |
-| Layer 2 | Terminal introspection | ⏳ Designed, pending |
-| Layer 3 | Dispatch wrapper injection | ⏳ Designed, pending |
-| Layer 4 | Hook enforcement | ⏳ ADR exists, needs wire in sync.clj |
+| Layer 2 | Terminal introspection | ✅ Complete (hive-mcp-swarm-terminal.el) |
+| Layer 3 | Dispatch wrapper injection | ✅ Complete (dispatch.clj) |
+| Layer 4 | Hook enforcement | ✅ Complete (sync.clj + handlers.clj) |
 
 ### Coordination Features
 | Feature | Status |

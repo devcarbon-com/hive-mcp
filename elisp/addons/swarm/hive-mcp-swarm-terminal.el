@@ -138,7 +138,7 @@ ERROR-TYPE is a category string for the error."
 
 (defcustom hive-mcp-swarm-terminal-idle-timeout 30.0
   "Seconds of inactivity before a working slave is considered idle.
-Used by Layer 2 defense pattern to detect lings that go silent
+Used by Layer 2 convergence pattern to detect lings that go silent
 without shouting progress."
   :type 'float
   :group 'hive-mcp-swarm-terminal)
@@ -586,7 +586,7 @@ Use this to manually clear stale working state."
 
 ;;;; Layer 2: Idle Detection (Terminal Introspection)
 ;;
-;; This implements the 4-Layer Defense Pattern Layer 2:
+;; This implements the 4-Layer Convergence Pattern Layer 2:
 ;; Detect when lings go idle without shouting by monitoring terminal activity.
 ;;
 ;; The logic:
