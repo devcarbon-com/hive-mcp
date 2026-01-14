@@ -4,14 +4,39 @@
    Runs pre-flight conflict checks via coordinator before dispatch.
    Integrates with hive-mcp.swarm.coordinator for task queueing.
 
+   Layer 3: Dispatch wrapper injects shout reminder into ALL prompts,
+   achieving ~85% compliance by appending mandatory instructions.
+
    SOLID: SRP - Single responsibility for dispatch operations.
    CLARITY: I - Inputs validated, conflicts checked before dispatch."
   (:require [hive-mcp.tools.swarm.core :as core]
             [hive-mcp.emacsclient :as ec]
             [hive-mcp.validation :as v]
             [hive-mcp.swarm.coordinator :as coord]
-            [clojure.data.json :as json]
-            [taoensso.timbre :as log]))
+            [clojure.data.json :as json]))
+
+;; ============================================================
+;; Layer 3: Shout Reminder Injection
+;; ============================================================
+
+(def ^:const shout-reminder-suffix
+  "Mandatory suffix appended to ALL dispatch prompts.
+   Ensures lings always know to report completion status.
+
+   This is Layer 3 of the 4-Layer Defense Pattern:
+   - Layer 1: Preset footer (system prompt)
+   - Layer 2: Terminal introspection (detect idle)
+   - Layer 3: Dispatch wrapper (THIS - inject reminder)
+   - Layer 4: Sync hooks (auto-check on MCP calls)"
+  "\n\n---\nREMINDER: When task is complete, call hivemind_shout with event_type 'completed' and include your task summary in the message. This is MANDATORY for hivemind coordination.")
+
+(defn inject-shout-reminder
+  "Append shout reminder to prompt.
+   Preserves original prompt content.
+
+   CLARITY: R - Represented intent via explicit suffix."
+  [prompt]
+  (str prompt shout-reminder-suffix))
 
 ;; ============================================================
 ;; Pre-flight Check Results
@@ -45,12 +70,15 @@
   "Execute actual dispatch after pre-flight approval.
 
    Returns MCP response with task_id on success.
+   Injects Layer 3 shout reminder before dispatch.
 
    CLARITY: Y - Yield safe failure with timeout handling"
   [slave_id prompt timeout_ms effective-files]
-  (let [elisp (format "(json-encode (hive-mcp-swarm-api-dispatch \"%s\" \"%s\" %s))"
+  (let [;; Layer 3: Inject shout reminder into prompt
+        enhanced-prompt (inject-shout-reminder prompt)
+        elisp (format "(json-encode (hive-mcp-swarm-api-dispatch \"%s\" \"%s\" %s))"
                       (v/escape-elisp-string slave_id)
-                      (v/escape-elisp-string prompt)
+                      (v/escape-elisp-string enhanced-prompt)
                       (or timeout_ms "nil"))
         ;; Dispatch should be quick - 5s default timeout
         {:keys [success result error timed-out]} (ec/eval-elisp-with-timeout elisp 5000)]
