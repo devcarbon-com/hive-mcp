@@ -87,6 +87,14 @@
 (declare-function hive-mcp-swarm-terminal-start-completion-watcher "hive-mcp-swarm-terminal")
 (declare-function hive-mcp-swarm-terminal-stop-completion-watcher "hive-mcp-swarm-terminal")
 
+;; Forward declarations for Layer 2: Idle detection
+(declare-function hive-mcp-swarm-terminal-start-idle-watcher "hive-mcp-swarm-terminal")
+(declare-function hive-mcp-swarm-terminal-stop-idle-watcher "hive-mcp-swarm-terminal")
+(declare-function hive-mcp-swarm-terminal-reset-idle-state "hive-mcp-swarm-terminal")
+(declare-function hive-mcp-swarm-terminal--record-activity "hive-mcp-swarm-terminal")
+(declare-function hive-mcp-swarm-terminal--record-shout "hive-mcp-swarm-terminal")
+(declare-function hive-mcp-swarm-terminal--clear-slave-timestamps "hive-mcp-swarm-terminal")
+
 ;; Soft dependency on channel for push events
 (declare-function hive-mcp-channel-connected-p "hive-mcp-channel")
 (declare-function hive-mcp-channel-send "hive-mcp-channel")
@@ -305,11 +313,17 @@ This alerts the human even when running master Claude in a terminal."
 (defun hive-mcp-swarm--sync-state-from-hivemind (event-data)
   "Sync swarm slave state from hivemind EVENT-DATA.
 Called via hooks when hivemind receives shout events.
-Maps agent-id to slave-id and updates status accordingly."
+Maps agent-id to slave-id and updates status accordingly.
+
+Also records shout timestamp for Layer 2 idle detection."
   (let* ((agent-id (plist-get event-data :agent-id))
          (event-type (plist-get event-data :event-type))
          (slave (gethash agent-id hive-mcp-swarm--slaves)))
     (when slave
+      ;; Layer 2: Record shout for idle detection
+      ;; This proves the ling is communicating (not dead/hung)
+      (when (fboundp 'hive-mcp-swarm-terminal--record-shout)
+        (hive-mcp-swarm-terminal--record-shout agent-id))
       (let ((old-status (plist-get slave :status)))
         (pcase event-type
           ;; Started -> working
@@ -413,19 +427,30 @@ the completion watcher tick function directly."
                  slave-id (or duration-secs 0))))))
 
 (defun hive-mcp-swarm-start-completion-watcher ()
-  "Start the auto-shout completion watcher timer."
+  "Start the auto-shout completion watcher timer.
+Also starts Layer 2 idle detection watcher."
   (interactive)
   (when (fboundp 'hive-mcp-swarm-terminal-start-completion-watcher)
     (hive-mcp-swarm-terminal-start-completion-watcher
-     #'hive-mcp-swarm--on-task-completion)
-    (message "[swarm] Completion watcher started (auto-shout enabled)")))
+     #'hive-mcp-swarm--on-task-completion))
+  ;; Layer 2: Start idle detection watcher
+  (when (fboundp 'hive-mcp-swarm-terminal-start-idle-watcher)
+    (hive-mcp-swarm-terminal-start-idle-watcher))
+  (message "[swarm] Completion + idle watchers started (auto-shout + Layer 2)"))
 
 (defun hive-mcp-swarm-stop-completion-watcher ()
-  "Stop the auto-shout completion watcher timer."
+  "Stop the auto-shout completion watcher timer.
+Also stops Layer 2 idle detection watcher."
   (interactive)
   (when (fboundp 'hive-mcp-swarm-terminal-stop-completion-watcher)
-    (hive-mcp-swarm-terminal-stop-completion-watcher)
-    (message "[swarm] Completion watcher stopped")))
+    (hive-mcp-swarm-terminal-stop-completion-watcher))
+  ;; Layer 2: Stop idle detection watcher
+  (when (fboundp 'hive-mcp-swarm-terminal-stop-idle-watcher)
+    (hive-mcp-swarm-terminal-stop-idle-watcher))
+  ;; Reset idle state
+  (when (fboundp 'hive-mcp-swarm-terminal-reset-idle-state)
+    (hive-mcp-swarm-terminal-reset-idle-state))
+  (message "[swarm] Completion + idle watchers stopped"))
 
 ;;;; Human Mode - Prompt Hooks:
 ;; Delegated to hive-mcp-swarm-prompts module.
