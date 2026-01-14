@@ -489,3 +489,22 @@
    :collection (:collection-name @config)
    :host (:host @config)
    :port (:port @config)})
+
+(defn chroma-available?
+  "Check if Chroma is configured AND reachable.
+   Returns true only if:
+   1. Embedding provider is configured
+   2. Chroma server responds to health check
+
+   Used for capability-based tool switching (e.g., mem-kanban vs org-kanban fallback).
+
+   CLARITY: Yield safe failure - returns false on any error, never throws."
+  []
+  (when (embedding-configured?)
+    (try
+      ;; Try to get/create collection as health check
+      (get-or-create-collection)
+      true
+      (catch Exception e
+        (log/debug "Chroma availability check failed:" (.getMessage e))
+        false))))

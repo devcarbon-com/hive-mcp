@@ -162,6 +162,23 @@
      :inputSchema inputSchema
      :handler wrapped-handler}))
 
+(defn build-server-spec
+  "Build MCP server spec with capability-based tool filtering.
+
+   MUST be called AFTER init-embedding-provider! to get accurate Chroma status.
+
+   Uses tools/get-filtered-tools for dynamic kanban tool switching:
+   - Chroma available → mcp_mem_kanban_* tools
+   - Chroma unavailable → org_kanban_native_* tools (fallback)"
+  []
+  (let [filtered-tools (tools/get-filtered-tools)]
+    (log/info "Building server spec with" (count filtered-tools) "tools (capability-filtered)")
+    {:name "hive-mcp"
+     :version "0.1.0"
+     :tools (mapv make-tool (concat filtered-tools docs/docs-tools))}))
+
+;; DEPRECATED: Static spec kept for backward compatibility with tests
+;; Prefer build-server-spec for capability-aware tool list
 (def emacs-server-spec
   {:name "hive-mcp"
    :version "0.1.0"
@@ -175,17 +192,21 @@
 
 (defn refresh-tools!
   "Hot-reload all tools in the running server.
-   CLARITY: Open for extension - allows runtime tool updates without restart."
+   CLARITY: Open for extension - allows runtime tool updates without restart.
+
+   Uses capability-based filtering - re-checks Chroma availability
+   to dynamically switch between mem-kanban and org-kanban-native tools."
   []
   (when-let [context @server-context-atom]
     (let [tools-atom (:tools context)
-          new-tools (mapv make-tool (concat tools/tools docs/docs-tools))]
+          filtered-tools (tools/get-filtered-tools)
+          new-tools (mapv make-tool (concat filtered-tools docs/docs-tools))]
       ;; Clear and re-register all tools
       (reset! tools-atom {})
       (doseq [tool new-tools]
         (swap! tools-atom assoc (:name tool) {:tool (dissoc tool :handler)
                                               :handler (:handler tool)}))
-      (log/info "Hot-reloaded" (count new-tools) "tools")
+      (log/info "Hot-reloaded" (count new-tools) "tools (capability-filtered)")
       (count new-tools))))
 
 (defn debug-tool-handler
@@ -361,6 +382,9 @@
     (let [registry (hooks/create-registry)]
       (reset! hooks-registry-atom registry)
       (log/info "Global hooks registry created")
+      ;; Inject registry into sync module for Layer 4 hook wiring
+      ;; This enables architectural guarantee of synthetic shouts on task completion
+      (sync/set-hooks-registry! registry)
       ;; Register crystal hooks (includes auto-wrap on session-end)
       (crystal-hooks/register-hooks! registry)
       ;; Register JVM shutdown hook to trigger session-end
@@ -383,8 +407,10 @@
     ;; Initialize embedding provider for semantic search (fails gracefully)
     (init-embedding-provider!)
     ;; Register tools for agent delegation (allows local models to use MCP tools)
-    (agent/register-tools! tools/tools)
-    (log/info "Registered" (count tools/tools) "tools for agent delegation")
+    ;; Uses filtered tools based on Chroma availability
+    (let [filtered-tools (tools/get-filtered-tools)]
+      (agent/register-tools! filtered-tools)
+      (log/info "Registered" (count filtered-tools) "tools for agent delegation (capability-filtered)"))
     ;; Start WebSocket channel with auto-healing (primary - Aleph/Netty based)
     ;; This is the reliable push channel for hivemind events
     (start-ws-channel-with-healing!)
@@ -411,7 +437,9 @@
         (log/warn "Lings registry sync failed to start (non-fatal):" (.getMessage e))))
     ;; Start MCP server - create context ourselves to enable hot-reload
     ;; CLARITY: Telemetry first - expose state for debugging
-    (let [spec (assoc emacs-server-spec :server-id server-id)
+    ;; NOTE: build-server-spec must be called AFTER init-embedding-provider!
+    ;; to get accurate Chroma availability for capability-based tool switching
+    (let [spec (assoc (build-server-spec) :server-id server-id)
           log-ch (async/chan (async/sliding-buffer 20))
           server (io-server/stdio-server {:log-ch log-ch})
           ;; Create context and store for hot-reload capability
