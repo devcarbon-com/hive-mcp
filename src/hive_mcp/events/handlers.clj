@@ -8,6 +8,7 @@
    - handlers.kanban  - Kanban state (:kanban/done, :kanban/sync)
    - handlers.crystal - Wrap/crystallize (:crystal/wrap-request, :crystal/wrap-notify)
    - handlers.wave    - Drone waves (:wave/start, :wave/item-done, :wave/complete)
+   - handlers.validated-wave - Validated waves (:validated-wave/start, :validated-wave/success, etc.)
    - handlers.drone   - Drone lifecycle (:drone/started, :drone/completed, :drone/failed)
    - handlers.claim   - File claims (:claim/file-released, :claim/notify-waiting)
 
@@ -33,6 +34,11 @@
    - :wave/start            - Wave execution started
    - :wave/item-done        - Wave item completed/failed
    - :wave/complete         - Wave execution finished
+   - :validated-wave/start  - Validated wave started
+   - :validated-wave/iteration-start - Validation iteration started
+   - :validated-wave/success - Validated wave completed successfully
+   - :validated-wave/partial - Max retries reached, partial success
+   - :validated-wave/retry  - Validation failed, retrying
    - :drone/started         - Drone spawned and began task (CLARITY-T)
    - :drone/completed       - Drone finished successfully (CLARITY-T)
    - :drone/failed          - Drone execution failed (CLARITY-T)
@@ -48,6 +54,7 @@
             [hive-mcp.events.handlers.kanban :as kanban]
             [hive-mcp.events.handlers.crystal :as crystal]
             [hive-mcp.events.handlers.wave :as wave]
+            [hive-mcp.events.handlers.validated-wave :as validated-wave]
             [hive-mcp.events.handlers.drone :as drone]
             [hive-mcp.events.handlers.claim :as claim]
             [hive-mcp.events.handlers.system :as system]))
@@ -73,6 +80,7 @@
    - kanban/register-handlers!  - Kanban state
    - crystal/register-handlers! - Wrap/crystallize
    - wave/register-handlers!    - Drone waves
+   - validated-wave/register-handlers! - Validated waves
    - drone/register-handlers!   - Drone lifecycle (CLARITY-T)
    - claim/register-handlers!   - File claims
    - system/register-handlers!  - System telemetry (Phase 1)
@@ -87,12 +95,13 @@
     (kanban/register-handlers!)
     (crystal/register-handlers!)
     (wave/register-handlers!)
+    (validated-wave/register-handlers!)
     (drone/register-handlers!)
     (claim/register-handlers!)
     (system/register-handlers!)
 
     (reset! *registered true)
-    (println "[hive-events] Handlers registered: :task/complete :task/shout-complete :git/commit-modified :ling/started :ling/completed :ling/ready-for-wrap :session/end :session/wrap :kanban/sync :kanban/done :crystal/wrap-request :crystal/wrap-notify :wave/start :wave/item-done :wave/complete :drone/started :drone/completed :drone/failed :claim/file-released :claim/notify-waiting :system/error")
+    (println "[hive-events] Handlers registered: :task/complete :task/shout-complete :git/commit-modified :ling/started :ling/completed :ling/ready-for-wrap :session/end :session/wrap :kanban/sync :kanban/done :crystal/wrap-request :crystal/wrap-notify :wave/start :wave/item-done :wave/complete :validated-wave/start :validated-wave/iteration-start :validated-wave/success :validated-wave/partial :validated-wave/retry :drone/started :drone/completed :drone/failed :claim/file-released :claim/notify-waiting :system/error")
     true))
 
 (defn reset-registration!
