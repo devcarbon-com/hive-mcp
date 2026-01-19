@@ -2,6 +2,16 @@
 
 Session wrap-up that stores context to project memory with appropriate duration categories.
 
+## IMPORTANT: Directory Scoping
+
+**All MCP tools that accept a `directory` parameter MUST receive your current working directory** to ensure operations target YOUR project, not the MCP server's directory.
+
+Get your working directory from:
+- Your prompt path (e.g., `~/PP/funeraria/sisf-web$`)
+- Run `pwd` in bash
+
+Pass it to: `mcp_memory_add`, `mcp_mem_kanban_*`, `magit_*` tools.
+
 ## Instructions
 
 ### 1. Document Progress to Memory
@@ -14,6 +24,7 @@ mcp__emacs-mcp__mcp_memory_add
   type: "note"
   content: "Session YYYY-MM-DD: [accomplishments summary]"
   tags: ["session-log", "progress"]
+  directory: "/path/to/your/project"
 ```
 
 **b) Important decisions (long-term/permanent memory):**
@@ -23,6 +34,7 @@ mcp__emacs-mcp__mcp_memory_add
   type: "decision"
   content: "Decision: [what was decided and why]"
   tags: ["architecture", "decision"]
+  directory: "/path/to/your/project"
 ```
 Then promote to longer duration if significant:
 ```
@@ -36,6 +48,7 @@ mcp__emacs-mcp__mcp_memory_add
   type: "convention"
   content: "[convention description]"
   tags: ["code-style", "pattern"]
+  directory: "/path/to/your/project"
 ```
 
 **d) Useful code snippets (long-term memory):**
@@ -44,14 +57,18 @@ mcp__emacs-mcp__mcp_memory_add
   type: "snippet"
   content: "[code snippet with context]"
   tags: ["reusable", "category"]
+  directory: "/path/to/your/project"
 ```
 
 ### 2. Sync with Kanbans
 
 **a) Sync In-Memory Kanban first:**
+
+IMPORTANT: Pass `directory` to kanban tools to ensure correct project scoping.
+
 ```
-mcp__emacs-mcp__mcp_mem_kanban_stats
-mcp__emacs-mcp__mcp_mem_kanban_list status:"doing"
+mcp__emacs-mcp__mcp_mem_kanban_stats directory:"/path/to/your/project"
+mcp__emacs-mcp__mcp_mem_kanban_list status:"doing" directory:"/path/to/your/project"
 ```
 
 For each DOING task, ask user:
@@ -120,16 +137,20 @@ mcp__emacs-mcp__mcp_memory_add
     - Recommended starting point
     - Priority tasks
   tags: ["session-summary", "wrap"]
+  directory: "/path/to/your/project"
 ```
 
 ### 5. Git Status Check
 
-**Use magit MCP tools:**
+**Use magit MCP tools with your working directory:**
+
+IMPORTANT: Always pass `directory` parameter to ensure git operations target YOUR project, not the MCP server's directory. Use your current working directory (from your prompt path or run `pwd`).
+
 ```
-mcp__emacs-mcp__magit_status           # Full repo status
-mcp__emacs-mcp__magit_branches         # All branches
-mcp__emacs-mcp__magit_log              # Recent commits (default: 10)
-mcp__emacs-mcp__magit_feature_branches # Feature/fix/feat branches
+mcp__emacs-mcp__magit_status directory:"/path/to/your/project"
+mcp__emacs-mcp__magit_branches directory:"/path/to/your/project"
+mcp__emacs-mcp__magit_log directory:"/path/to/your/project"
+mcp__emacs-mcp__magit_feature_branches directory:"/path/to/your/project"
 ```
 
 If there are unmerged branches, ask:
