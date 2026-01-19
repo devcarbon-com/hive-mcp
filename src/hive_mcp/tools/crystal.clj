@@ -16,7 +16,6 @@
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
-
 (defn- hive-mcp-el-available?
   "Check if hive-mcp.el is loaded in Emacs."
   []
@@ -25,19 +24,23 @@
 
 (defn handle-wrap-gather
   "Gather session data for wrap workflow without storing.
-   
+
    Uses progressive crystallization to harvest:
    - Session progress notes (from kanban completions)
    - Completed tasks (ephemeral notes tagged session-progress)
    - Git commits since session start
    - Recall patterns (for smart promotion)
-   
+
+   Params:
+   - directory: Working directory for git operations. Pass caller's cwd to ensure
+     git status/commits come from the correct project, not the MCP server's directory.
+
    Returns gathered data for confirmation before crystallization."
-  [_params]
-  (log/info "wrap-gather with crystal harvesting")
+  [{:keys [directory] :as _params}]
+  (log/info "wrap-gather with crystal harvesting" (when directory (str "directory:" directory)))
   (try
     ;; Use crystal hooks for comprehensive harvesting
-    (let [harvested (crystal-hooks/harvest-all)
+    (let [harvested (crystal-hooks/harvest-all {:directory directory})
           ;; Also get elisp-side data for completeness
           elisp-result (when (hive-mcp-el-available?)
                          (let [{:keys [success result]}
@@ -147,7 +150,8 @@
   [{:name "wrap_gather"
     :description "Gather session data for wrap workflow. Returns recent notes, git commits, kanban activity without storing. Use before wrap to preview/confirm data."
     :inputSchema {:type "object"
-                  :properties {}
+                  :properties {:directory {:type "string"
+                                           :description "Working directory for git operations. Pass your cwd to ensure git context comes from your project, not the MCP server's directory."}}
                   :required []}
     :handler handle-wrap-gather}
 
