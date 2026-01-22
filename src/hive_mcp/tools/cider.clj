@@ -62,7 +62,7 @@
             (:name s)))
         sessions))
 
-(defn- eval-in-session-internal
+(defn- _eval-in-session-internal
   "Internal call to evaluate code in a specific session. Returns {:success :result/:error}."
   [session-name code]
   (let [elisp (el/require-and-call-text 'hive-mcp-cider 'hive-mcp-cider-eval-in-session
