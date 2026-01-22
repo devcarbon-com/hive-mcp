@@ -1,7 +1,7 @@
 (ns hive-mcp.algorithms.graph.impl
   "Graph algorithm implementations using adjacency list representation."
-  (:require [hive-mcp.algorithms.graph.domain :as domain :refer [IGraph Node Edge make-node make-edge node-id]]
-            [clojure.lang.PersistentQueue :as pq]))
+  (:require [hive-mcp.algorithms.graph.domain :as domain])
+  (:import [clojure.lang PersistentQueue]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Adjacency List Graph Implementation
@@ -99,7 +99,7 @@
 
 (defn graph-from-edges
   "Create a graph from a collection of edges.
-  
+
   Edges should be a collection of maps with :from, :to, :weight keys.
   Nodes will be created automatically with empty data."
   [edges]
@@ -107,13 +107,13 @@
         ;; Collect all unique node ids
         node-ids (into #{} (concat (map :from edges) (map :to edges)))
         ;; Add all nodes
-        graph-with-nodes (reduce (fn [g node-id]
-                                   (domain/add-node g (domain/->Node node-id {})))
+        graph-with-nodes (reduce (fn [g nid]
+                                   (domain/add-node g nid (domain/->Node nid {})))
                                  graph
                                  node-ids)
         ;; Add all edges
         graph-with-edges (reduce (fn [g {:keys [from to weight]}]
-                                   (domain/add-edge g (domain/->Edge from to weight)))
+                                   (domain/add-edge g from to (or weight 1)))
                                  graph-with-nodes
                                  edges)]
     graph-with-edges))
@@ -126,7 +126,7 @@
   "Breadth-first traversal from start node. Returns vector of node-ids in visit order."
   [graph start-id]
   (let [visited (atom #{})
-        queue (atom (pq/empty))
+        queue (atom PersistentQueue/EMPTY)
         result (atom [])]
 
     (when (contains? (:nodes graph) start-id)
