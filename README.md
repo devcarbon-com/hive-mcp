@@ -39,10 +39,19 @@ export HIVE_MCP_DIR="$HOME/hive-mcp"
 export BB_MCP_DIR="$HOME/bb-mcp"
 ```
 
-### 2. Clone & Install
+### 2. Install
+
+**Option A: Automated (Recommended)**
 
 ```bash
-git clone --recursive https://github.com/hive-agi/hive-mcp.git "$HIVE_MCP_DIR"
+go install github.com/hive-agi/hive-mcp-cli/cmd/hive@latest
+hive setup
+```
+
+**Option B: Manual**
+
+```bash
+git clone https://github.com/hive-agi/hive-mcp.git "$HIVE_MCP_DIR"
 git clone https://github.com/hive-agi/bb-mcp.git "$BB_MCP_DIR"
 ```
 
