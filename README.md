@@ -95,6 +95,7 @@ No more re-explaining your codebase. No more lost context.
 | **Claude Code CLI** | Latest | [claude.ai/download](https://claude.ai/download) |
 | **Java** | 17+ | `sudo apt install openjdk-17-jdk` |
 | **Clojure CLI** | 1.11+ | [clojure.org/guides/install_clojure](https://clojure.org/guides/install_clojure) |
+| **Babashka** | 1.3+ | [babashka.org](https://babashka.org) or `brew install borkdude/brew/babashka` |
 
 **Optional (for semantic search):**
 - [Ollama](https://ollama.ai) - local embeddings
@@ -108,51 +109,204 @@ Choose your setup:
 
 ### Option A: Lightweight via bb-mcp (Recommended)
 
-**[bb-mcp](https://github.com/BuddhiLW/bb-mcp)** is a Babashka wrapper that uses ~50MB RAM vs ~500MB for direct JVM. Multiple Claude instances share one Emacs connection.
+**[bb-mcp](https://github.com/hive-agi/bb-mcp)** is a Babashka wrapper that uses ~50MB RAM vs ~500MB for direct JVM. Multiple Claude instances share one Emacs connection.
 
 ```bash
-# Install bb-mcp (includes hive-mcp as dependency)
-git clone https://github.com/BuddhiLW/bb-mcp.git
-cd bb-mcp
+# 1. Clone both repositories
+git clone --recursive https://github.com/hive-agi/hive-mcp.git
+git clone https://github.com/hive-agi/bb-mcp.git
 
-# Follow bb-mcp setup instructions
-# It will connect to hive-mcp running on port 7910
+# 2. Set environment variable (add to ~/.bashrc)
+export BB_MCP_DIR="$HOME/path/to/bb-mcp"
+
+# 3. Register with Claude Code CLI
+claude mcp add emacs --scope user -- \
+  /path/to/hive-mcp/start-bb-mcp.sh
+
+# 4. Verify registration
+claude mcp list
+# Should show: emacs (172 tools)
 ```
 
-See [bb-mcp README](https://github.com/BuddhiLW/bb-mcp) for complete setup.
+The `start-bb-mcp.sh` script:
+- Auto-starts hive-mcp server if not running
+- Runs pre-flight compilation checks
+- Connects bb-mcp to hive-mcp on port 7910
+
+See [bb-mcp README](https://github.com/hive-agi/bb-mcp) for more details.
 
 ### Option B: Direct Clojure (Full Control)
 
 #### Step 1: Clone & Install Dependencies
 
 ```bash
-git clone https://github.com/BuddhiLW/hive-mcp.git
+# Clone with submodules (required for mcp-clojure-sdk)
+git clone --recursive https://github.com/hive-agi/hive-mcp.git
 cd hive-mcp
-clojure -P  # Download all dependencies (may take a minute)
+
+# If you already cloned without --recursive:
+git submodule update --init --recursive
+
+# Download Clojure dependencies
+clojure -P  # May take a minute on first run
 ```
 
 #### Step 2: Configure Emacs
 
-Add to your Emacs config (`~/.emacs.d/init.el` or Doom: `~/.doom.d/config.el`):
+Choose your Emacs distribution:
+
+<details>
+<summary><b>Vanilla Emacs / use-package</b></summary>
+
+Add to `~/.emacs.d/init.el`:
 
 ```elisp
-;; Add emacs-mcp to load path
+;; Add hive-mcp to load path
 (add-to-list 'load-path "/path/to/hive-mcp/elisp")
 (add-to-list 'load-path "/path/to/hive-mcp/elisp/addons")
 
 ;; Load core
-(require 'emacs-mcp)
-(emacs-mcp-mode 1)
+(require 'hive-mcp)
+(hive-mcp-mode 1)
 
 ;; Load addons you want (all optional)
-(require 'emacs-mcp-magit nil t)      ;; Git integration
-(require 'emacs-mcp-projectile nil t) ;; Project navigation
-(require 'emacs-mcp-cider nil t)      ;; Clojure REPL
-(require 'emacs-mcp-swarm nil t)      ;; Multi-agent support
+(require 'hive-mcp-magit nil t)      ;; Git integration
+(require 'hive-mcp-projectile nil t) ;; Project navigation
+(require 'hive-mcp-cider nil t)      ;; Clojure REPL
+(require 'hive-mcp-swarm nil t)      ;; Multi-agent support
 
 ;; REQUIRED: Start Emacs server for emacsclient
 (server-start)
 ```
+
+</details>
+
+<details>
+<summary><b>Doom Emacs (Full Configuration)</b></summary>
+
+**Step 2a: Add to `~/.doom.d/packages.el`:**
+
+```elisp
+(package! claude-code-ide
+  :recipe (:host github :repo "BuddhiLW/claude-code-ide.el"
+           :branch "fix/empty-allowedtools-flag"))
+
+(package! web-server)  ; Required for claude-code-ide MCP server
+```
+
+**Step 2b: Add to `~/.doom.d/config.el`:**
+
+```elisp
+(use-package! web-server)
+
+;; Load from local path (adjust DOTFILES or use absolute path)
+(defvar hive-mcp-root (expand-file-name "gitthings/hive-mcp" (getenv "DOTFILES"))
+  "Root directory of hive-mcp installation.")
+
+;; Alternative: use absolute path
+;; (defvar hive-mcp-root "/path/to/hive-mcp")
+
+(add-to-list 'load-path (concat hive-mcp-root "/elisp"))
+(add-to-list 'load-path (concat hive-mcp-root "/elisp/addons"))
+
+;; Pre-configure before loading
+;; Don't start separate nREPL - MCP server now embeds it
+(setq hive-mcp-cider-auto-start-nrepl nil)
+(setq hive-mcp-cider-auto-connect t)  ; Connect to MCP server's embedded nREPL
+(setq hive-mcp-cider-nrepl-port 7910)  ; Must match deps.edn :nrepl alias
+(setq hive-mcp-cider-project-dir hive-mcp-root)
+(setq hive-mcp-addon-always-load '(cider org-kanban swarm projectile magit chroma docs))
+
+;; Org-kanban configuration
+(setq hive-mcp-kanban-org-file (concat hive-mcp-root "/kanban.org"))
+;; Generate a UUID for your project: (org-id-uuid)
+(setq hive-mcp-kanban-default-project "YOUR-PROJECT-UUID-HERE")
+
+;; Claude-code-ide configuration (for swarm sessions)
+(setq claude-code-ide-enable-mcp-server t)
+(setq claude-code-ide-mcp-allowed-tools nil)  ; nil = all tools allowed
+
+;; Swarm orchestration configuration
+(setq hive-mcp-swarm-presets-dir (concat hive-mcp-root "/presets"))
+(setq hive-mcp-swarm-terminal 'claude-code-ide)  ; Full MCP WebSocket integration
+(setq hive-mcp-swarm-max-slaves 30)    ; max concurrent lings
+(setq hive-mcp-swarm-max-depth 3)      ; recursion limit
+(setq hive-mcp-swarm-prompt-mode 'human) ; human-in-the-loop for permission prompts
+
+;; Chroma vector database for semantic memory search
+(setq hive-mcp-chroma-auto-start t)        ; Auto-start Chroma container on init
+(setq hive-mcp-chroma-host "localhost")
+(setq hive-mcp-chroma-port 8000)
+(setq hive-mcp-chroma-embedding-provider 'ollama)
+(setq hive-mcp-chroma-ollama-model "nomic-embed-text")
+
+;; Disable old Unix socket channel (using WebSocket instead)
+(setq hive-mcp-channel-auto-connect nil)
+
+;; Load hive-mcp
+(require 'hive-mcp)
+(hive-mcp-mode 1)
+
+;; Load addons explicitly
+(require 'hive-mcp-addons)
+(require 'hive-mcp-transient)
+(require 'hive-mcp-cider nil t)
+
+;; Defer org-kanban until evil is loaded (uses evil-define-key)
+(after! evil
+  (require 'hive-mcp-org-kanban nil t))
+
+(require 'hive-mcp-swarm nil t)
+(setq hive-mcp-swarm-prompt-mode 'human)  ; human-in-the-loop
+
+(require 'hive-mcp-projectile nil t)
+(require 'hive-mcp-magit nil t)
+(require 'hive-mcp-chroma nil t)
+(require 'hive-mcp-docs nil t)
+
+;; WebSocket channel for push-based hivemind events
+(require 'hive-mcp-channel-ws nil t)
+(setq hive-mcp-channel-ws-url "ws://localhost:9999")  ; Must match Clojure server port
+(setq hive-mcp-channel-ws-auto-connect t)
+(setq hive-mcp-channel-ws-startup-delay 5.0)  ; Wait for MCP server
+
+;; Register handlers for hivemind push events
+(with-eval-after-load 'hive-mcp-channel-ws
+  (hive-mcp-channel-ws-on "hivemind-progress"
+    (lambda (msg)
+      (message "[Hivemind] %s: %s"
+               (cdr (assoc 'agent-id msg))
+               (cdr (assoc 'message (cdr (assoc 'data msg)))))))
+  (hive-mcp-channel-ws-on "hivemind-completed"
+    (lambda (msg)
+      (message "[Hivemind] %s completed: %s"
+               (cdr (assoc 'agent-id msg))
+               (cdr (assoc 'message (cdr (assoc 'data msg))))))))
+
+;; Auto-load addons when their packages are detected
+(hive-mcp-addons-auto-load)
+
+;; Keybindings (SPC b m for "buddhi/mcp")
+(map! :leader
+      (:prefix-map ("b" . "buddhi")
+       (:prefix ("m" . "mcp")
+        :desc "MCP menu" "m" #'hive-mcp-transient-main
+        :desc "CIDER menu" "c" #'hive-mcp-cider-transient
+        :desc "Kanban menu" "k" #'hive-mcp-kanban-transient
+        :desc "Swarm menu" "s" #'hive-mcp-swarm-transient
+        :desc "Projectile menu" "p" #'hive-mcp-projectile-transient
+        :desc "Magit/Git menu" "g" #'hive-mcp-magit-transient
+        :desc "Chroma/Vector menu" "v" #'hive-mcp-chroma-transient
+        :desc "Docs menu" "d" #'hive-mcp-docs-transient)))
+```
+
+**Step 2c: Run Doom sync:**
+
+```bash
+doom sync
+```
+
+</details>
 
 #### Step 3: Start Emacs Daemon
 
@@ -168,24 +322,34 @@ emacsclient -e '(emacs-version)'
 #### Step 4: Register with Claude Code
 
 ```bash
-# Automatic registration
-claude mcp add hive-mcp --scope user -- \
-  clojure -X:mcp :project-dir '"/path/to/your/project"'
+# Register using the start script (recommended)
+# Replace /path/to/hive-mcp with your actual path
+claude mcp add emacs --scope user -- \
+  /path/to/hive-mcp/start-bb-mcp.sh
 
 # Verify registration
 claude mcp list
-# Should show: hive-mcp
+# Should show: emacs (172 tools)
+
+# To remove/re-register:
+claude mcp remove emacs --scope user
 ```
 
-**Or manually** add to `~/.claude.json`:
+**Alternative: Direct Clojure (no Babashka)**
+
+```bash
+claude mcp add emacs --scope user -- \
+  /path/to/hive-mcp/start-mcp.sh
+```
+
+**Or manually** add to `~/.claude/settings.json`:
 
 ```json
 {
   "mcpServers": {
-    "hive-mcp": {
-      "command": "clojure",
-      "args": ["-X:mcp"],
-      "cwd": "/path/to/hive-mcp"
+    "emacs": {
+      "command": "/path/to/hive-mcp/start-bb-mcp.sh",
+      "args": []
     }
   }
 }
@@ -442,8 +606,8 @@ LLMs need exactly what Lisp provides: homoiconicity, runtime metaprogramming, da
 
 ## Related Projects
 
-- **[bb-mcp](https://github.com/BuddhiLW/bb-mcp)** - Lightweight Babashka MCP wrapper (~50MB vs ~500MB)
-- **[clojure-mcp](https://github.com/BuddhiLW/clojure-mcp)** - Standalone Clojure MCP tools
+- **[bb-mcp](https://github.com/hive-agi/bb-mcp)** - Lightweight Babashka MCP wrapper (~50MB vs ~500MB)
+- **[clojure-mcp](https://github.com/hive-agi/clojure-mcp)** - Standalone Clojure MCP tools
 
 ---
 
