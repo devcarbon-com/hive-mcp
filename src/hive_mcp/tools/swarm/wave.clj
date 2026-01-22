@@ -14,7 +14,6 @@
    CLARITY: A - Architectural performance via bounded concurrency"
   (:require [hive-mcp.swarm.datascript :as ds]
             [hive-mcp.swarm.logic :as logic]
-            [hive-mcp.swarm.coordinator :as coordinator]
             [hive-mcp.events.core :as ev]
             [hive-mcp.agent :as agent]
             [hive-mcp.telemetry.prometheus :as prom]
