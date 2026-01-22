@@ -41,20 +41,20 @@ export BB_MCP_DIR="$HOME/bb-mcp"
 
 ### 2. Install
 
-**Option A: Automated (Recommended)**
+**Option A: Automated with [hive-mcp-cli](https://github.com/hive-agi/hive-mcp-cli) (Recommended)**
 
 ```bash
-# Install CLI
+# Install CLI (requires Go 1.21+)
 go install github.com/hive-agi/hive-mcp-cli/cmd/hive@latest
 
-# Run setup (clones repos, installs deps, configures environment)
+# Run setup (clones repos, installs deps, configures everything)
 hive setup
 
 # Verify installation
 hive doctor
 ```
 
-The CLI handles: cloning repos, shell config, Clojure deps, Emacs setup, Docker/Chroma, and MCP registration.
+The CLI automates: cloning repos, shell config, Clojure deps, Emacs setup, Docker/Chroma, and MCP registration. See [hive-mcp-cli](https://github.com/hive-agi/hive-mcp-cli) for details.
 
 **Option B: Manual**
 
