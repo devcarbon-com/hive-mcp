@@ -42,7 +42,7 @@ export BB_MCP_DIR="$HOME/bb-mcp"
 ### 2. Install
 
 **Option A: Automated with [hive-mcp-cli](https://github.com/hive-agi/hive-mcp-cli) (Recommended)**
-
+First, be sure you have setup the environment variables above, and be sure that you have the go executable install directory on your path. 
 ```bash
 # 1. Install CLI and MCP server (requires Go 1.21+)
 go install github.com/hive-agi/hive-mcp-cli/cmd/hive@latest
