@@ -21,6 +21,7 @@
             [hive-mcp.agora.dialogue :as dialogue]
             [hive-mcp.agora.consensus :as consensus]
             [hive-mcp.channel.websocket :as ws]
+            [hive-mcp.events.core :as ev]
             [clojure.data.json :as json]
             [clojure.string :as str]
             [taoensso.timbre :as log]))
@@ -61,7 +62,7 @@
 ;; =============================================================================
 
 (def ^:const default-model "mistralai/devstral-2512:free")
-(def ^:const debate-preset "debate-drone")
+(def ^:const debate-preset "drone-worker")
 (def ^:const max-turns 20)
 
 ;; =============================================================================
@@ -77,15 +78,14 @@
 
   (send-prompt! [_ prompt]
     (require 'hive-mcp.agent)
-    (let [delegate-fn (resolve 'hive-mcp.agent/delegate-drone)
-          selected-model (or model default-model)]
+    (let [delegate-fn (resolve 'hive-mcp.agent/delegate-drone!)]
       (try
-        (let [result (delegate-fn {:model selected-model
-                                   :prompt prompt
-                                   :max-tokens 200})]
-          (if (:error result)
-            {:error (:error result)}
-            {:response (:content result)}))
+        (let [result (delegate-fn {:task prompt
+                                   :preset debate-preset
+                                   :trace false})]
+          (if (= (:status result) :completed)
+            {:response (:result result)}
+            {:error (or (:message result) "Drone delegation failed")}))
         (catch Exception e
           (log/error e "Drone delegation failed")
           {:error (str "Delegation failed: " (.getMessage e))}))))
@@ -189,14 +189,23 @@
 
    Injects role, position, topic, and previous message."
   [{:keys [dialogue-id _drone-id role position topic turn-num previous-message]}]
-  (str "DIALOGUE: " dialogue-id "\n"
+  (str "You are a debate participant. Argue your position concisely.\n\n"
+       "DIALOGUE: " dialogue-id "\n"
        "TURN: " turn-num "\n"
-       "ROLE: " role "\n"
-       "POSITION: " position "\n"
+       "YOUR ROLE: " role "\n"
+       "YOUR POSITION: " position "\n"
        "TOPIC: " topic "\n"
        (when previous-message
-         (str "PREVIOUS: " previous-message "\n"))
-       "\nYOUR TURN. Respond with JSON only."))
+         (str "\nOPPONENT SAID: " previous-message "\n"))
+       "\n## REQUIRED OUTPUT FORMAT\n"
+       "Respond with ONLY this JSON (no other text):\n"
+       "{\"signal\": \"propose\", \"message\": \"Your argument (2-3 sentences)\", \"confidence\": 0.8}\n\n"
+       "Valid signals: propose, counter, approve, no-change, defer\n"
+       "- propose: New argument\n"
+       "- counter: Disagree with opponent\n"
+       "- approve: Accept opponent's point\n"
+       "- no-change: Maintain your position\n\n"
+       "YOUR TURN. Output JSON only:"))
 
 ;; =============================================================================
 ;; Response Parsing
@@ -325,7 +334,7 @@
                                :signal signal})
             (advance-turn! dialogue-id)
 
-            ;; Emit turn event (generic, not drone-specific)
+            ;; Emit turn event to WebSocket (for Emacs UI)
             (ws/emit! :agora/turn-response
                       {:dialogue-id dialogue-id
                        :participant-id participant-pid
@@ -337,11 +346,33 @@
 
             ;; Check consensus
             (let [consensus-status (consensus/check-consensus dialogue-id)
-                  reached? (= :consensus consensus-status)]
+                  reached? (= :consensus consensus-status)
+                  turn-data {:dialogue-id dialogue-id
+                             :participant-id participant-pid
+                             :participant-type (participant-type participant)
+                             :signal signal
+                             :message message
+                             :confidence confidence
+                             :turn-num turn-num}]
               (when reached?
                 (schema/update-dialogue-status! dialogue-id :consensus)
                 (ws/emit! :agora/consensus {:dialogue-id dialogue-id
-                                            :turns turn-num}))
+                                            :turns turn-num})
+                ;; Dispatch consensus event through event system for crystallization
+                (try
+                  (ev/dispatch [:agora/consensus {:dialogue-id dialogue-id
+                                                  :turns turn-num}])
+                  (catch Exception e
+                    (log/warn "Event dispatch failed for consensus:" (.getMessage e)))))
+
+              ;; Dispatch turn-response through event system for auto-continuation
+              ;; Only dispatch if NOT consensus (consensus handler takes over)
+              (when-not reached?
+                (try
+                  (ev/dispatch [:agora/turn-response turn-data])
+                  (catch Exception e
+                    (log/warn "Event dispatch failed for turn-response:" (.getMessage e)))))
+
               {:success true
                :signal signal
                :message message
