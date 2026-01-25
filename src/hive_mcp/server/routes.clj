@@ -102,19 +102,22 @@
   "Extract project-id from args map, handling various key formats.
 
    Tries directory-based derivation if explicit project-id not found.
-   Returns nil if no project context available (falls back to 'global' in piggyback).
+   Falls back to ctx/current-directory if no directory in args.
+   Returns nil only if no project context available anywhere.
 
    Key priority:
    1. Explicit project_id/project-id
-   2. Derived from directory parameter via scope/get-current-project-id"
+   2. Derived from directory parameter via scope/get-current-project-id
+   3. Derived from ctx/current-directory (request context fallback)"
   [args]
   (or (:project_id args)
       (:project-id args)
       (get args "project_id")
       (get args "project-id")
-      ;; Derive from directory if present
+      ;; Derive from directory if present, with ctx fallback
       (when-let [dir (or (:directory args)
-                         (get args "directory"))]
+                         (get args "directory")
+                         (ctx/current-directory))]
         (require 'hive-mcp.tools.memory.scope)
         ((resolve 'hive-mcp.tools.memory.scope/get-current-project-id) dir))))
 
@@ -174,12 +177,20 @@
    embeds in content.
 
    CRITICAL: project-id scoping ensures coordinators only see their
-   project's shouts, preventing cross-project message consumption."
+   project's shouts, preventing cross-project message consumption.
+
+   CURSOR ISOLATION FIX: When no explicit agent-id provided, use
+   'coordinator-{project-id}' to prevent cursor sharing across projects."
   [handler]
   (fn [args]
     (let [content (handler args)
-          agent-id (extract-agent-id args "coordinator")
           project-id (extract-project-id args)
+          ;; Generate project-scoped coordinator ID to prevent cursor sharing
+          ;; Without this, all coordinators would share cursor ["coordinator" "global"]
+          default-agent-id (if project-id
+                             (str "coordinator-" project-id)
+                             "coordinator")
+          agent-id (extract-agent-id args default-agent-id)
           piggyback (get-piggyback-messages agent-id project-id)]
       (wrap-piggyback content piggyback))))
 

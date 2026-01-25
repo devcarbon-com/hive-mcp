@@ -18,7 +18,7 @@
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.memory.format :as fmt]
             [hive-mcp.tools.memory.duration :as dur]
-            [hive-mcp.tools.core :refer [mcp-json]]
+            [hive-mcp.tools.core :refer [mcp-json mcp-error coerce-int!]]
             [hive-mcp.chroma :as chroma]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-mcp.agent.context :as ctx]
@@ -184,25 +184,30 @@
   [{:keys [type tags limit duration scope directory]}]
   (let [directory (or directory (ctx/current-directory))]
     (log/info "mcp-memory-query:" type "scope:" scope "directory:" directory)
-    (with-chroma
-      (let [project-id (scope/get-current-project-id directory)
-            limit-val (or limit 20)
-            ;; Query from Chroma
-            entries (chroma/query-entries :type type
-                                          :project-id (when (nil? scope) project-id)
-                                          :limit (* limit-val 5)) ; Over-fetch for filtering
-            ;; Apply hierarchical scope filter
-            scope-filter (scope/derive-hierarchy-scope-filter scope)
-            filtered (if scope-filter
-                       (filter #(scope/matches-hierarchy-scopes? % scope-filter) entries)
-                       entries)
-            ;; Apply tag filter
-            tag-filtered (apply-tag-filter filtered tags)
-            ;; Apply duration filter
-            dur-filtered (apply-duration-filter tag-filtered duration)
-            ;; Apply limit
-            results (take limit-val dur-filtered)]
-        (mcp-json (mapv fmt/entry->json-alist results))))))
+    (try
+      (let [limit-val (coerce-int! limit :limit 20)]
+        (with-chroma
+          (let [project-id (scope/get-current-project-id directory)
+                ;; Query from Chroma
+                entries (chroma/query-entries :type type
+                                              :project-id (when (nil? scope) project-id)
+                                              :limit (* limit-val 5)) ; Over-fetch for filtering
+                ;; Apply hierarchical scope filter
+                scope-filter (scope/derive-hierarchy-scope-filter scope)
+                filtered (if scope-filter
+                           (filter #(scope/matches-hierarchy-scopes? % scope-filter) entries)
+                           entries)
+                ;; Apply tag filter
+                tag-filtered (apply-tag-filter filtered tags)
+                ;; Apply duration filter
+                dur-filtered (apply-duration-filter tag-filtered duration)
+                ;; Apply limit
+                results (take limit-val dur-filtered)]
+            (mcp-json (mapv fmt/entry->json-alist results)))))
+      (catch clojure.lang.ExceptionInfo e
+        (if (= :coercion-error (:type (ex-data e)))
+          (mcp-error (.getMessage e))
+          (throw e))))))
 
 ;; ============================================================
 ;; Query Metadata Handler

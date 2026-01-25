@@ -1,17 +1,19 @@
 (ns hive-mcp.tools.diff-pinning-test
   "Pinning tests for drone diff workflow tools.
-   
+
    Tests verify:
    - propose_diff stores diffs in pending atom
    - list_proposed_diffs returns all pending diffs
    - apply_diff applies changes and removes from pending
    - reject_diff discards without applying
-   
+   - Path resolution uses correct project root (BUG FIX)
+
    Uses with-redefs to mock file operations for isolated unit testing."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.data.json :as json]
             [clojure.java.io :as io]
-            [hive-mcp.tools.diff :as diff]))
+            [hive-mcp.tools.diff :as diff]
+            [hive-mcp.agent.context :as ctx]))
 
 ;; =============================================================================
 ;; Test Helpers
@@ -463,3 +465,145 @@
       (is (string? (:description tool)))
       (is (map? (:inputSchema tool)))
       (is (fn? (:handler tool))))))
+
+;; =============================================================================
+;; Test: Path Resolution with Project Root Override (BUG FIX)
+;; =============================================================================
+;; CLARITY-I: Validates inputs at test boundaries
+;; DDD: Domain language - "path resolution", "project root", "drone directory"
+
+(deftest test-validate-diff-path-uses-explicit-project-root
+  (testing "validate-diff-path resolves relative paths against explicit project root"
+    ;; CLARITY-R: Clear intent - relative path should resolve within given root
+    (let [result (diff/validate-diff-path "src/core.clj" "/home/user/my-project")]
+      (is (:valid result))
+      (is (= "/home/user/my-project/src/core.clj" (:resolved-path result)))))
+
+  (testing "validate-diff-path rejects paths escaping explicit project root"
+    ;; CLARITY-Y: Test error path - graceful degradation
+    (let [result (diff/validate-diff-path "../../../etc/passwd" "/home/user/my-project")]
+      (is (not (:valid result)))
+      (is (re-find #"(?i)escapes.*project" (:error result))))))
+
+(deftest test-validate-diff-path-detects-cross-project-escape
+  (testing "Absolute path from project A fails validation against project B root"
+    ;; This was the original bug - drone working on /home/lages/PP/arara
+    ;; but MCP server at /home/lages/dotfiles/gitthings/hive-mcp
+    (let [result (diff/validate-diff-path
+                  "/home/lages/PP/arara/internal/config.go"
+                  "/home/lages/dotfiles/gitthings/hive-mcp")]
+      (is (not (:valid result)))
+      (is (re-find #"(?i)escapes.*project" (:error result)))))
+
+  (testing "Absolute path within project root is valid"
+    ;; Same path validated against correct root should work
+    (let [result (diff/validate-diff-path
+                  "/home/lages/PP/arara/internal/config.go"
+                  "/home/lages/PP/arara")]
+      (is (:valid result))
+      (is (= "/home/lages/PP/arara/internal/config.go" (:resolved-path result))))))
+
+(deftest test-propose-diff-uses-directory-parameter-for-path-validation
+  (testing "propose_diff uses directory parameter as project root"
+    ;; SOLID-S: Single test - directory param controls path validation
+    ;; No fixture mock - we test real validation behavior
+    (clear-pending-diffs!)
+    (let [;; Create a temp directory structure for real validation
+          temp-dir (System/getProperty "java.io.tmpdir")
+          test-root (str temp-dir "/hive-test-" (System/currentTimeMillis))
+          test-file (str test-root "/src/test.clj")]
+      ;; Setup: create directory structure
+      (io/make-parents test-file)
+      (spit test-file "(ns test)")
+      (try
+        (let [response (diff/handle-propose-diff
+                        {:file_path "src/test.clj"
+                         :old_content "(ns test)"
+                         :new_content "(ns test)\n;; updated"
+                         :description "Add comment"
+                         :drone_id "test-drone"
+                         :directory test-root})
+              parsed (parse-response-text response)]
+          (is (nil? (:isError response))
+              (str "Expected success but got: " (:error parsed)))
+          (is (= "pending" (:status parsed)))
+          ;; Verify resolved path uses our test root
+          (is (= test-file (:file-path parsed))))
+        (finally
+          ;; Cleanup
+          (io/delete-file test-file true)
+          (io/delete-file (str test-root "/src") true)
+          (io/delete-file test-root true)
+          (clear-pending-diffs!))))))
+
+(deftest test-propose-diff-uses-context-directory-for-path-validation
+  (testing "propose_diff uses ctx/current-directory when no explicit directory"
+    ;; SOLID-D: Dependency injection - context provides directory
+    (clear-pending-diffs!)
+    (let [temp-dir (System/getProperty "java.io.tmpdir")
+          test-root (str temp-dir "/hive-ctx-test-" (System/currentTimeMillis))
+          test-file (str test-root "/src/ctx-test.clj")]
+      ;; Setup
+      (io/make-parents test-file)
+      (spit test-file "(ns ctx-test)")
+      (try
+        ;; Bind context like wrap-handler-context does
+        (ctx/with-request-context {:directory test-root}
+          (let [response (diff/handle-propose-diff
+                          {:file_path "src/ctx-test.clj"
+                           :old_content "(ns ctx-test)"
+                           :new_content "(ns ctx-test)\n;; from context"
+                           :description "Context test"
+                           :drone_id "context-drone"})
+                parsed (parse-response-text response)]
+            (is (nil? (:isError response))
+                (str "Expected success but got: " (:error parsed)))
+            (is (= "pending" (:status parsed)))
+            (is (= test-file (:file-path parsed)))))
+        (finally
+          (io/delete-file test-file true)
+          (io/delete-file (str test-root "/src") true)
+          (io/delete-file test-root true)
+          (clear-pending-diffs!))))))
+
+(deftest test-propose-diff-directory-param-overrides-context
+  (testing "Explicit directory parameter takes precedence over context"
+    ;; CLARITY-C: Compose behaviors - explicit > implicit
+    (clear-pending-diffs!)
+    (let [temp-dir (System/getProperty "java.io.tmpdir")
+          explicit-root (str temp-dir "/explicit-" (System/currentTimeMillis))
+          context-root (str temp-dir "/context-" (System/currentTimeMillis))
+          test-file (str explicit-root "/override.clj")]
+      ;; Only create the explicit root directory
+      (io/make-parents test-file)
+      (spit test-file "(ns override)")
+      (try
+        ;; Context has different directory, but explicit param should win
+        (ctx/with-request-context {:directory context-root}
+          (let [response (diff/handle-propose-diff
+                          {:file_path "override.clj"
+                           :old_content "(ns override)"
+                           :new_content "(ns override)\n;; explicit wins"
+                           :description "Override test"
+                           :drone_id "override-drone"
+                           :directory explicit-root})
+                parsed (parse-response-text response)]
+            (is (nil? (:isError response))
+                (str "Expected success but got: " (:error parsed)))
+            ;; Should resolve against explicit-root, not context-root
+            (is (= test-file (:file-path parsed)))))
+        (finally
+          (io/delete-file test-file true)
+          (io/delete-file explicit-root true)
+          (clear-pending-diffs!))))))
+
+(deftest test-propose-diff-tool-schema-includes-directory
+  (testing "propose_diff tool schema includes directory parameter"
+    ;; CLARITY-T: Telemetry/observability - schema must expose directory
+    (let [propose-tool (first (filter #(= "propose_diff" (:name %)) diff/tools))
+          properties (get-in propose-tool [:inputSchema :properties])]
+      (is (some? propose-tool) "propose_diff tool should exist")
+      (is (contains? properties "directory")
+          "propose_diff schema should include directory parameter")
+      (is (= "string" (get-in properties ["directory" :type]))
+          "directory should be a string type"))))

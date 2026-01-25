@@ -193,6 +193,115 @@
      (do ~@body)))
 
 ;; =============================================================================
+;; Parameter Coercion (Elm-style Helpful Errors)
+;; =============================================================================
+
+(defn coerce-int
+  "Coerce value to integer with Elm-style helpful error on failure.
+
+   Returns {:ok value} on success, {:error message} on failure.
+
+   Examples:
+     (coerce-int 42 :limit)         => {:ok 42}
+     (coerce-int \"42\" :limit)       => {:ok 42}
+     (coerce-int \"abc\" :limit)      => {:error \"I was expecting...\"}
+     (coerce-int nil :limit 20)      => {:ok 20}  ; uses default
+
+   CLARITY: Y - Yield safe failure with useful context
+   CLARITY: I - Inputs are guarded at boundary"
+  ([value param-name] (coerce-int value param-name nil))
+  ([value param-name default]
+   (cond
+     ;; nil with default -> use default
+     (nil? value)
+     (if (some? default)
+       {:ok default}
+       {:error (format "I was expecting a number for `%s` but got nothing.
+
+HINT: This parameter is required. Provide an integer value.
+
+    %s: 10    ← example valid value"
+                       (name param-name) (name param-name))})
+
+     ;; Already an integer
+     (integer? value)
+     {:ok value}
+
+     ;; String that looks like a number
+     (string? value)
+     (try
+       {:ok (Long/parseLong value)}
+       (catch NumberFormatException _
+         {:error (format "I was expecting a number for `%s` but got the string \"%s\".
+
+This looks like a string that isn't a valid number.
+
+HINT: Pass an integer, not a string:
+
+    WRONG:  %s: \"%s\"
+    RIGHT:  %s: %s"
+                         (name param-name) value
+                         (name param-name) value
+                         (name param-name) (or default "10"))}))
+
+     ;; Some other type
+     :else
+     {:error (format "I was expecting a number for `%s` but got a %s: %s
+
+HINT: Pass an integer value:
+
+    %s: 10    ← example valid value"
+                     (name param-name)
+                     (.getSimpleName (class value))
+                     (pr-str value)
+                     (name param-name))})))
+
+(defn coerce-int!
+  "Coerce value to integer, throwing on failure with Elm-style message.
+
+   Use in handlers where you want to fail fast with a helpful error.
+
+   Example:
+     (let [limit (coerce-int! limit :limit 20)]
+       ...)  ; limit is guaranteed to be an integer"
+  ([value param-name] (coerce-int! value param-name nil))
+  ([value param-name default]
+   (let [{:keys [ok error]} (coerce-int value param-name default)]
+     (if error
+       (throw (ex-info error {:param param-name :value value :type :coercion-error}))
+       ok))))
+
+(defmacro with-coerced-params
+  "Coerce multiple parameters with Elm-style errors, returning early on failure.
+
+   Usage:
+     (with-coerced-params [{:keys [limit offset]} params
+                           limit  [:limit 20]
+                           offset [:offset 0]]
+       (query-with limit offset))
+
+   Returns mcp-error response on coercion failure.
+
+   CLARITY: I - Inputs are guarded at boundary
+   CLARITY: Y - Yield safe failure with helpful messages"
+  [[bindings params & coercions] & body]
+  (let [coercion-pairs (partition 2 coercions)
+        coercion-checks (for [[var-name [param-name default]] coercion-pairs]
+                          `(let [result# (coerce-int ~var-name ~param-name ~default)]
+                             (when (:error result#)
+                               (throw (ex-info (:error result#)
+                                               {:param ~param-name :type :coercion-error})))
+                             (:ok result#)))]
+    `(let [~bindings ~params]
+       (try
+         (let [~@(interleave (map first coercion-pairs) coercion-checks)]
+           ~@body)
+         (catch clojure.lang.ExceptionInfo e#
+           (if (= :coercion-error (:type (ex-data e#)))
+             (mcp-error (.getMessage e#))
+             (throw e#)))))))
+
+;; =============================================================================
 ;; Hivemind Message Piggyback (delegated to piggyback)
 ;; =============================================================================
 

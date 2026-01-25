@@ -15,6 +15,7 @@
    - Application: Handlers coordinate validation + state updates
    - Infra: File I/O via slurp/spit (mocked in tests)"
   (:require [hive-mcp.tools.core :refer [mcp-json]]
+            [hive-mcp.agent.context :as ctx]
             [hive-mcp.emacsclient :as ec]
             [hive-mcp.guards :as guards]
             [clojure.data.json :as json]
@@ -499,41 +500,51 @@
 (defn handle-propose-diff
   "Handle propose_diff tool call.
    Stores a proposed diff for review by the hivemind.
-   Translates sandbox paths and validates file paths."
-  [{:keys [file_path _old_content _new_content _description drone_id] :as params}]
-  (log/debug "propose_diff called" {:file file_path :drone drone_id})
-  (if-let [error (validate-propose-params params)]
-    (do
-      (log/warn "propose_diff validation failed" {:error error})
-      (mcp-error-json error))
-    ;; Translate sandbox paths before validation
-    (let [translated-path (translate-sandbox-path file_path)
-          _ (when (not= translated-path file_path)
-              (log/info "Translated sandbox path" {:from file_path :to translated-path}))
-          path-result (validate-diff-path translated-path)]
-      (if-not (:valid path-result)
-        (do
-          (log/warn "propose_diff path validation failed"
-                    {:file translated-path :original file_path :error (:error path-result) :drone drone_id})
-          (mcp-error-json (:error path-result)))
-        (try
-          ;; Use the resolved path for the proposal
-          (let [resolved-path (:resolved-path path-result)
-                proposal (create-diff-proposal (assoc params :file_path resolved-path))]
-            (swap! pending-diffs assoc (:id proposal) proposal)
-            (log/info "Diff proposed" {:id (:id proposal)
-                                       :file resolved-path
-                                       :original-path file_path
-                                       :drone drone_id})
-            (mcp-json {:id (:id proposal)
-                       :status "pending"
-                       :file-path resolved-path
-                       :original-path (when (not= file_path resolved-path) file_path)
-                       :description (:description proposal)
-                       :message "Diff proposed for review. Hivemind will apply or reject."}))
-          (catch Exception e
-            (log/error e "Failed to propose diff")
-            (mcp-error-json (str "Failed to propose diff: " (.getMessage e)))))))))
+   Translates sandbox paths and validates file paths.
+
+   BUG FIX: Uses directory parameter or ctx/current-directory as project root
+   for path validation. This prevents 'Path escapes project directory' errors
+   when drones work on projects outside the MCP server's working directory."
+  [{:keys [file_path _old_content _new_content _description drone_id directory] :as params}]
+  ;; CRITICAL FIX: Get project root from context or explicit parameter
+  ;; Without this, path validation uses MCP server's cwd, not drone's project
+  (let [project-root (or directory
+                         (ctx/current-directory)
+                         (get-project-root))]
+    (log/debug "propose_diff called" {:file file_path :drone drone_id :project-root project-root})
+    (if-let [error (validate-propose-params params)]
+      (do
+        (log/warn "propose_diff validation failed" {:error error})
+        (mcp-error-json error))
+      ;; Translate sandbox paths before validation
+      (let [translated-path (translate-sandbox-path file_path)
+            _ (when (not= translated-path file_path)
+                (log/info "Translated sandbox path" {:from file_path :to translated-path}))
+            ;; Use project-root from context for path validation
+            path-result (validate-diff-path translated-path project-root)]
+        (if-not (:valid path-result)
+          (do
+            (log/warn "propose_diff path validation failed"
+                      {:file translated-path :original file_path :error (:error path-result) :drone drone_id})
+            (mcp-error-json (:error path-result)))
+          (try
+            ;; Use the resolved path for the proposal
+            (let [resolved-path (:resolved-path path-result)
+                  proposal (create-diff-proposal (assoc params :file_path resolved-path))]
+              (swap! pending-diffs assoc (:id proposal) proposal)
+              (log/info "Diff proposed" {:id (:id proposal)
+                                         :file resolved-path
+                                         :original-path file_path
+                                         :drone drone_id})
+              (mcp-json {:id (:id proposal)
+                         :status "pending"
+                         :file-path resolved-path
+                         :original-path (when (not= file_path resolved-path) file_path)
+                         :description (:description proposal)
+                         :message "Diff proposed for review. Hivemind will apply or reject."}))
+            (catch Exception e
+              (log/error e "Failed to propose diff")
+              (mcp-error-json (str "Failed to propose diff: " (.getMessage e))))))))))
 
 (defn handle-list-proposed-diffs
   "Handle list_proposed_diffs tool call.
@@ -799,7 +810,9 @@
                                "description" {:type "string"
                                               :description "Description of what this change does and why"}
                                "drone_id" {:type "string"
-                                           :description "ID of the drone proposing this change"}}
+                                           :description "ID of the drone proposing this change"}
+                               "directory" {:type "string"
+                                            :description "Working directory for path validation. Pass your cwd to ensure paths are validated against YOUR project, not the MCP server's directory."}}
                   :required ["file_path" "old_content" "new_content"]}
     :handler handle-propose-diff}
 

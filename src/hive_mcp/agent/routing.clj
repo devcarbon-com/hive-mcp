@@ -57,15 +57,15 @@
                      :secondary "google/gemma-3-4b-it:free"
                      :reason "Devstral excels at test patterns and assertions"}
 
-    :refactoring    {:primary "deepseek/deepseek-chat:free"
+    :refactoring    {:primary "deepseek/deepseek-v3.2"
                      :secondary "mistralai/devstral-2512:free"
                      :reason "DeepSeek strong at understanding code structure"}
 
     :implementation {:primary "mistralai/devstral-2512:free"
-                     :secondary "deepseek/deepseek-chat:free"
+                     :secondary "x-ai/grok-code-fast-1"
                      :reason "Devstral optimized for code generation"}
 
-    :bugfix         {:primary "deepseek/deepseek-chat:free"
+    :bugfix         {:primary "deepseek/deepseek-v3.2"
                      :secondary "mistralai/devstral-2512:free"
                      :reason "DeepSeek good at root cause analysis"}
 
@@ -74,7 +74,7 @@
                      :reason "GPT-OSS excels at natural language"}
 
     :general        {:primary "mistralai/devstral-2512:free"
-                     :secondary "deepseek/deepseek-chat:free"
+                     :secondary "x-ai/grok-code-fast-1"
                      :reason "Devstral as robust default"}}))
 
 (defn get-route
