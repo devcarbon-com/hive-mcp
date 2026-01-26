@@ -9,9 +9,8 @@
    - Parser code extraction and confidence scoring
    - Validation result structures
    - Sandbox path containment validation"
-  (:require [clojure.test :refer :all]
-            [clojure.string :as str]
-            [hive-mcp.agent.drone :as drone]
+  (:require [clojure.test :refer [deftest is run-tests testing]]
+            [hive-mcp.agent.drone.errors :as drone]
             [hive-mcp.agent.drone.preset :as preset]
             [hive-mcp.agent.drone.parser :as parser]
             [hive-mcp.agent.drone.tools :as tools]
@@ -119,7 +118,7 @@
                       {:message "Read timed out" :expected :nrepl-timeout}
                       {:message "Syntax error compiling" :expected :nrepl-eval-error}
                       {:message "Unknown error" :expected :exception}]]
-      (doseq [{:keys [message expected]} test-cases]
+      (doseq [{:keys [message]} test-cases]
         (let [ex (ex-info message {})
               error-type (drone/classify-nrepl-error ex)]
           (is (contains? valid-types error-type)
