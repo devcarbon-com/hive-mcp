@@ -26,6 +26,9 @@
             [clojure.data.json :as json]
             [clojure.string :as str]
             [taoensso.timbre :as log]))
+
+(defn answer [] 42)
+
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -204,7 +207,10 @@
    DRY: Single conversion point for all entry retrieval.
 
    Knowledge Graph fields (kg-outgoing, kg-incoming) store edge IDs
-   as comma-separated strings for bidirectional lookup."
+   as comma-separated strings for bidirectional lookup.
+
+   Grounding fields track abstraction level and verification status
+   per Korzybski's Structural Differential model."
   [{:keys [id document metadata]}]
   {:id id
    :type (:type metadata)
@@ -222,6 +228,13 @@
    ;; Knowledge Graph edge references for bidirectional lookup
    :kg-outgoing (split-tags (:kg-outgoing metadata))
    :kg-incoming (split-tags (:kg-incoming metadata))
+   ;; Knowledge abstraction and grounding fields
+   :abstraction-level (:abstraction-level metadata)
+   :grounded-at (:grounded-at metadata)
+   :grounded-from (:grounded-from metadata)
+   :knowledge-gaps (split-tags (:knowledge-gaps metadata))
+   :source-hash (:source-hash metadata)
+   :source-file (:source-file metadata)
    :document document})
 
 ;;; ============================================================
@@ -303,7 +316,14 @@
    :expires "" :access-count 0 :helpful-count 0 :unhelpful-count 0
    :project-id "global"
    ;; Knowledge Graph edge references (empty = no edges)
-   :kg-outgoing "" :kg-incoming ""})
+   :kg-outgoing "" :kg-incoming ""
+   ;; Knowledge abstraction and grounding fields (Korzybski Structural Differential)
+   :abstraction-level nil      ; Integer 1-4: L1=Disc, L2=Semantic, L3=Pattern, L4=Intent
+   :grounded-at ""             ; ISO timestamp of last verification
+   :grounded-from ""           ; Disc entity ID verified against
+   :knowledge-gaps ""          ; Comma-separated gap keywords
+   :source-hash ""             ; Content hash when abstracted (for drift detection)
+   :source-file ""})
 
 (defn index-memory-entry!
   "Index a memory entry in Chroma (full storage, not just search).
@@ -312,13 +332,15 @@
 
    Full metadata stored: type, tags, content, content-hash, created, updated,
    duration, expires, access-count, helpful-count, unhelpful-count, project-id,
-   kg-outgoing, kg-incoming.
+   kg-outgoing, kg-incoming, abstraction-level, grounded-at, grounded-from,
+   knowledge-gaps, source-hash, source-file.
 
-   Note: Tags and KG edge IDs are stored as comma-separated strings since
-   Chroma metadata only supports scalar values (string, int, float, bool)."
+   Note: Tags, KG edge IDs, and knowledge-gaps are stored as comma-separated
+   strings since Chroma metadata only supports scalar values (string, int, float, bool)."
   [{:keys [id content type tags created updated duration expires
            content-hash access-count helpful-count unhelpful-count project-id
-           kg-outgoing kg-incoming abstraction-level]
+           kg-outgoing kg-incoming abstraction-level
+           grounded-at grounded-from knowledge-gaps source-hash source-file]
     :as entry}]
   (require-embedding!)
   (let [coll (get-or-create-collection)
@@ -334,8 +356,13 @@
                   ;; Knowledge Graph edge references (stored as comma-separated IDs)
                   :kg-outgoing (join-tags kg-outgoing)
                   :kg-incoming (join-tags kg-incoming)
-                  ;; Abstraction level (1-4: L1=Disc, L2=Semantic, L3=Pattern, L4=Intent)
-                  :abstraction-level abstraction-level}
+                  ;; Knowledge abstraction and grounding fields (Korzybski Structural Differential)
+                  :abstraction-level abstraction-level
+                  :grounded-at grounded-at
+                  :grounded-from grounded-from
+                  :knowledge-gaps (join-tags knowledge-gaps)
+                  :source-hash source-hash
+                  :source-file source-file}
         meta (merge metadata-defaults (into {} (remove (comp nil? val) provided)))]
     @(chroma/add coll [{:id entry-id :embedding embedding :document doc-text :metadata meta}]
                  :upsert? true)
