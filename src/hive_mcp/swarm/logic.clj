@@ -198,6 +198,32 @@
       (remove-claim! f slave-id))
     (log/debug "Released" (count files) "claims for slave:" slave-id)))
 
+(defn get-all-claims
+  "Get all file claims from logic-db.
+   Returns vector of {:file path :slave-id id} maps."
+  []
+  (vec (with-db
+         (l/run* [q]
+                 (l/fresh [f s]
+                          (claims f s)
+                          (l/== q {:file f :slave-id s}))))))
+
+(defn reset-claims!
+  "Clear ALL file claims from logic-db.
+
+   GHOST CLAIMS FIX: Use this to clear orphaned claims that weren't
+   properly released due to drone failures or server restarts.
+
+   WARNING: This removes ALL claims - only use when cleaning up after
+   wave failures or during maintenance."
+  []
+  (let [all-claims (get-all-claims)
+        count-before (count all-claims)]
+    (doseq [{:keys [file slave-id]} all-claims]
+      (swap! logic-db pldb/db-retraction claims file slave-id))
+    (log/info "Reset all claims:" count-before "claims cleared from logic-db")
+    {:cleared count-before}))
+
 (defn add-task-file!
   "Associate a file with a task (for claim tracking)."
   [task-id file-path]
