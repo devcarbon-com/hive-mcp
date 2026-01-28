@@ -44,14 +44,15 @@
    [#"(?i)server did not respond"      :server-unresponsive]
    [#"(?i)socket.*not available"       :socket-unavailable]])
 
-(defonce ^:private circuit-breaker
-  "Circuit breaker state for emacsclient calls.
+(defonce ^{:private true
+           :doc "Circuit breaker state for emacsclient calls.
    :alive?        — false when daemon is confirmed dead
    :tripped-at    — System/currentTimeMillis when circuit opened
    :crash-count   — total crash detections since JVM start
    :last-error    — last daemon-death stderr string
    :last-tag      — last daemon-death keyword tag
-   :recovery-at   — last time circuit was re-closed"
+   :recovery-at   — last time circuit was re-closed"}
+  circuit-breaker
   (atom {:alive? true
          :tripped-at nil
          :crash-count 0
