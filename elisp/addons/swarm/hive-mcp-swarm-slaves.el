@@ -346,32 +346,44 @@ INJECTED-CONTEXT is optional pre-generated catchup context
              (let ((prompt-to-send system-prompt))
                (run-at-time 1.0 nil
                             (lambda ()
-                              (when (buffer-live-p buffer)
-                                (hive-mcp-swarm-terminal-send
-                                 buffer
-                                 (format "/system-prompt %s"
-                                         (shell-quote-argument prompt-to-send))
-                                 'claude-code-ide))))))))
+                              (condition-case err
+                                  (when (buffer-live-p buffer)
+                                    (hive-mcp-swarm-terminal-send
+                                     buffer
+                                     (format "/system-prompt %s"
+                                             (shell-quote-argument prompt-to-send))
+                                     'claude-code-ide))
+                                (error
+                                 (message "[swarm] Timer error sending system-prompt to %s: %s"
+                                          slave-id (error-message-string err)))))))))))
         ('vterm
          (with-current-buffer buffer
            (vterm-mode)
            (run-at-time 0.5 nil
                         (lambda ()
-                          (when (buffer-live-p buffer)
-                            (with-current-buffer buffer
-                              (vterm-send-string claude-cmd)
-                              (vterm-send-return)))))))
+                          (condition-case err
+                              (when (buffer-live-p buffer)
+                                (with-current-buffer buffer
+                                  (vterm-send-string claude-cmd)
+                                  (vterm-send-return)))
+                            (error
+                             (message "[swarm] Timer error sending vterm cmd for %s: %s"
+                                      slave-id (error-message-string err))))))))
         ('eat
          (with-current-buffer buffer
            (eat-mode)
            (eat-exec buffer "swarm-shell" "/bin/bash" nil '("-l")))
          (run-at-time 0.5 nil
                       (lambda ()
-                        (when (buffer-live-p buffer)
-                          (with-current-buffer buffer
-                            (when (and (boundp 'eat-terminal) eat-terminal)
-                              (eat-term-send-string eat-terminal claude-cmd)
-                              (eat-term-send-string eat-terminal "\r")))))))
+                        (condition-case err
+                            (when (buffer-live-p buffer)
+                              (with-current-buffer buffer
+                                (when (and (boundp 'eat-terminal) eat-terminal)
+                                  (eat-term-send-string eat-terminal claude-cmd)
+                                  (eat-term-send-string eat-terminal "\r"))))
+                          (error
+                           (message "[swarm] Timer error sending eat cmd for %s: %s"
+                                    slave-id (error-message-string err)))))))
         ('ollama
          ;; Ollama backend uses hive-mcp-ellama for local LLM inference
          ;; No terminal buffer needed - uses async elisp callbacks
@@ -396,9 +408,13 @@ INJECTED-CONTEXT is optional pre-generated catchup context
   (run-at-time
    3 nil
    (lambda ()
-     (when-let* ((s (gethash slave-id hive-mcp-swarm--slaves)))
-       (when (memq (plist-get s :status) '(starting spawning))
-         (plist-put s :status 'idle)))))))
+     (condition-case err
+         (when-let* ((s (gethash slave-id hive-mcp-swarm--slaves)))
+           (when (memq (plist-get s :status) '(starting spawning))
+             (plist-put s :status 'idle)))
+       (error
+        (message "[swarm] Timer error transitioning %s to idle: %s"
+                 slave-id (error-message-string err)))))))
 
 ;;;; Kill Functions:
 
