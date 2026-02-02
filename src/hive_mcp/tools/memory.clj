@@ -49,6 +49,7 @@
 (def handle-mcp-memory-demote lifecycle/handle-demote)
 (def handle-mcp-memory-cleanup-expired lifecycle/handle-cleanup-expired)
 (def handle-mcp-memory-expiring-soon lifecycle/handle-expiring-soon)
+(def handle-mcp-memory-expire lifecycle/handle-expire)
 
 ;; Analytics Operations
 (def handle-mcp-memory-log-access analytics/handle-log-access)

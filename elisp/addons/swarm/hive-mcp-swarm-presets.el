@@ -72,6 +72,13 @@ Set to nil to disable default presets."
   :type '(repeat string)
   :group 'hive-mcp-swarm-presets)
 
+(defcustom hive-mcp-swarm-presets-lazy-mode nil
+  "When non-nil, inject preset names + query instructions instead of full content.
+Lings fetch preset content on-demand via MCP tools (preset_get, preset_search).
+This reduces spawn token overhead by 80-90%."
+  :type 'boolean
+  :group 'hive-mcp-swarm-presets)
+
 ;;;; Internal State:
 
 (defvar hive-mcp-swarm-presets--cache nil
@@ -280,13 +287,17 @@ Memory-based presets allow project-scoped and semantically searchable presets."
 
 ;;;; Public API:
 
-(defun hive-mcp-swarm-presets-merge-defaults (explicit-presets)
-  "Merge EXPLICIT-PRESETS with default presets.
-Returns combined list with explicit presets first, then defaults.
+(defun hive-mcp-swarm-presets-merge-defaults (explicit-presets &optional task-description)
+  "Merge EXPLICIT-PRESETS with default presets and task-detected presets.
+When TASK-DESCRIPTION is provided, auto-detect and inject relevant presets
+\(e.g., SAA preset for Silence/Abstract/Act workflow tasks\).
+Returns combined list with explicit presets first, then task-detected, then defaults.
 Duplicates are removed, preserving first occurrence (explicit wins)."
-  (let ((defaults (or hive-mcp-swarm-default-presets '())))
+  (let ((defaults (or hive-mcp-swarm-default-presets '()))
+        (task-presets (when task-description
+                        (hive-mcp-swarm-presets-detect-from-task task-description))))
     (cl-remove-duplicates
-     (append explicit-presets defaults)
+     (append explicit-presets task-presets defaults)
      :test #'string=
      :from-end t)))
 
@@ -359,8 +370,19 @@ rather than relying on lings to /catchup themselves."
     ("clarity-dev" . ("clarity" "solid" "ddd" "tdd"))
     ("coordinator" . ("task-coordinator"))
     ("ling" . ("ling" "minimal"))
-    ("worker" . ("ling")))
+    ("worker" . ("ling"))
+    ;; SAA workflow roles (Silence-Abstract-Act, Korzybski methodology)
+    ;; Silence phase: grounding, exploration, territory mapping
+    ("silence" . ("saa" "explorer"))
+    ("explorer" . ("saa" "explorer"))
+    ;; Abstract phase: planning, structuring
+    ("abstract" . ("saa" "planner"))
+    ("planner" . ("saa" "planner"))
+    ;; Act phase: execution, implementation
+    ("act" . ("saa" "executor"))
+    ("executor" . ("saa" "executor")))
   "Mapping of role names to preset lists.
+SAA roles use Korzybski terminology: silence/abstract/act.
 Each entry is (ROLE . PRESETS-LIST)."
   :type '(alist :key-type string :value-type (repeat string))
   :group 'hive-mcp-swarm-presets)
@@ -403,6 +425,36 @@ Returns plist with :backend and optionally :model, or nil for default."
   "Convert ROLE to list of preset names."
   (or (cdr (assoc role hive-mcp-swarm-presets-role-mapping))
       (list role)))
+
+(defcustom hive-mcp-swarm-presets-task-patterns
+  '(;; SAA explicit mentions (Silence-Abstract-Act, Korzybski methodology)
+    ("\\bSAA\\b\\|\\bSilence[- ]Abstract[- ]Act\\b" . ("saa"))
+    ;; Silence phase: grounding, exploration, territory mapping, reading first
+    ("\\b[Ss]ilence\\b\\|\\bground\\(ing\\)?\\b\\|\\bterritory\\b\\|\\bread first\\b\\|\\bexplor\\(e\\|ation\\|ing\\)\\b" . ("saa" "explorer"))
+    ;; Abstract phase: planning, structuring, EDN plan creation
+    ("\\b[Aa]bstract\\b\\|\\bEDN plan\\b\\|\\bstructure\\b\\|\\bcreate.*plan\\b\\|\\bplan\\(ning\\)?\\b" . ("saa" "planner"))
+    ;; Act phase: execution, implementation, TDD, DAG-Wave
+    ("\\b[Aa]ct\\b\\|\\bexecut\\(e\\|ion\\)\\b\\|\\bimplement\\(ation\\)?\\b\\|\\bTDD\\b\\|\\bDAG-Wave\\b" . ("saa" "executor")))
+  "Patterns to detect SAA-related tasks and inject appropriate presets.
+SAA = Silence-Abstract-Act (Korzybski's general semantics methodology):
+- Silence: grounding in territory, exploration, reading before acting
+- Abstract: creating plans/structures from observations
+- Act: executing plans via TDD/DAG-Wave
+
+Each entry is (REGEXP . PRESETS-LIST).
+When task description matches REGEXP, PRESETS-LIST is added."
+  :type '(alist :key-type regexp :value-type (repeat string))
+  :group 'hive-mcp-swarm-presets)
+
+(defun hive-mcp-swarm-presets-detect-from-task (task-description)
+  "Detect additional presets needed based on TASK-DESCRIPTION.
+Returns list of preset names to inject, or nil if no patterns match."
+  (when task-description
+    (let ((extra-presets '()))
+      (dolist (pattern-entry hive-mcp-swarm-presets-task-patterns)
+        (when (string-match-p (car pattern-entry) task-description)
+          (setq extra-presets (append extra-presets (cdr pattern-entry)))))
+      (cl-remove-duplicates extra-presets :test #'string=))))
 
 ;;;; Lifecycle:
 

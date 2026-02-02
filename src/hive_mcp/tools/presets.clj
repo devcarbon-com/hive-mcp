@@ -12,7 +12,6 @@
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
-
 ;;; ============================================================
 ;;; Handlers
 ;;; ============================================================
@@ -88,6 +87,22 @@
         {:type "text"
          :text (json/write-str {:error (str "Failed to list presets: " (.getMessage e))})
          :isError true}))))
+
+(defn handle-preset-list-slim
+  "List presets with minimal info (name + category only).
+  Optimized for lazy-loading context - minimal token usage."
+  [_]
+  (log/info "preset list_slim")
+  (try
+    (let [presets (presets/list-presets)]
+      {:type "text"
+       :text (json/write-str
+              {:presets (mapv #(select-keys % [:name :category]) presets)
+               :count (count presets)})})
+    (catch Exception e
+      {:type "text"
+       :text (json/write-str {:error (str "Failed: " (.getMessage e))})
+       :isError true})))
 
 (defn handle-preset-migrate
   "Migrate presets from .md files to Chroma.

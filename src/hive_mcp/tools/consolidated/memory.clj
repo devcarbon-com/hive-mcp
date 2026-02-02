@@ -11,7 +11,8 @@
    - feedback: Submit helpfulness feedback
    - tags: Update entry tags
    - cleanup: Remove expired entries
-   - expiring: List soon-to-expire entries"
+   - expiring: List soon-to-expire entries
+   - expire: Force-expire (delete) entry by ID"
   (:require [hive-mcp.tools.cli :refer [make-cli-handler]]
             [hive-mcp.tools.memory :as mem]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -38,6 +39,7 @@
    :tags        mem/handle-mcp-memory-update-tags
    :cleanup     mem/handle-mcp-memory-cleanup-expired
    :expiring    mem/handle-mcp-memory-expiring-soon
+   :expire      mem/handle-mcp-memory-expire
    :migrate     mem/handle-mcp-memory-migrate-project
    :import      mem/handle-mcp-memory-import-json})
 
@@ -57,10 +59,10 @@
   "MCP tool definition for consolidated memory operations."
   {:name "memory"
    :consolidated true
-   :description "Consolidated memory operations. Commands: add, query, metadata, get, search, duration, promote, demote, log_access, feedback, helpfulness, tags, cleanup, expiring, migrate, import. Use 'help' command to list all available commands."
+   :description "Consolidated memory operations. Commands: add, query, metadata, get, search, duration, promote, demote, log_access, feedback, helpfulness, tags, cleanup, expiring, expire, migrate, import. Use 'help' command to list all available commands."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
-                                         :enum ["add" "query" "metadata" "get" "search" "duration" "promote" "demote" "log_access" "feedback" "helpfulness" "tags" "cleanup" "expiring" "migrate" "import" "help"]
+                                         :enum ["add" "query" "metadata" "get" "search" "duration" "promote" "demote" "log_access" "feedback" "helpfulness" "tags" "cleanup" "expiring" "expire" "migrate" "import" "help"]
                                          :description "Command to execute"}
                               ;; add command params
                               "type" {:type "string"

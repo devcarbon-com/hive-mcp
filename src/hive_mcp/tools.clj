@@ -54,7 +54,7 @@
    [hive-mcp.tools.consolidated.preset :as c-preset]
    [hive-mcp.tools.consolidated.olympus :as c-olympus]
    [hive-mcp.tools.consolidated.agora :as c-agora]
-   [hive-mcp.tools.consolidated.kondo :as c-kondo]
+   [hive-mcp.tools.consolidated.analysis :as c-analysis]
    [hive-mcp.tools.consolidated.project :as c-project]
    [hive-mcp.tools.consolidated.session :as c-session]
    [hive-mcp.tools.consolidated.emacs :as c-emacs]
@@ -107,8 +107,7 @@
                prompt/tools
                presets-tools/tools
                diff/tools
-               kondo/tools
-               scc/tools
+               ;; kondo/tools and scc/tools REMOVED - now in consolidated/analysis
                ;; kg/tools REMOVED - compat/tools provides shims → consolidated
                hot/tools     ; hot reload coordination tools
                health/tools  ; MCP health check
@@ -139,7 +138,7 @@
                c-preset/tools
                c-olympus/tools
                c-agora/tools
-               c-kondo/tools
+               c-analysis/tools
                c-project/tools
                c-session/tools
                c-emacs/tools
@@ -183,9 +182,9 @@
 (defn get-consolidated-tools
   "Get only consolidated 'root' tools for minimal tool listing.
 
-   Returns only tools with :consolidated true flag - the 15 unified
+   Returns only tools with :consolidated true flag - the 16 unified
    command tools (agent, memory, kanban, kg, preset, magit, cider,
-   emacs, wave, hivemind, agora, kondo, olympus, project, session).
+   emacs, wave, hivemind, agora, analysis, olympus, project, session).
 
    Use this for external tool discovery (bb-mcp, Claude Code) where
    showing 15 consolidated tools is cleaner than 200+ flat tools.
@@ -248,8 +247,7 @@
                prompt/tools
                presets-tools/tools
                diff/tools
-               kondo/tools
-               scc/tools
+               ;; kondo/tools and scc/tools REMOVED - now in consolidated/analysis
                ;; kg/tools REMOVED - compat/tools provides shims → consolidated
                hot/tools     ; hot reload coordination tools
                health/tools  ; MCP health check
@@ -279,7 +277,7 @@
                c-preset/tools
                c-olympus/tools
                c-agora/tools
-               c-kondo/tools
+               c-analysis/tools
                c-project/tools
                c-session/tools
                c-emacs/tools

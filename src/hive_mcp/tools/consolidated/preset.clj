@@ -16,13 +16,14 @@
 
 (def handlers
   "Map of command keywords to handler functions."
-  {:list    preset-handlers/handle-preset-list
-   :get     preset-handlers/handle-preset-get
-   :search  preset-handlers/handle-preset-search
-   :add     preset-handlers/handle-preset-add
-   :delete  preset-handlers/handle-preset-delete
-   :status  preset-handlers/handle-preset-status
-   :migrate preset-handlers/handle-preset-migrate})
+  {:list      preset-handlers/handle-preset-list
+   :list_slim preset-handlers/handle-preset-list-slim
+   :get       preset-handlers/handle-preset-get
+   :search    preset-handlers/handle-preset-search
+   :add       preset-handlers/handle-preset-add
+   :delete    preset-handlers/handle-preset-delete
+   :status    preset-handlers/handle-preset-status
+   :migrate   preset-handlers/handle-preset-migrate})
 
 ;; =============================================================================
 ;; CLI Handler
@@ -40,10 +41,10 @@
   "MCP tool definition for consolidated preset command."
   {:name "preset"
    :consolidated true
-   :description "Swarm preset management: list (all presets), get (by name), search (semantic query), add (custom preset), delete (remove), status (integration info), migrate (from files to Chroma). Use command='help' to list all."
+   :description "Swarm preset management: list (all presets), list_slim (names+categories only), get (by name), search (semantic query), add (custom preset), delete (remove), status (integration info), migrate (from files to Chroma). Use command='help' to list all."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
-                                         :enum ["list" "get" "search" "add" "delete" "status" "migrate" "help"]
+                                         :enum ["list" "list_slim" "get" "search" "add" "delete" "status" "migrate" "help"]
                                          :description "Preset operation to perform"}
                               ;; get/delete params
                               "name" {:type "string"
