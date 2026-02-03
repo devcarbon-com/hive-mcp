@@ -97,3 +97,31 @@
 
         :else
         (core/mcp-error (str "Error: " error))))))
+
+;; ============================================================
+;; Lazy Preset Header Builder
+;; ============================================================
+
+(defn build-lazy-preset-header
+  "Generate a minimal header for lazy preset loading.
+
+   Instead of injecting full preset content (~1500 tokens each),
+   this generates instructions (~300 tokens total) telling lings
+   how to fetch presets on-demand.
+
+   preset-names: vector of preset name strings
+   Returns: string with preset list + query instructions"
+  [preset-names]
+  (let [preset-list (->> preset-names
+                         (map #(str "- " %))
+                         (clojure.string/join "\n"))]
+    (str "## Available Presets\n\n"
+         "The following presets are available for this agent:\n\n"
+         preset-list "\n\n"
+         "### Fetching Preset Content\n\n"
+         "Fetch full preset content when needed using:\n"
+         "```\n"
+         "preset(command: \"get\", name: \"preset-name\")\n"
+         "```\n\n"
+         "**Tip:** Use `preset(command: \"search\", query: \"...\")` "
+         "to find relevant presets by topic.\n")))

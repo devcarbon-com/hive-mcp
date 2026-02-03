@@ -5,6 +5,7 @@
    Presets can be queried by natural language (e.g., 'find testing-focused preset')."
   (:require [hive-mcp.presets :as presets]
             [hive-mcp.chroma :as chroma]
+            [hive-mcp.tools.swarm.prompt :as prompt]
             [clojure.data.json :as json]
             [clojure.string :as str]
             [taoensso.timbre :as log]))
@@ -103,6 +104,90 @@
       {:type "text"
        :text (json/write-str {:error (str "Failed: " (.getMessage e))})
        :isError true})))
+
+(defn handle-preset-core
+  "Get minimal summary of a preset for lazy loading.
+   Returns ~200 tokens instead of full ~1500 token content.
+   Use this when you need preset info but not the full instructions."
+  [{:keys [name]}]
+  (log/info "preset core:" name)
+  (if-not (chroma/embedding-configured?)
+    ;; Fallback to file-based
+    (let [preset-dir (System/getenv "HIVE_MCP_PRESETS_DIR")
+          preset-dir (or preset-dir
+                         (str (System/getProperty "user.dir") "/presets"))]
+      (if-let [preset (presets/get-preset-from-file preset-dir name)]
+        {:type "text"
+         :text (json/write-str {:core (presets/extract-preset-core preset)
+                                :name name
+                                :source "file-fallback"})}
+        {:type "text"
+         :text (json/write-str {:error (str "Preset not found: " name)})
+         :isError true}))
+    (try
+      (if-let [preset (presets/get-preset name)]
+        {:type "text"
+         :text (json/write-str {:core (presets/extract-preset-core preset)
+                                :name name
+                                :source "chroma"})}
+        {:type "text"
+         :text (json/write-str {:error (str "Preset not found in Chroma: " name)
+                                :hint "Try preset_list to see available presets"})
+         :isError true})
+      (catch Exception e
+        {:type "text"
+         :text (json/write-str {:error (str "Failed to get preset core: " (.getMessage e))})
+         :isError true}))))
+
+(defn handle-preset-header
+  "Generate preset header for system prompt.
+
+   When lazy=true (default): returns compact header with names + query instructions (~300 tokens)
+   When lazy=false: returns full preset content concatenated
+
+   Params:
+   - presets: vector of preset names
+   - lazy: boolean (default true)
+
+   Use case: elisp calls this to build system prompts for spawned lings."
+  [{:keys [presets lazy]}]
+  (log/info "preset header:" presets "lazy:" lazy)
+  (let [lazy? (if (nil? lazy) true lazy)
+        preset-names (if (sequential? presets) presets [presets])]
+    (try
+      (if lazy?
+        ;; Lazy mode: compact header with fetch instructions
+        {:type "text"
+         :text (json/write-str {:header (prompt/build-lazy-preset-header preset-names)
+                                :mode "lazy"
+                                :preset-count (count preset-names)
+                                :approx-tokens 300})}
+        ;; Full mode: concatenate all preset content
+        (let [preset-contents
+              (for [name preset-names]
+                (if-let [preset (or (presets/get-preset name)
+                                    (let [dir (or (System/getenv "HIVE_MCP_PRESETS_DIR")
+                                                  (str (System/getProperty "user.dir") "/presets"))]
+                                      (presets/get-preset-from-file dir name)))]
+                  {:name name :content (:content preset)}
+                  {:name name :error "not found"}))
+              full-content (->> preset-contents
+                                (filter :content)
+                                (map :content)
+                                (str/join "\n\n---\n\n"))
+              missing (->> preset-contents
+                           (filter :error)
+                           (map :name))]
+          {:type "text"
+           :text (json/write-str {:header full-content
+                                  :mode "full"
+                                  :preset-count (count preset-names)
+                                  :approx-tokens (* 1500 (count preset-names))
+                                  :missing (when (seq missing) missing)})}))
+      (catch Exception e
+        {:type "text"
+         :text (json/write-str {:error (str "Failed to build header: " (.getMessage e))})
+         :isError true}))))
 
 (defn handle-preset-migrate
   "Migrate presets from .md files to Chroma.

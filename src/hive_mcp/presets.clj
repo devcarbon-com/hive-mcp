@@ -412,3 +412,50 @@
     @(chroma-api/delete coll :ids [preset-id])
     (log/debug "Deleted preset from Chroma:" preset-id)
     preset-id))
+
+;;; ============================================================
+;;; Preset Core Extraction (Lazy Loading)
+;;; ============================================================
+
+(defn- extract-first-paragraph
+  "Extract the first non-heading paragraph from markdown content."
+  [content]
+  (let [lines (str/split-lines content)
+        ;; Skip title and empty lines, find first content paragraph
+        para-lines (->> lines
+                        (drop-while #(or (str/blank? %)
+                                         (str/starts-with? % "#")))
+                        (take-while #(not (or (str/blank? %)
+                                              (str/starts-with? % "#")
+                                              (str/starts-with? % "-")
+                                              (str/starts-with? % "*")))))]
+    (when (seq para-lines)
+      (str/trim (str/join " " para-lines)))))
+
+(defn- extract-key-bullets
+  "Extract first N bullet points from markdown content."
+  [content max-bullets]
+  (let [bullet-pattern #"^[\s]*[-*]\s+(.+)$"
+        lines (str/split-lines content)]
+    (->> lines
+         (keep #(when-let [[_ text] (re-matches bullet-pattern %)]
+                  (str/trim text)))
+         (take max-bullets)
+         vec)))
+
+(defn extract-preset-core
+  "Extract minimal summary (~200 tokens) from a preset for lazy loading.
+
+   Input: preset map with :_content or :content (markdown string)
+   Output: {:name, :category, :summary (first paragraph), :key-points (first 3-5 bullets)}
+
+   This enables lazy loading - lings get summaries instead of full ~1500 token content."
+  [{:keys [name title category _content content] :as preset}]
+  (let [md-content (or _content content "")
+        summary (extract-first-paragraph md-content)
+        key-points (extract-key-bullets md-content 5)]
+    {:name name
+     :title (or title name)
+     :category (or category (detect-category md-content))
+     :summary (or summary "No summary available")
+     :key-points (if (seq key-points) key-points [])}))

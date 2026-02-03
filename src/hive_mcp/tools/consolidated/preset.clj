@@ -1,7 +1,7 @@
 (ns hive-mcp.tools.consolidated.preset
   "Consolidated Preset CLI tool.
 
-   Subcommands: list, get, search, add, delete, status, migrate
+   Subcommands: list, get, search, add, delete, status, migrate, header
 
    Usage via MCP: preset {\"command\": \"search\", \"query\": \"testing focused\"}
 
@@ -19,6 +19,8 @@
   {:list      preset-handlers/handle-preset-list
    :list_slim preset-handlers/handle-preset-list-slim
    :get       preset-handlers/handle-preset-get
+   :core      preset-handlers/handle-preset-core
+   :header    preset-handlers/handle-preset-header
    :search    preset-handlers/handle-preset-search
    :add       preset-handlers/handle-preset-add
    :delete    preset-handlers/handle-preset-delete
@@ -41,14 +43,20 @@
   "MCP tool definition for consolidated preset command."
   {:name "preset"
    :consolidated true
-   :description "Swarm preset management: list (all presets), list_slim (names+categories only), get (by name), search (semantic query), add (custom preset), delete (remove), status (integration info), migrate (from files to Chroma). Use command='help' to list all."
+   :description "Swarm preset management: list (all presets), list_slim (names+categories only), get (by name), core (summary without full content), header (generate system prompt header), search (semantic query), add (custom preset), delete (remove), status (integration info), migrate (from files to Chroma). Use command='help' to list all."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
-                                         :enum ["list" "list_slim" "get" "search" "add" "delete" "status" "migrate" "help"]
+                                         :enum ["list" "list_slim" "get" "core" "header" "search" "add" "delete" "status" "migrate" "help"]
                                          :description "Preset operation to perform"}
-                              ;; get/delete params
+                              ;; get/delete/core params
                               "name" {:type "string"
                                       :description "Preset name"}
+                              ;; header params
+                              "presets" {:type "array"
+                                         :items {:type "string"}
+                                         :description "Vector of preset names for header generation"}
+                              "lazy" {:type "boolean"
+                                      :description "If true (default), return compact header with fetch instructions (~300 tokens). If false, return full concatenated content."}
                               ;; search params
                               "query" {:type "string"
                                        :description "Natural language search query"}
