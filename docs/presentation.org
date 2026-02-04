@@ -3,7 +3,7 @@
 
 #+LATEX_COMPILER: xelatex
 
-#+title: emacs-mcp: Claude + Emacs Integration
+#+title: hive-mcp: Claude + Emacs Integration
 #+EMAIL: pedrogbranquinho@gmail.com
 #+BEAMER_HEADER: \author[Branquinho]{\textbf{Pedro Gomes Branquinho \\ \text{\scriptsize{pedrogbranquinho@gmail.com}}}}
 #+BEAMER_HEADER: \date[]{\textbf{\scriptsize{Model Context Protocol for Emacs}}}
@@ -47,7 +47,7 @@
 #+LATEX_HEADER: \hypersetup{colorlinks, allcolors=., urlcolor=blue!70!white}
 
 * Introduction
-** What is emacs-mcp?
+** What is hive-mcp?
 *** The Bridge Between Claude and Emacs
 **** Architecture
 :PROPERTIES:
@@ -57,7 +57,7 @@
 :END:
 #+ATTR_BEAMER: :overlay <+->
 - *MCP Server*: Clojure-based
-- *Elisp Package*: emacs-mcp.el
+- *Elisp Package*: hive-mcp.el
 - *Bidirectional*: Claude ↔ Emacs
 
 **** Benefits
@@ -97,13 +97,13 @@ MCP is an open protocol that standardizes how applications provide context to LL
 :END:
 #+begin_src elisp :eval no
 ;; Add to project memory
-(emacs-mcp-api-memory-add
+(hive-mcp-api-memory-add
  "convention"
  "Use kebab-case for functions"
  '("elisp" "style"))
 
 ;; Query memory
-(emacs-mcp-api-memory-query
+(hive-mcp-api-memory-query
  "convention"
  '("elisp")
  10)
@@ -123,7 +123,7 @@ MCP is an open protocol that standardizes how applications provide context to LL
 *** Context Gathering
 **** What Claude Sees
 #+begin_src elisp :eval no
-(emacs-mcp-api-get-context)
+(hive-mcp-api-get-context)
 ;; Returns:
 ;; - Current buffer info
 ;; - Project root
@@ -149,7 +149,7 @@ MCP is an open protocol that standardizes how applications provide context to LL
 :BEAMER_ENV: block
 :END:
 #+begin_src elisp :eval no
-(emacs-mcp-addon-register
+(hive-mcp-addon-register
  'my-addon
  :version "1.0.0"
  :description "My addon"
@@ -198,9 +198,9 @@ MCP is an open protocol that standardizes how applications provide context to LL
 :BEAMER_ENV: block
 :END:
 #+begin_src elisp :eval no
-(setq emacs-mcp-cider-auto-start-nrepl t)
-(setq emacs-mcp-cider-auto-connect t)
-(setq emacs-mcp-cider-nrepl-port 7888)
+(setq hive-mcp-cider-auto-start-nrepl t)
+(setq hive-mcp-cider-auto-connect t)
+(setq hive-mcp-cider-nrepl-port 7888)
 #+end_src
 
 ** Org-Kanban Integration
@@ -238,12 +238,12 @@ MCP is an open protocol that standardizes how applications provide context to LL
 :END:
 #+begin_src elisp :eval no
 ;; Create specialized agents
-(emacs-mcp-swarm-spawn
+(hive-mcp-swarm-spawn
  "tester"
  :presets '("tdd" "clarity"))
 
 ;; Broadcast to all
-(emacs-mcp-swarm-broadcast
+(hive-mcp-swarm-broadcast
  "Run tests and report")
 #+end_src
 
@@ -288,8 +288,8 @@ MCP is an open protocol that standardizes how applications provide context to LL
 *** Usage Example
 **** Parse and Query
 #+begin_src clojure :eval no
-(require '[emacs-mcp.org-clj.parser :as p])
-(require '[emacs-mcp.org-clj.query :as q])
+(require '[hive-mcp.org-clj.parser :as p])
+(require '[hive-mcp.org-clj.query :as q])
 
 (def doc (p/parse-document (slurp "tasks.org")))
 
@@ -304,7 +304,7 @@ MCP is an open protocol that standardizes how applications provide context to LL
 *** Kanban Board Rendering
 **** Terminal Output
 #+begin_src clojure :eval no
-(require '[emacs-mcp.org-clj.render :as r])
+(require '[hive-mcp.org-clj.render :as r])
 
 (println (r/render-to-terminal "kanban.org"))
 #+end_src
@@ -322,21 +322,21 @@ MCP is an open protocol that standardizes how applications provide context to LL
 *** Setup Steps
 **** 1. Clone Repository
 #+begin_src bash :eval no
-git clone https://github.com/BuddhiLW/emacs-mcp.git
+git clone https://github.com/BuddhiLW/hive-mcp.git
 #+end_src
 
 **** 2. Configure Emacs
 #+begin_src elisp :eval no
 ;; Add to load-path
-(add-to-list 'load-path "path/to/emacs-mcp/elisp")
-(add-to-list 'load-path "path/to/emacs-mcp/elisp/addons")
+(add-to-list 'load-path "path/to/hive-mcp/elisp")
+(add-to-list 'load-path "path/to/hive-mcp/elisp/addons")
 
 ;; Load main package
-(require 'emacs-mcp)
-(require 'emacs-mcp-addons)
+(require 'hive-mcp)
+(require 'hive-mcp-addons)
 
 ;; Enable addons
-(setq emacs-mcp-addon-always-load '(cider org-kanban))
+(setq hive-mcp-addon-always-load '(cider org-kanban))
 #+end_src
 
 *** Keybindings

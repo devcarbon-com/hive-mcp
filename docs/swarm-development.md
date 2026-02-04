@@ -1,6 +1,6 @@
 # Swarm Orchestration Development Guide
 
-A comprehensive guide for using and extending the Claude swarm orchestration system in emacs-mcp.
+A comprehensive guide for using and extending the Claude swarm orchestration system in hive-mcp.
 
 ## Overview
 
@@ -20,7 +20,7 @@ Master Claude (you)
        │ MCP tools (swarm_spawn, swarm_dispatch, etc.)
        ↓
 ┌─────────────────────────────────────────────────┐
-│          emacs-mcp-swarm.el                     │
+│          hive-mcp-swarm.el                     │
 │  - Session management                           │
 │  - Preset loading                               │
 │  - Task queue                                   │
@@ -44,33 +44,33 @@ Master Claude (you)
 
 ```elisp
 ;; In your Emacs config or interactively
-(require 'emacs-mcp-swarm)
-(emacs-mcp-swarm-mode 1)
+(require 'hive-mcp-swarm)
+(hive-mcp-swarm-mode 1)
 ```
 
 ### 2. Spawn a Slave
 
 ```elisp
 ;; Basic spawn
-(emacs-mcp-swarm-spawn "tester")
+(hive-mcp-swarm-spawn "tester")
 
 ;; Spawn with presets
-(emacs-mcp-swarm-spawn "reviewer" :presets '("solid" "clarity"))
+(hive-mcp-swarm-spawn "reviewer" :presets '("solid" "clarity"))
 
 ;; Spawn with a predefined role
-(emacs-mcp-swarm-spawn "my-tester" :role "tester")
+(hive-mcp-swarm-spawn "my-tester" :role "tester")
 ```
 
 ### 3. Dispatch a Task
 
 ```elisp
-(emacs-mcp-swarm-dispatch "swarm-tester-1234567" "Run all tests in src/")
+(hive-mcp-swarm-dispatch "swarm-tester-1234567" "Run all tests in src/")
 ```
 
 ### 4. Collect the Response
 
 ```elisp
-(emacs-mcp-swarm-collect "task-tester-001" 30000)  ;; 30 second timeout
+(hive-mcp-swarm-collect "task-tester-001" 30000)  ;; 30 second timeout
 ```
 
 ## Presets System
@@ -99,8 +99,8 @@ Roles map to preset combinations:
 
 ```elisp
 ;; These are equivalent:
-(emacs-mcp-swarm-spawn "test" :role "reviewer")
-(emacs-mcp-swarm-spawn "test" :presets '("reviewer" "solid" "clarity"))
+(hive-mcp-swarm-spawn "test" :role "reviewer")
+(hive-mcp-swarm-spawn "test" :presets '("reviewer" "solid" "clarity"))
 ```
 
 | Role | Presets Applied |
@@ -120,8 +120,8 @@ Roles map to preset combinations:
 3. Register the directory:
 
 ```elisp
-(add-to-list 'emacs-mcp-swarm-custom-presets-dirs "~/my-presets/")
-(emacs-mcp-swarm-reload-presets)
+(add-to-list 'hive-mcp-swarm-custom-presets-dirs "~/my-presets/")
+(hive-mcp-swarm-reload-presets)
 ```
 
 Preset format:
@@ -205,7 +205,7 @@ Use these from the Master Claude:
 Slaves cannot spawn their own slaves beyond a configurable depth:
 
 ```elisp
-(setq emacs-mcp-swarm-max-depth 2)  ;; Default
+(setq hive-mcp-swarm-max-depth 2)  ;; Default
 ```
 
 Environment variable `CLAUDE_SWARM_DEPTH` tracks current depth.
@@ -213,13 +213,13 @@ Environment variable `CLAUDE_SWARM_DEPTH` tracks current depth.
 ### Slave Limits
 
 ```elisp
-(setq emacs-mcp-swarm-max-slaves 5)  ;; Maximum concurrent slaves
+(setq hive-mcp-swarm-max-slaves 5)  ;; Maximum concurrent slaves
 ```
 
 ### Timeouts
 
 ```elisp
-(setq emacs-mcp-swarm-default-timeout 300000)  ;; 5 minutes default
+(setq hive-mcp-swarm-default-timeout 300000)  ;; 5 minutes default
 ```
 
 ## Example Workflows
@@ -229,14 +229,14 @@ Environment variable `CLAUDE_SWARM_DEPTH` tracks current depth.
 ```elisp
 ;; Spawn test slaves for different test suites
 (let ((slaves (list
-               (emacs-mcp-swarm-spawn "unit" :role "tester")
-               (emacs-mcp-swarm-spawn "integration" :role "tester")
-               (emacs-mcp-swarm-spawn "e2e" :role "tester"))))
+               (hive-mcp-swarm-spawn "unit" :role "tester")
+               (hive-mcp-swarm-spawn "integration" :role "tester")
+               (hive-mcp-swarm-spawn "e2e" :role "tester"))))
 
   ;; Dispatch tests
-  (emacs-mcp-swarm-dispatch (nth 0 slaves) "Run unit tests")
-  (emacs-mcp-swarm-dispatch (nth 1 slaves) "Run integration tests")
-  (emacs-mcp-swarm-dispatch (nth 2 slaves) "Run e2e tests")
+  (hive-mcp-swarm-dispatch (nth 0 slaves) "Run unit tests")
+  (hive-mcp-swarm-dispatch (nth 1 slaves) "Run integration tests")
+  (hive-mcp-swarm-dispatch (nth 2 slaves) "Run e2e tests")
 
   ;; Collect results...
   )
@@ -246,12 +246,12 @@ Environment variable `CLAUDE_SWARM_DEPTH` tracks current depth.
 
 ```elisp
 ;; Multiple reviewers with different focuses
-(emacs-mcp-swarm-spawn "security" :presets '("reviewer" "security"))
-(emacs-mcp-swarm-spawn "perf" :presets '("reviewer" "performance"))
-(emacs-mcp-swarm-spawn "style" :presets '("reviewer" "solid"))
+(hive-mcp-swarm-spawn "security" :presets '("reviewer" "security"))
+(hive-mcp-swarm-spawn "perf" :presets '("reviewer" "performance"))
+(hive-mcp-swarm-spawn "style" :presets '("reviewer" "solid"))
 
 ;; Broadcast the review request
-(emacs-mcp-swarm-broadcast "Review the changes in PR #123")
+(hive-mcp-swarm-broadcast "Review the changes in PR #123")
 ```
 
 ## Troubleshooting
@@ -270,13 +270,13 @@ Environment variable `CLAUDE_SWARM_DEPTH` tracks current depth.
 
 ### Presets Not Loading
 
-1. Check directory exists: `emacs-mcp-swarm-presets-dir`
-2. Reload: `M-x emacs-mcp-swarm-reload-presets`
-3. List loaded: `M-x emacs-mcp-swarm-list-presets`
+1. Check directory exists: `hive-mcp-swarm-presets-dir`
+2. Reload: `M-x hive-mcp-swarm-reload-presets`
+3. List loaded: `M-x hive-mcp-swarm-list-presets`
 
 ## Keybindings
 
-With `emacs-mcp-swarm-mode` enabled:
+With `hive-mcp-swarm-mode` enabled:
 
 | Key | Action |
 |-----|--------|

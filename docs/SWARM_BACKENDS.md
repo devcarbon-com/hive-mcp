@@ -13,7 +13,7 @@ This document compares the two available swarm backends for orchestrating multip
 | Terminal emulator | vterm or eat | Not applicable |
 | Best for | Simple tasks | Complex multi-agent workflows |
 
-## Backend 1: vterm/eat (emacs-mcp-swarm)
+## Backend 1: vterm/eat (hive-mcp-swarm)
 
 The default swarm backend spawns Claude instances in terminal emulators and communicates via terminal I/O.
 
@@ -23,7 +23,7 @@ The default swarm backend spawns Claude instances in terminal emulators and comm
 Master Claude
       │
       v
-emacs-mcp-swarm.el
+hive-mcp-swarm.el
       │ vterm/eat process
       v
 ┌─────────────────┐
@@ -48,28 +48,28 @@ emacs-mcp-swarm.el
 ### Usage
 
 ```elisp
-(require 'emacs-mcp-swarm)
-(emacs-mcp-swarm-mode 1)
+(require 'hive-mcp-swarm)
+(hive-mcp-swarm-mode 1)
 
 ;; Spawn slave
-(emacs-mcp-swarm-spawn "tester" :presets '("tdd"))
+(hive-mcp-swarm-spawn "tester" :presets '("tdd"))
 
 ;; Dispatch and wait for response
-(let ((task-id (emacs-mcp-swarm-dispatch "swarm-tester-xxx" "Run tests")))
-  (emacs-mcp-swarm-collect task-id 30000))
+(let ((task-id (hive-mcp-swarm-dispatch "swarm-tester-xxx" "Run tests")))
+  (hive-mcp-swarm-collect task-id 30000))
 ```
 
 ### Configuration
 
 ```elisp
-(setq emacs-mcp-swarm-terminal 'vterm)  ; or 'eat
-(setq emacs-mcp-swarm-max-slaves 5)
-(setq emacs-mcp-swarm-prompt-marker "❯")
+(setq hive-mcp-swarm-terminal 'vterm)  ; or 'eat
+(setq hive-mcp-swarm-max-slaves 5)
+(setq hive-mcp-swarm-prompt-marker "❯")
 ```
 
 ---
 
-## Backend 2: claude-code-ide (emacs-mcp-claude-code-ide)
+## Backend 2: claude-code-ide (hive-mcp-claude-code-ide)
 
 An alternative backend using [claude-code-ide.el](https://github.com/manzaltu/claude-code-ide.el) with hivemind for completion tracking.
 
@@ -79,7 +79,7 @@ An alternative backend using [claude-code-ide.el](https://github.com/manzaltu/cl
 Master Claude
       │ MCP tools
       v
-emacs-mcp-claude-code-ide.el
+hive-mcp-claude-code-ide.el
       │ claude-code-ide API
       v
 ┌─────────────────┐
@@ -117,25 +117,25 @@ emacs-mcp-claude-code-ide.el
 ### Usage
 
 ```elisp
-(require 'emacs-mcp-claude-code-ide)
-(emacs-mcp-claude-code-ide-mode 1)
+(require 'hive-mcp-claude-code-ide)
+(hive-mcp-claude-code-ide-mode 1)
 
 ;; Spawn ling
-(emacs-mcp-cci-spawn "worker" :presets '("hivemind" "tdd"))
+(hive-mcp-cci-spawn "worker" :presets '("hivemind" "tdd"))
 ;; => "ling-worker-123456"
 
 ;; Dispatch task
-(emacs-mcp-cci-dispatch "ling-worker-123456" "Implement feature X")
+(hive-mcp-cci-dispatch "ling-worker-123456" "Implement feature X")
 ;; => "task-worker-123456-001"
 
 ;; Task completion happens via hivemind
 ;; Auto-sync is enabled by default
 
 ;; Manual sync if needed
-(emacs-mcp-cci-sync-from-hivemind)
+(hive-mcp-cci-sync-from-hivemind)
 
 ;; Check status
-(emacs-mcp-cci-status)
+(hive-mcp-cci-status)
 ;; => (:backend "claude-code-ide"
 ;;     :completion-mechanism "hivemind"
 ;;     :lings (:total 1 :idle 0 :working 1 :error 0)
@@ -146,10 +146,10 @@ emacs-mcp-claude-code-ide.el
 ### Configuration
 
 ```elisp
-(setq emacs-mcp-cci-default-timeout 300000)  ; 5 minutes
-(setq emacs-mcp-cci-max-lings 10)
-(setq emacs-mcp-cci-hivemind-poll-interval 5)  ; seconds
-(setq emacs-mcp-cci-auto-sync t)
+(setq hive-mcp-cci-default-timeout 300000)  ; 5 minutes
+(setq hive-mcp-cci-max-lings 10)
+(setq hive-mcp-cci-hivemind-poll-interval 5)  ; seconds
+(setq hive-mcp-cci-auto-sync t)
 ```
 
 ### Task Completion via Hivemind
@@ -210,20 +210,20 @@ hivemind_shout(
 
 2. Enable the addon:
    ```elisp
-   (require 'emacs-mcp-claude-code-ide)
-   (emacs-mcp-claude-code-ide-mode 1)
+   (require 'hive-mcp-claude-code-ide)
+   (hive-mcp-claude-code-ide-mode 1)
    ```
 
 3. Update your swarm calls:
    ```elisp
    ;; Before (vterm)
-   (emacs-mcp-swarm-spawn "worker" :presets '("tdd"))
-   (emacs-mcp-swarm-dispatch "swarm-worker-xxx" "Task")
-   (emacs-mcp-swarm-collect "task-xxx" 30000)
+   (hive-mcp-swarm-spawn "worker" :presets '("tdd"))
+   (hive-mcp-swarm-dispatch "swarm-worker-xxx" "Task")
+   (hive-mcp-swarm-collect "task-xxx" 30000)
 
    ;; After (claude-code-ide)
-   (emacs-mcp-cci-spawn "worker" :presets '("tdd"))
-   (emacs-mcp-cci-dispatch "ling-worker-xxx" "Task")
+   (hive-mcp-cci-spawn "worker" :presets '("tdd"))
+   (hive-mcp-cci-dispatch "ling-worker-xxx" "Task")
    ;; No explicit collect - completion via hivemind
    ```
 
@@ -235,14 +235,14 @@ hivemind_shout(
 
 | Operation | vterm API | claude-code-ide API |
 |-----------|-----------|---------------------|
-| Spawn | `emacs-mcp-swarm-spawn` | `emacs-mcp-cci-spawn` |
-| Dispatch | `emacs-mcp-swarm-dispatch` | `emacs-mcp-cci-dispatch` |
-| Collect | `emacs-mcp-swarm-collect` | `emacs-mcp-cci-api-collect` |
-| Status | `emacs-mcp-swarm-status` | `emacs-mcp-cci-status` |
-| Kill | `emacs-mcp-swarm-kill` | `emacs-mcp-cci-kill` |
-| Kill all | `emacs-mcp-swarm-kill-all` | `emacs-mcp-cci-kill-all` |
-| Broadcast | `emacs-mcp-swarm-broadcast` | Not implemented |
-| Sync hivemind | N/A | `emacs-mcp-cci-sync-from-hivemind` |
+| Spawn | `hive-mcp-swarm-spawn` | `hive-mcp-cci-spawn` |
+| Dispatch | `hive-mcp-swarm-dispatch` | `hive-mcp-cci-dispatch` |
+| Collect | `hive-mcp-swarm-collect` | `hive-mcp-cci-api-collect` |
+| Status | `hive-mcp-swarm-status` | `hive-mcp-cci-status` |
+| Kill | `hive-mcp-swarm-kill` | `hive-mcp-cci-kill` |
+| Kill all | `hive-mcp-swarm-kill-all` | `hive-mcp-cci-kill-all` |
+| Broadcast | `hive-mcp-swarm-broadcast` | Not implemented |
+| Sync hivemind | N/A | `hive-mcp-cci-sync-from-hivemind` |
 
 ---
 
@@ -252,17 +252,17 @@ Both backends can coexist. Use vterm for quick tasks and claude-code-ide for com
 
 ```elisp
 ;; Load both
-(require 'emacs-mcp-swarm)
-(require 'emacs-mcp-claude-code-ide)
-(emacs-mcp-swarm-mode 1)
-(emacs-mcp-claude-code-ide-mode 1)
+(require 'hive-mcp-swarm)
+(require 'hive-mcp-claude-code-ide)
+(hive-mcp-swarm-mode 1)
+(hive-mcp-claude-code-ide-mode 1)
 
 ;; Quick task via vterm
-(emacs-mcp-swarm-spawn "quick" :presets '("fixer"))
-(emacs-mcp-swarm-dispatch "swarm-quick-xxx" "Fix typo in README")
+(hive-mcp-swarm-spawn "quick" :presets '("fixer"))
+(hive-mcp-swarm-dispatch "swarm-quick-xxx" "Fix typo in README")
 
 ;; Complex workflow via claude-code-ide
-(emacs-mcp-cci-spawn "architect" :presets '("hivemind" "ddd"))
-(emacs-mcp-cci-dispatch "ling-architect-xxx" "Design new authentication module")
+(hive-mcp-cci-spawn "architect" :presets '("hivemind" "ddd"))
+(hive-mcp-cci-dispatch "ling-architect-xxx" "Design new authentication module")
 ;; Architect reports completion via hivemind when done
 ```

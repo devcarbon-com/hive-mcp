@@ -1,17 +1,17 @@
 # Swarm API Reference
 
-Complete API reference for the emacs-mcp swarm orchestration system.
+Complete API reference for the hive-mcp swarm orchestration system.
 
 ## Elisp API
 
 ### Core Functions
 
-#### `emacs-mcp-swarm-spawn`
+#### `hive-mcp-swarm-spawn`
 
 Spawn a new Claude slave instance.
 
 ```elisp
-(emacs-mcp-swarm-spawn NAME &key PRESETS CWD ROLE)
+(hive-mcp-swarm-spawn NAME &key PRESETS CWD ROLE)
 ```
 
 **Parameters:**
@@ -24,18 +24,18 @@ Spawn a new Claude slave instance.
 
 **Example:**
 ```elisp
-(emacs-mcp-swarm-spawn "worker" :presets '("tdd" "solid") :cwd "/project")
+(hive-mcp-swarm-spawn "worker" :presets '("tdd" "solid") :cwd "/project")
 ;; => "swarm-worker-1704067890"
 ```
 
 ---
 
-#### `emacs-mcp-swarm-dispatch`
+#### `hive-mcp-swarm-dispatch`
 
 Send a prompt to a slave.
 
 ```elisp
-(emacs-mcp-swarm-dispatch SLAVE-ID PROMPT &key TIMEOUT PRIORITY CONTEXT)
+(hive-mcp-swarm-dispatch SLAVE-ID PROMPT &key TIMEOUT PRIORITY CONTEXT)
 ```
 
 **Parameters:**
@@ -49,18 +49,18 @@ Send a prompt to a slave.
 
 **Example:**
 ```elisp
-(emacs-mcp-swarm-dispatch "swarm-worker-123" "Run all tests" :timeout 60000)
+(hive-mcp-swarm-dispatch "swarm-worker-123" "Run all tests" :timeout 60000)
 ;; => "task-worker-123-001"
 ```
 
 ---
 
-#### `emacs-mcp-swarm-collect`
+#### `hive-mcp-swarm-collect`
 
 Collect response from a dispatched task.
 
 ```elisp
-(emacs-mcp-swarm-collect TASK-ID &optional TIMEOUT-MS)
+(hive-mcp-swarm-collect TASK-ID &optional TIMEOUT-MS)
 ```
 
 **Parameters:**
@@ -71,18 +71,18 @@ Collect response from a dispatched task.
 
 **Example:**
 ```elisp
-(emacs-mcp-swarm-collect "task-worker-001" 10000)
+(hive-mcp-swarm-collect "task-worker-001" 10000)
 ;; => (:task-id "task-worker-001" :status completed :result "All tests passed")
 ```
 
 ---
 
-#### `emacs-mcp-swarm-broadcast`
+#### `hive-mcp-swarm-broadcast`
 
 Send a prompt to all active slaves.
 
 ```elisp
-(emacs-mcp-swarm-broadcast PROMPT &optional SLAVE-FILTER)
+(hive-mcp-swarm-broadcast PROMPT &optional SLAVE-FILTER)
 ```
 
 **Parameters:**
@@ -93,12 +93,12 @@ Send a prompt to all active slaves.
 
 ---
 
-#### `emacs-mcp-swarm-status`
+#### `hive-mcp-swarm-status`
 
 Get swarm status.
 
 ```elisp
-(emacs-mcp-swarm-status &optional SLAVE-ID)
+(hive-mcp-swarm-status &optional SLAVE-ID)
 ```
 
 **Parameters:**
@@ -108,7 +108,7 @@ Get swarm status.
 
 **Example:**
 ```elisp
-(emacs-mcp-swarm-status)
+(hive-mcp-swarm-status)
 ;; => (:session-id "session-20251229-a1b2"
 ;;     :status "active"
 ;;     :slaves (:total 3 :idle 2 :working 1 :error 0)
@@ -118,55 +118,55 @@ Get swarm status.
 
 ---
 
-#### `emacs-mcp-swarm-kill`
+#### `hive-mcp-swarm-kill`
 
 Kill a specific slave.
 
 ```elisp
-(emacs-mcp-swarm-kill SLAVE-ID)
+(hive-mcp-swarm-kill SLAVE-ID)
 ```
 
 ---
 
-#### `emacs-mcp-swarm-kill-all`
+#### `hive-mcp-swarm-kill-all`
 
 Kill all slaves.
 
 ```elisp
-(emacs-mcp-swarm-kill-all)
+(hive-mcp-swarm-kill-all)
 ```
 
 ---
 
 ### Preset Functions
 
-#### `emacs-mcp-swarm-list-presets`
+#### `hive-mcp-swarm-list-presets`
 
 List available preset names.
 
 ```elisp
-(emacs-mcp-swarm-list-presets)
+(hive-mcp-swarm-list-presets)
 ;; => ("clarity" "ddd" "documenter" "fixer" ...)
 ```
 
 ---
 
-#### `emacs-mcp-swarm-reload-presets`
+#### `hive-mcp-swarm-reload-presets`
 
 Reload presets from all directories.
 
 ```elisp
-(emacs-mcp-swarm-reload-presets)
+(hive-mcp-swarm-reload-presets)
 ```
 
 ---
 
-#### `emacs-mcp-swarm-add-custom-presets-dir`
+#### `hive-mcp-swarm-add-custom-presets-dir`
 
 Add a custom presets directory.
 
 ```elisp
-(emacs-mcp-swarm-add-custom-presets-dir DIR)
+(hive-mcp-swarm-add-custom-presets-dir DIR)
 ```
 
 ---
@@ -177,13 +177,13 @@ These return JSON-serializable data:
 
 | Function | Description |
 |----------|-------------|
-| `emacs-mcp-swarm-api-spawn` | Spawn and return slave-id |
-| `emacs-mcp-swarm-api-dispatch` | Dispatch and return task-id |
-| `emacs-mcp-swarm-api-status` | Get status as plist |
-| `emacs-mcp-swarm-api-collect` | Collect with structured result |
-| `emacs-mcp-swarm-api-list-presets` | List preset names |
-| `emacs-mcp-swarm-api-kill` | Kill slave |
-| `emacs-mcp-swarm-api-kill-all` | Kill all |
+| `hive-mcp-swarm-api-spawn` | Spawn and return slave-id |
+| `hive-mcp-swarm-api-dispatch` | Dispatch and return task-id |
+| `hive-mcp-swarm-api-status` | Get status as plist |
+| `hive-mcp-swarm-api-collect` | Collect with structured result |
+| `hive-mcp-swarm-api-list-presets` | List preset names |
+| `hive-mcp-swarm-api-kill` | Kill slave |
+| `hive-mcp-swarm-api-kill-all` | Kill all |
 
 ---
 
@@ -413,15 +413,15 @@ Broadcast prompt to all slaves.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `emacs-mcp-swarm-terminal` | `'vterm` | Terminal emulator (`'vterm` or `'eat`) |
-| `emacs-mcp-swarm-presets-dir` | `"presets/"` | Built-in presets directory |
-| `emacs-mcp-swarm-custom-presets-dirs` | `nil` | List of custom preset directories |
-| `emacs-mcp-swarm-claude-command` | `"claude"` | Claude CLI command |
-| `emacs-mcp-swarm-max-slaves` | `5` | Maximum concurrent slaves |
-| `emacs-mcp-swarm-max-depth` | `2` | Maximum recursion depth |
-| `emacs-mcp-swarm-default-timeout` | `300000` | Default timeout (ms) |
-| `emacs-mcp-swarm-prompt-marker` | `"❯"` | Prompt ready marker |
-| `emacs-mcp-swarm-buffer-prefix` | `"*swarm-"` | Buffer name prefix |
+| `hive-mcp-swarm-terminal` | `'vterm` | Terminal emulator (`'vterm` or `'eat`) |
+| `hive-mcp-swarm-presets-dir` | `"presets/"` | Built-in presets directory |
+| `hive-mcp-swarm-custom-presets-dirs` | `nil` | List of custom preset directories |
+| `hive-mcp-swarm-claude-command` | `"claude"` | Claude CLI command |
+| `hive-mcp-swarm-max-slaves` | `5` | Maximum concurrent slaves |
+| `hive-mcp-swarm-max-depth` | `2` | Maximum recursion depth |
+| `hive-mcp-swarm-default-timeout` | `300000` | Default timeout (ms) |
+| `hive-mcp-swarm-prompt-marker` | `"❯"` | Prompt ready marker |
+| `hive-mcp-swarm-buffer-prefix` | `"*swarm-"` | Buffer name prefix |
 
 ---
 

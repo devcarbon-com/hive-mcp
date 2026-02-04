@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<title>emacs-mcp</title>
+<title>hive-mcp</title>
 <meta name="author" content="Pedro G. Branquinho"/>
 <meta name="description" content=""/>
 <meta name="keywords" content=""/>
@@ -17,13 +17,13 @@
 <body>
 <div class="reveal">
 <div class="slides">
-<section id="sec-title-slide"><h1 class="title">emacs-mcp</h1><p class="subtitle">Claude + Emacs Integration</p>
+<section id="sec-title-slide"><h1 class="title">hive-mcp</h1><p class="subtitle">Claude + Emacs Integration</p>
 <h2 class="author">Pedro G. Branquinho</h2>
 </section>
 
 <section>
 <section id="slide-orgc4878d4">
-<h2 id="orgc4878d4">emacs-mcp</h2>
+<h2 id="orgc4878d4">hive-mcp</h2>
 <div class="outline-text-2" id="text-orgc4878d4">
 </div>
 </section>
@@ -41,7 +41,7 @@
 <h3 id="org8daf89c">Architecture</h3>
 <ul>
 <li class="fragment appear"><b>Clojure MCP Server</b> — STDIO communication</li>
-<li class="fragment appear"><b>Elisp Package</b> — emacs-mcp.el</li>
+<li class="fragment appear"><b>Elisp Package</b> — hive-mcp.el</li>
 <li class="fragment appear"><b>org-clj Library</b> — Native org-mode parser</li>
 
 </ul>
@@ -73,7 +73,7 @@
 <div class="org-src-container">
 
 <pre   ><code class="elisp" >;; Add to memory
-(emacs-mcp-api-memory-add
+(hive-mcp-api-memory-add
  "convention"
  "Use kebab-case for functions"
  '("elisp" "style"))
@@ -105,7 +105,7 @@
 <h4 id="orgb2fd78c">Automated Multi-Step Tasks</h4>
 <div class="org-src-container">
 
-<pre   ><code class="elisp" >(emacs-mcp-workflow-register
+<pre   ><code class="elisp" >(hive-mcp-workflow-register
  "test-and-commit"
  '((:type shell :command "make test")
    (:type confirm :message "Tests passed?")
@@ -248,11 +248,11 @@
 <div class="org-src-container">
 
 <pre   ><code class="elisp" >;; Spawn specialized agents
-(emacs-mcp-swarm-spawn "tester" :presets '("tdd"))
-(emacs-mcp-swarm-spawn "reviewer" :role 'reviewer)
+(hive-mcp-swarm-spawn "tester" :presets '("tdd"))
+(hive-mcp-swarm-spawn "reviewer" :role 'reviewer)
 
 ;; Broadcast to all
-(emacs-mcp-swarm-broadcast "Report status")
+(hive-mcp-swarm-broadcast "Report status")
 </code></pre>
 </div>
 </section>
@@ -272,7 +272,7 @@
 <h4 id="org1c5acb4">C4 Context Example</h4>
 
 <div id="org6be3428" class="figure">
-<p><img src="images/emacs-mcp-c4-context.png" alt="emacs-mcp-c4-context.png" width="600px" />
+<p><img src="images/hive-mcp-c4-context.png" alt="hive-mcp-c4-context.png" width="600px" />
 </p>
 </div>
 </section>
@@ -281,14 +281,14 @@
 <div class="org-src-container">
 
 <pre   ><code class="clojure" >{:type :c4-context
- :title "emacs-mcp System Context"
+ :title "hive-mcp System Context"
  :elements [{:id :developer :name "Developer" :el :person}
             {:id :claude :name "Claude AI" :el :system :external? true}
-            {:id :emacs-mcp :name "emacs-mcp" :el :system}
+            {:id :hive-mcp :name "hive-mcp" :el :system}
             {:id :emacs :name "Emacs" :el :system}]
  :relations [{:from :developer :to :emacs :name "edits code"}
-             {:from :claude :to :emacs-mcp :name "MCP protocol"}
-             {:from :emacs-mcp :to :emacs :name "emacsclient"}]}
+             {:from :claude :to :hive-mcp :name "MCP protocol"}
+             {:from :hive-mcp :to :emacs :name "emacsclient"}]}
 </code></pre>
 </div>
 </section>
@@ -323,8 +323,8 @@
 <h4 id="org46cde49">Parse → Query → Transform</h4>
 <div class="org-src-container">
 
-<pre   ><code class="clojure" >(require '[emacs-mcp.org-clj.parser :as p])
-(require '[emacs-mcp.org-clj.query :as q])
+<pre   ><code class="clojure" >(require '[hive-mcp.org-clj.parser :as p])
+(require '[hive-mcp.org-clj.query :as q])
 
 (def doc (p/parse-document (slurp "tasks.org")))
 
@@ -371,15 +371,15 @@
 <h4 id="orge2486e1">Clone &amp; Configure</h4>
 <div class="org-src-container">
 
-<pre   ><code class="bash" >git clone https://github.com/BuddhiLW/emacs-mcp.git
+<pre   ><code class="bash" >git clone https://github.com/BuddhiLW/hive-mcp.git
 </code></pre>
 </div>
 
 <div class="org-src-container">
 
-<pre   ><code class="elisp" >(add-to-list 'load-path "path/to/emacs-mcp/elisp")
-(require 'emacs-mcp)
-(require 'emacs-mcp-addons)
+<pre   ><code class="elisp" >(add-to-list 'load-path "path/to/hive-mcp/elisp")
+(require 'hive-mcp)
+(require 'hive-mcp-addons)
 </code></pre>
 </div>
 </section>
@@ -438,7 +438,7 @@
 <h3 id="org0ef5151">This Presentation Was Built Live</h3>
 <ul>
 <li class="fragment appear">User: &ldquo;Create presentation addon&rdquo;</li>
-<li class="fragment appear">Claude: Creates <code>emacs-mcp-presentation.el</code></li>
+<li class="fragment appear">Claude: Creates <code>hive-mcp-presentation.el</code></li>
 <li class="fragment appear">User: &ldquo;Update my email&rdquo;</li>
 <li class="fragment appear">Claude: Edits file → exports → opens browser</li>
 <li class="fragment appear">Instant feedback loop!</li>
@@ -479,12 +479,12 @@
 </tr>
 
 <tr>
-<td class="org-left"><code>mcp__emacs-mcp__eval_elisp</code></td>
+<td class="org-left"><code>mcp__hive-mcp__eval_elisp</code></td>
 <td class="org-left">Export &amp; preview</td>
 </tr>
 
 <tr>
-<td class="org-left"><code>mcp__emacs-mcp__mcp_memory_add</code></td>
+<td class="org-left"><code>mcp__hive-mcp__mcp_memory_add</code></td>
 <td class="org-left">Save conventions</td>
 </tr>
 

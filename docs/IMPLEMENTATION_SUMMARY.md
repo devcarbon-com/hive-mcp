@@ -6,14 +6,14 @@ Successfully implemented the **EmacsCiderEvaluator** - a DDD Infrastructure Laye
 
 ## What Was Implemented
 
-### 1. Core Implementation (`src/emacs_mcp/evaluator.clj`)
+### 1. Core Implementation (`src/hive_mcp/evaluator.clj`)
 
 Added to the existing evaluator namespace:
 
 - **EmacsCiderEvaluator record** - Implements the `ReplEvaluator` protocol
 - Uses `emacsclient` to call CIDER elisp functions:
-  - `emacs-mcp-cider-eval-explicit` - Shows output in REPL buffer
-  - `emacs-mcp-cider-status` - Checks CIDER connection status
+  - `hive-mcp-cider-eval-explicit` - Shows output in REPL buffer
+  - `hive-mcp-cider-status` - Checks CIDER connection status
 - **create-emacs-cider-evaluator** - Factory function
 - **Convenience functions**:
   - `eval-silent` - Quick silent evaluation via DirectNreplEvaluator
@@ -52,7 +52,7 @@ The system now supports two complementary evaluation strategies:
 ## Files Modified/Created
 
 ### Modified
-- `src/emacs_mcp/evaluator.clj` (309 lines)
+- `src/hive_mcp/evaluator.clj` (309 lines)
   - Added EmacsCiderEvaluator implementation
   - Added convenience functions
   - Updated namespace docs
@@ -99,7 +99,7 @@ The system now supports two complementary evaluation strategies:
 ### Basic Usage
 
 ```clojure
-(require '[emacs-mcp.evaluator :as eval])
+(require '[hive-mcp.evaluator :as eval])
 
 ;; Create evaluator
 (def evaluator (eval/create-emacs-cider-evaluator))
@@ -142,7 +142,7 @@ The system now supports two complementary evaluation strategies:
 The evaluator requires:
 1. Running Emacs with `emacsclient` server enabled
 2. CIDER installed in Emacs
-3. `emacs-mcp-cider.el` loaded
+3. `hive-mcp-cider.el` loaded
 4. Active CIDER REPL connection
 
 ## Testing
@@ -151,22 +151,22 @@ All code compiles successfully:
 
 ```bash
 # Test compilation
-clojure -M -e "(require 'emacs-mcp.evaluator) :ok"
+clojure -M -e "(require 'hive-mcp.evaluator) :ok"
 # => :ok
 
 # Verify functions available
 clojure -M -e "
-(require 'emacs-mcp.evaluator)
-(def e (emacs-mcp.evaluator/create-emacs-cider-evaluator))
-(satisfies? emacs-mcp.evaluator/ReplEvaluator e)"
+(require 'hive-mcp.evaluator)
+(def e (hive-mcp.evaluator/create-emacs-cider-evaluator))
+(satisfies? hive-mcp.evaluator/ReplEvaluator e)"
 # => true
 ```
 
 ## Integration Points
 
 ### Existing Code
-- **emacs-mcp.emacsclient** - Used for elisp evaluation
-- **emacs-mcp.tools** - Can be updated to use evaluator protocol
+- **hive-mcp.emacsclient** - Used for elisp evaluation
+- **hive-mcp.tools** - Can be updated to use evaluator protocol
 - **DirectNreplEvaluator** - Complementary silent evaluation
 
 ### Future Extensions
@@ -188,7 +188,7 @@ All would implement the same `ReplEvaluator` protocol.
 
 ## Summary
 
-The implementation successfully adds CIDER-based EXPLICIT/INTERACTIVE evaluation to the emacs-mcp project while maintaining:
+The implementation successfully adds CIDER-based EXPLICIT/INTERACTIVE evaluation to the hive-mcp project while maintaining:
 - Clean architecture (DDD Infrastructure Layer)
 - SOLID principles
 - Backward compatibility (DirectNreplEvaluator unchanged)

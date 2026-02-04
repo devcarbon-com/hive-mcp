@@ -1,6 +1,6 @@
 # Addon Reference
 
-Complete documentation for all emacs-mcp addons.
+Complete documentation for all hive-mcp addons.
 
 ## chroma
 
@@ -14,25 +14,25 @@ Complete documentation for all emacs-mcp addons.
 - Health monitoring and status display
 
 **Config**:
-- `emacs-mcp-chroma-host` - Chroma server host (default: "localhost")
-- `emacs-mcp-chroma-port` - Chroma server port (default: 8000)
-- `emacs-mcp-chroma-auto-start` - Auto-start container on init (default: t)
-- `emacs-mcp-chroma-embedding-provider` - 'ollama, 'mock, or 'none
-- `emacs-mcp-chroma-ollama-model` - Model for embeddings (default: "nomic-embed-text")
+- `hive-mcp-chroma-host` - Chroma server host (default: "localhost")
+- `hive-mcp-chroma-port` - Chroma server port (default: 8000)
+- `hive-mcp-chroma-auto-start` - Auto-start container on init (default: t)
+- `hive-mcp-chroma-embedding-provider` - 'ollama, 'mock, or 'none
+- `hive-mcp-chroma-ollama-model` - Model for embeddings (default: "nomic-embed-text")
 
 **Usage**:
 ```elisp
-(require 'emacs-mcp-chroma)
-(emacs-mcp-chroma-mode 1)
+(require 'hive-mcp-chroma)
+(hive-mcp-chroma-mode 1)
 
 ;; Semantic search
-(emacs-mcp-chroma-search "authentication patterns")
+(hive-mcp-chroma-search "authentication patterns")
 
 ;; Check status
-M-x emacs-mcp-chroma-status
+M-x hive-mcp-chroma-status
 
 ;; Transient menu
-M-x emacs-mcp-chroma-transient
+M-x hive-mcp-chroma-transient
 ```
 
 ---
@@ -49,22 +49,22 @@ M-x emacs-mcp-chroma-transient
 - Memory integration for REPL history
 
 **Config**:
-- `emacs-mcp-cider-auto-start-nrepl` - Auto-start nREPL on mode enable
-- `emacs-mcp-cider-nrepl-timeout` - Connection timeout in seconds
-- `emacs-mcp-cider-default-deps-aliases` - Default aliases for deps.edn
+- `hive-mcp-cider-auto-start-nrepl` - Auto-start nREPL on mode enable
+- `hive-mcp-cider-nrepl-timeout` - Connection timeout in seconds
+- `hive-mcp-cider-default-deps-aliases` - Default aliases for deps.edn
 
 **Usage**:
 ```elisp
-(require 'emacs-mcp-cider)
+(require 'hive-mcp-cider)
 
 ;; Spawn isolated session for parallel work
-(emacs-mcp-cider-spawn-session "agent-1")
+(hive-mcp-cider-spawn-session "agent-1")
 
 ;; Evaluate in specific session
-(emacs-mcp-cider-eval-in-session "agent-1" "(+ 1 2)")
+(hive-mcp-cider-eval-in-session "agent-1" "(+ 1 2)")
 
 ;; List all sessions
-(emacs-mcp-cider-list-sessions)
+(hive-mcp-cider-list-sessions)
 ```
 
 ---
@@ -82,24 +82,24 @@ M-x emacs-mcp-chroma-transient
 - Automatic Magit refresh after operations
 
 **Config**:
-- `emacs-mcp-magit-log-count` - Default commits in log (default: 10)
-- `emacs-mcp-magit-diff-context-lines` - Context lines in diffs (default: 3)
-- `emacs-mcp-magit-prefer-magit` - Use Magit functions when available (default: t)
+- `hive-mcp-magit-log-count` - Default commits in log (default: 10)
+- `hive-mcp-magit-diff-context-lines` - Context lines in diffs (default: 3)
+- `hive-mcp-magit-prefer-magit` - Use Magit functions when available (default: t)
 
 **Usage**:
 ```elisp
-(require 'emacs-mcp-magit)
+(require 'hive-mcp-magit)
 
 ;; Get full status
-(emacs-mcp-magit-api-status)
+(hive-mcp-magit-api-status)
 ;; => (:branch "main" :staged ("file.el") :unstaged () ...)
 
 ;; Stage and commit
-(emacs-mcp-magit-api-stage 'all)
-(emacs-mcp-magit-api-commit "feat: add feature")
+(hive-mcp-magit-api-stage 'all)
+(hive-mcp-magit-api-commit "feat: add feature")
 
 ;; Transient menu
-M-x emacs-mcp-magit-transient
+M-x hive-mcp-magit-transient
 ```
 
 ---
@@ -118,28 +118,28 @@ M-x emacs-mcp-magit-transient
 - Custom preset directories
 
 **Config**:
-- `emacs-mcp-swarm-terminal` - 'vterm (recommended) or 'eat
-- `emacs-mcp-swarm-max-slaves` - Maximum concurrent slaves (default: 5)
-- `emacs-mcp-swarm-max-depth` - Recursion depth limit (default: 3)
-- `emacs-mcp-swarm-presets-dir` - Built-in presets directory
-- `emacs-mcp-swarm-custom-presets-dirs` - Additional preset directories
+- `hive-mcp-swarm-terminal` - 'vterm (recommended) or 'eat
+- `hive-mcp-swarm-max-slaves` - Maximum concurrent slaves (default: 5)
+- `hive-mcp-swarm-max-depth` - Recursion depth limit (default: 3)
+- `hive-mcp-swarm-presets-dir` - Built-in presets directory
+- `hive-mcp-swarm-custom-presets-dirs` - Additional preset directories
 
 **Usage**:
 ```elisp
-(require 'emacs-mcp-swarm)
-(emacs-mcp-swarm-mode 1)
+(require 'hive-mcp-swarm)
+(hive-mcp-swarm-mode 1)
 
 ;; Spawn with presets
-(emacs-mcp-swarm-spawn "tester" :presets '("tdd" "clarity"))
+(hive-mcp-swarm-spawn "tester" :presets '("tdd" "clarity"))
 
 ;; Dispatch task
-(emacs-mcp-swarm-dispatch "swarm-tester-xxx" "Run all tests")
+(hive-mcp-swarm-dispatch "swarm-tester-xxx" "Run all tests")
 
 ;; Collect result
-(emacs-mcp-swarm-collect "task-tester-xxx-001" 30000)
+(hive-mcp-swarm-collect "task-tester-xxx-001" 30000)
 
 ;; Broadcast to all
-(emacs-mcp-swarm-broadcast "Status report")
+(hive-mcp-swarm-broadcast "Status report")
 ```
 
 ---
@@ -157,23 +157,23 @@ M-x emacs-mcp-magit-transient
 - Recent files in project
 
 **Config**:
-- `emacs-mcp-projectile-max-files` - Max files in listings (default: 1000)
-- `emacs-mcp-projectile-max-search-results` - Max search results (default: 100)
-- `emacs-mcp-projectile-use-ripgrep` - Prefer rg over grep (default: t)
+- `hive-mcp-projectile-max-files` - Max files in listings (default: 1000)
+- `hive-mcp-projectile-max-search-results` - Max search results (default: 100)
+- `hive-mcp-projectile-use-ripgrep` - Prefer rg over grep (default: t)
 
 **Usage**:
 ```elisp
-(require 'emacs-mcp-projectile)
+(require 'hive-mcp-projectile)
 
 ;; Get project info
-(emacs-mcp-projectile-api-project-info)
-;; => (:name "emacs-mcp" :root "/path/to" :type "clojure-deps" ...)
+(hive-mcp-projectile-api-project-info)
+;; => (:name "hive-mcp" :root "/path/to" :type "clojure-deps" ...)
 
 ;; List files with pattern
-(emacs-mcp-projectile-api-project-files "*.el")
+(hive-mcp-projectile-api-project-files "*.el")
 
 ;; Search project
-(emacs-mcp-projectile-api-search "defun.*api")
+(hive-mcp-projectile-api-search "defun.*api")
 ```
 
 ---
@@ -191,15 +191,15 @@ M-x emacs-mcp-magit-transient
 - Extract package commentary sections
 
 **Config**:
-- `emacs-mcp-docs-max-results` - Max apropos results (default: 50)
-- `emacs-mcp-docs-include-source-location` - Include file paths (default: t)
+- `hive-mcp-docs-max-results` - Max apropos results (default: 50)
+- `hive-mcp-docs-include-source-location` - Include file paths (default: t)
 
 **Usage**:
 ```elisp
-(emacs-mcp-docs-describe-function "mapcar")
+(hive-mcp-docs-describe-function "mapcar")
 ;; => (:name "mapcar" :type "built-in function" :signature "(FN SEQUENCE)" ...)
 
-(emacs-mcp-docs-apropos "json" "function")
+(hive-mcp-docs-apropos "json" "function")
 ;; => (:pattern "json" :total-matches 42 :symbols (...))
 ```
 
@@ -217,25 +217,25 @@ M-x emacs-mcp-magit-transient
 - Transient UI menu
 
 **Config**:
-- `emacs-mcp-presentation-default-format` - 'beamer or 'revealjs
-- `emacs-mcp-presentation-beamer-theme` - Beamer color theme
-- `emacs-mcp-presentation-reveal-theme` - Reveal.js theme
-- `emacs-mcp-presentation-author` / `emacs-mcp-presentation-email`
+- `hive-mcp-presentation-default-format` - 'beamer or 'revealjs
+- `hive-mcp-presentation-beamer-theme` - Beamer color theme
+- `hive-mcp-presentation-reveal-theme` - Reveal.js theme
+- `hive-mcp-presentation-author` / `hive-mcp-presentation-email`
 
 **Usage**:
 ```elisp
 ;; Create new presentation
-M-x emacs-mcp-presentation-create
+M-x hive-mcp-presentation-create
 
 ;; Insert slides
-M-x emacs-mcp-presentation-insert-code-slide
-M-x emacs-mcp-presentation-insert-quote-slide
+M-x hive-mcp-presentation-insert-code-slide
+M-x hive-mcp-presentation-insert-quote-slide
 
 ;; Export and preview
-M-x emacs-mcp-presentation-refresh
+M-x hive-mcp-presentation-refresh
 
 ;; Transient menu
-M-x emacs-mcp-presentation-transient
+M-x hive-mcp-presentation-transient
 ```
 
 ---
@@ -252,24 +252,24 @@ M-x emacs-mcp-presentation-transient
 - Save results to MCP memory
 
 **Config**:
-- `emacs-mcp-melpazoid-path` - Path to melpazoid repo (auto-detected)
-- `emacs-mcp-melpazoid-fast-mode` - nil (full), 'cached, or 'local
-- `emacs-mcp-melpazoid-timeout` - Timeout in seconds (default: 300)
-- `emacs-mcp-melpazoid-save-results` - Auto-save to MCP memory (default: t)
+- `hive-mcp-melpazoid-path` - Path to melpazoid repo (auto-detected)
+- `hive-mcp-melpazoid-fast-mode` - nil (full), 'cached, or 'local
+- `hive-mcp-melpazoid-timeout` - Timeout in seconds (default: 300)
+- `hive-mcp-melpazoid-save-results` - Auto-save to MCP memory (default: t)
 
 **Usage**:
 ```elisp
 ;; Run on current project
-M-x emacs-mcp-melpazoid-run-current-project
+M-x hive-mcp-melpazoid-run-current-project
 
 ;; Fast mode (no Docker)
-M-x emacs-mcp-melpazoid-run-fast
+M-x hive-mcp-melpazoid-run-fast
 
 ;; View results
-M-x emacs-mcp-melpazoid-show-results
+M-x hive-mcp-melpazoid-show-results
 
 ;; Transient menu
-M-x emacs-mcp-melpazoid-transient
+M-x hive-mcp-melpazoid-transient
 ```
 
 ---
@@ -361,7 +361,7 @@ M-x emacs-mcp-melpazoid-transient
 - Reliable prompt dispatch via claude-code-ide API
 - Task completion tracking via hivemind coordinator
 - Auto-sync from hivemind for completion status
-- Integration with emacs-mcp-swarm presets
+- Integration with hive-mcp-swarm presets
 
 **Benefits over vterm-based swarm**:
 - No terminal timing issues or output parsing
@@ -370,30 +370,30 @@ M-x emacs-mcp-melpazoid-transient
 - Reliable multi-agent coordination
 
 **Config**:
-- `emacs-mcp-cci-default-timeout` - Task timeout in ms (default: 300000)
-- `emacs-mcp-cci-max-lings` - Maximum concurrent lings (default: 10)
-- `emacs-mcp-cci-hivemind-poll-interval` - Hivemind sync interval (default: 5s)
-- `emacs-mcp-cci-auto-sync` - Auto-sync from hivemind (default: t)
+- `hive-mcp-cci-default-timeout` - Task timeout in ms (default: 300000)
+- `hive-mcp-cci-max-lings` - Maximum concurrent lings (default: 10)
+- `hive-mcp-cci-hivemind-poll-interval` - Hivemind sync interval (default: 5s)
+- `hive-mcp-cci-auto-sync` - Auto-sync from hivemind (default: t)
 
 **Usage**:
 ```elisp
-(require 'emacs-mcp-cci)
-(emacs-mcp-cci-mode 1)
+(require 'hive-mcp-cci)
+(hive-mcp-cci-mode 1)
 
 ;; Spawn a ling
-(emacs-mcp-cci-spawn "worker" :presets '("hivemind" "tdd"))
+(hive-mcp-cci-spawn "worker" :presets '("hivemind" "tdd"))
 ;; => "ling-worker-123456"
 
 ;; Dispatch task (completion via hivemind)
-(emacs-mcp-cci-dispatch "ling-worker-123456" "Run all tests")
+(hive-mcp-cci-dispatch "ling-worker-123456" "Run all tests")
 ;; => "task-worker-123456-001"
 
 ;; Check status
-(emacs-mcp-cci-status)
+(hive-mcp-cci-status)
 ;; => (:backend "claude-code-ide" :completion-mechanism "hivemind" ...)
 
 ;; Manual sync from hivemind
-(emacs-mcp-cci-sync-from-hivemind)
+(hive-mcp-cci-sync-from-hivemind)
 ```
 
 See [SWARM_BACKENDS.md](SWARM_BACKENDS.md) for detailed comparison of swarm backends.
@@ -422,6 +422,6 @@ See [SWARM_BACKENDS.md](SWARM_BACKENDS.md) for detailed comparison of swarm back
 
 **Usage**:
 ```bash
-cp elisp/addons/emacs-mcp-addon-template.el elisp/addons/emacs-mcp-my-addon.el
+cp elisp/addons/hive-mcp-addon-template.el elisp/addons/hive-mcp-my-addon.el
 # Edit and customize
 ```

@@ -6,7 +6,7 @@
 
 ## Executive Summary
 
-The emacs-mcp project has three sophisticated subsystems that are currently **sparse** rather than integrated:
+The hive-mcp project has three sophisticated subsystems that are currently **sparse** rather than integrated:
 
 1. **Memory System** (Chroma vector DB) - Persistent knowledge storage
 2. **Bidirectional Channel** (TCP port 9998) - Push-based Clojure↔Emacs communication  
@@ -83,7 +83,7 @@ These systems were designed to work together but several critical connections ar
 
 The `sync.clj` module exists with complete implementation but is **never started** in `server.clj`.
 
-**File:** `src/emacs_mcp/swarm/sync.clj`
+**File:** `src/hive_mcp/swarm/sync.clj`
 
 ### What sync.clj Does (When Started)
 
@@ -100,11 +100,11 @@ The `sync.clj` module exists with complete implementation but is **never started
 ### Current Behavior
 
 ```clojure
-;; src/emacs_mcp/server.clj - sync is NOT required or started!
-(ns emacs-mcp.server
-  (:require [emacs-mcp.channel :as channel]
-            [emacs-mcp.hivemind :as hivemind]
-            ;; Missing: [emacs-mcp.swarm.sync :as sync]
+;; src/hive_mcp/server.clj - sync is NOT required or started!
+(ns hive-mcp.server
+  (:require [hive-mcp.channel :as channel]
+            [hive-mcp.hivemind :as hivemind]
+            ;; Missing: [hive-mcp.swarm.sync :as sync]
             ...))
 
 (defn start! [& _args]
@@ -126,7 +126,7 @@ The `sync.clj` module exists with complete implementation but is **never started
 
 ```clojure
 ;; In server.clj requires:
-[emacs-mcp.swarm.sync :as sync]
+[hive-mcp.swarm.sync :as sync]
 
 ;; In start! function, after channel:
 (try
@@ -237,7 +237,7 @@ Memory (findings lost)
       (memory/add! :note finding 
                    {:tags ["agent-finding" 
                            (str "agent:" agent-id)
-                           "scope:project:emacs-mcp"]}))))
+                           "scope:project:hive-mcp"]}))))
 ```
 
 ---
@@ -256,13 +256,13 @@ Memory (findings lost)
 
 ## Related Files
 
-- `src/emacs_mcp/server.clj` - Server startup (needs sync)
-- `src/emacs_mcp/swarm/sync.clj` - Event synchronization (dead code)
-- `src/emacs_mcp/swarm/logic.clj` - core.logic conflict detection
-- `src/emacs_mcp/swarm/coordinator.clj` - High-level coordination API
-- `src/emacs_mcp/hivemind.clj` - Agent communication tools
-- `src/emacs_mcp/swarm/hive.clj` - Memory injection for swarm
-- `src/emacs_mcp/channel.clj` - Bidirectional communication
+- `src/hive_mcp/server.clj` - Server startup (needs sync)
+- `src/hive_mcp/swarm/sync.clj` - Event synchronization (dead code)
+- `src/hive_mcp/swarm/logic.clj` - core.logic conflict detection
+- `src/hive_mcp/swarm/coordinator.clj` - High-level coordination API
+- `src/hive_mcp/hivemind.clj` - Agent communication tools
+- `src/hive_mcp/swarm/hive.clj` - Memory injection for swarm
+- `src/hive_mcp/channel.clj` - Bidirectional communication
 
 ---
 

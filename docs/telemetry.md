@@ -1,10 +1,10 @@
 # Telemetry and Logging
 
-This document describes the telemetry system in emacs-mcp, which follows the CLARITY principle: "Telemetry first - observability is essential."
+This document describes the telemetry system in hive-mcp, which follows the CLARITY principle: "Telemetry first - observability is essential."
 
 ## Overview
 
-The `emacs-mcp.telemetry` namespace provides structured logging for evaluation operations with:
+The `hive-mcp.telemetry` namespace provides structured logging for evaluation operations with:
 
 - Request/response tracking
 - Timing measurements
@@ -18,7 +18,7 @@ The `emacs-mcp.telemetry` namespace provides structured logging for evaluation o
 The `with-timing` macro measures operation duration:
 
 ```clojure
-(require '[emacs-mcp.telemetry :as telemetry])
+(require '[hive-mcp.telemetry :as telemetry])
 
 (telemetry/with-timing "database-query"
   (fetch-users-from-db))
@@ -146,9 +146,9 @@ The `emacsclient.clj` namespace includes timing in the core `eval-elisp` functio
 All logs use structured data for easy parsing and filtering:
 
 ```
-info [emacs-mcp.tools] :eval-request {:mode :elisp, :code-length 42, :code-preview "(defun hello () (message \"Hello\"))"}
-debug [emacs-mcp.emacsclient] :emacsclient-success {:duration-ms 15, :result-length 8}
-info [emacs-mcp.tools] :eval-success {:duration-ms 15, :result-length 8}
+info [hive-mcp.tools] :eval-request {:mode :elisp, :code-length 42, :code-preview "(defun hello () (message \"Hello\"))"}
+debug [hive-mcp.emacsclient] :emacsclient-success {:duration-ms 15, :result-length 8}
+info [hive-mcp.tools] :eval-success {:duration-ms 15, :result-length 8}
 ```
 
 ## Configuration
@@ -225,8 +225,8 @@ For each evaluation operation, you can track:
 
 ```clojure
 (ns my-app.eval
-  (:require [emacs-mcp.telemetry :as telemetry]
-            [emacs-mcp.emacsclient :as ec]))
+  (:require [hive-mcp.telemetry :as telemetry]
+            [hive-mcp.emacsclient :as ec]))
 
 ;; Configure logging on startup
 (telemetry/configure-logging! {:level :info})
@@ -253,5 +253,5 @@ For each evaluation operation, you can track:
 
 - [taoensso/timbre documentation](https://github.com/ptaoussanis/timbre)
 - CLARITY framework: "Telemetry first" principle
-- `src/emacs_mcp/telemetry.clj` - Implementation
-- `test/emacs_mcp/telemetry_test.clj` - Usage examples
+- `src/hive_mcp/telemetry.clj` - Implementation
+- `test/hive_mcp/telemetry_test.clj` - Usage examples

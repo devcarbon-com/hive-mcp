@@ -1,4 +1,4 @@
-# Contributing to emacs-mcp
+# Contributing to hive-mcp
 
 ## Development Setup
 
@@ -16,8 +16,8 @@
 3. Load the Emacs package:
    ```elisp
    (add-to-list 'load-path "/path/to/hive-mcp/elisp")
-   (require 'emacs-mcp)
-   (emacs-mcp-mode 1)
+   (require 'hive-mcp)
+   (hive-mcp-mode 1)
    ```
 
 ## Running Tests
@@ -31,7 +31,7 @@ clojure -M:test
 The package is submitted to MELPA with the following recipe:
 
 ```elisp
-(emacs-mcp :fetcher github
+(hive-mcp :fetcher github
            :repo "BuddhiLW/hive-mcp"
            :files ("elisp/*.el"))
 ```
@@ -39,10 +39,10 @@ The package is submitted to MELPA with the following recipe:
 ### Submission Steps
 
 1. Fork [melpa/melpa](https://github.com/melpa/melpa)
-2. Add recipe to `recipes/emacs-mcp`
+2. Add recipe to `recipes/hive-mcp`
 3. Test locally:
    ```bash
-   make recipes/emacs-mcp
+   make recipes/hive-mcp
    ```
 4. Submit PR to MELPA repository
 
@@ -52,13 +52,13 @@ The package is submitted to MELPA with the following recipe:
 - [x] SPDX-License-Identifier
 - [x] `lexical-binding: t`
 - [x] `;;;###autoload` cookies on public functions
-- [x] Ends with `(provide 'emacs-mcp)` and `;;; emacs-mcp.el ends here`
+- [x] Ends with `(provide 'hive-mcp)` and `;;; hive-mcp.el ends here`
 
 ## Code Style
 
 - Follow [Emacs Lisp conventions](https://www.gnu.org/software/emacs/manual/html_node/elisp/Tips.html)
-- Use `emacs-mcp-` prefix for all public symbols
-- Use `emacs-mcp--` prefix for private symbols
+- Use `hive-mcp-` prefix for all public symbols
+- Use `hive-mcp--` prefix for private symbols
 - Document all public functions with docstrings
 
 ## Commit Messages

@@ -8,7 +8,7 @@ The bidirectional channel provides **push-based event communication** between th
 ┌─────────────────┐                      ┌─────────────────┐
 │     Emacs       │◄────── Push ────────►│    Clojure      │
 │                 │                      │   MCP Server    │
-│ emacs-mcp-      │   TCP Port 9999      │                 │
+│ hive-mcp-      │   TCP Port 9999      │                 │
 │ channel.el      │   Bencode Format     │ channel.clj     │
 └─────────────────┘                      └─────────────────┘
 ```
@@ -39,7 +39,7 @@ Decodes to:
 (("message" . "Hello World!") ("type" . "test-event"))
 ```
 
-### Clojure Side (`src/emacs_mcp/channel.clj`)
+### Clojure Side (`src/hive_mcp/channel.clj`)
 
 **Key Functions:**
 
@@ -73,33 +73,33 @@ Decodes to:
 ;;     :running #<Atom true>}
 ```
 
-### Emacs Side (`elisp/emacs-mcp-channel.el`)
+### Emacs Side (`elisp/hive-mcp-channel.el`)
 
 **Key Functions:**
 
 ```elisp
 ;; Connect to Clojure server
-(setq emacs-mcp-channel-type 'tcp)
-(setq emacs-mcp-channel-port 9999)
-(emacs-mcp-channel-connect)
+(setq hive-mcp-channel-type 'tcp)
+(setq hive-mcp-channel-port 9999)
+(hive-mcp-channel-connect)
 
 ;; Check connection
-(emacs-mcp-channel-connected-p) ;; => t
+(hive-mcp-channel-connected-p) ;; => t
 
 ;; Send message TO Clojure
-(emacs-mcp-channel-send '(("type" . "emacs-ping")
+(hive-mcp-channel-send '(("type" . "emacs-ping")
                           ("message" . "Hello from Emacs!")))
 
 ;; Register handler for events FROM Clojure
-(emacs-mcp-channel-on :task-completed
+(hive-mcp-channel-on :task-completed
   (lambda (msg)
     (message "Task %s completed!" (cdr (assoc "task-id" msg)))))
 
 ;; Get recent events (automatically stored)
-(emacs-mcp-channel-get-recent-events 10)
+(hive-mcp-channel-get-recent-events 10)
 
 ;; Disconnect
-(emacs-mcp-channel-disconnect)
+(hive-mcp-channel-disconnect)
 ```
 
 ## Event Flow
@@ -110,17 +110,17 @@ Decodes to:
 1. Clojure: (broadcast! {:type "hivemind-hello" :message "Hi!"})
 2. Server encodes to bencode, sends to all clients
 3. Emacs process-filter receives data
-4. emacs-mcp-channel--decode parses bencode
-5. emacs-mcp-channel--dispatch routes to handlers
+4. hive-mcp-channel--decode parses bencode
+5. hive-mcp-channel--dispatch routes to handlers
 6. Registered handlers receive the message
-7. Default handler stores in emacs-mcp-channel--recent-events
+7. Default handler stores in hive-mcp-channel--recent-events
 ```
 
 ### Emacs → Clojure (Client Messages)
 
 ```
-1. Emacs: (emacs-mcp-channel-send '(("type" . "emacs-ping")))
-2. emacs-mcp-channel--encode converts to bencode
+1. Emacs: (hive-mcp-channel-send '(("type" . "emacs-ping")))
+2. hive-mcp-channel--encode converts to bencode
 3. Sent via process-send-string
 4. Clojure handle-client go-loop receives via recv!
 5. Message published to event-bus with (publish!)
@@ -132,11 +132,11 @@ Decodes to:
 The swarm system uses the channel for real-time coordination:
 
 ```elisp
-;; In emacs-mcp-swarm.el
-(defun emacs-mcp-swarm--emit-event (event-type data)
+;; In hive-mcp-swarm.el
+(defun hive-mcp-swarm--emit-event (event-type data)
   "Emit EVENT-TYPE with DATA through the channel if connected."
-  (when (emacs-mcp-swarm--channel-available-p)
-    (emacs-mcp-channel-send
+  (when (hive-mcp-swarm--channel-available-p)
+    (hive-mcp-channel-send
      `(("type" . ,event-type)
        ("timestamp" . ,(float-time))
        ,@data))))
@@ -155,25 +155,25 @@ The swarm system uses the channel for real-time coordination:
 
 ```elisp
 ;; Channel transport (unix or tcp)
-(setq emacs-mcp-channel-type 'tcp)
+(setq hive-mcp-channel-type 'tcp)
 
 ;; TCP settings
-(setq emacs-mcp-channel-host "localhost")
-(setq emacs-mcp-channel-port 9999)
+(setq hive-mcp-channel-host "localhost")
+(setq hive-mcp-channel-port 9999)
 
 ;; Unix socket settings
-(setq emacs-mcp-channel-socket-path "/tmp/emacs-mcp-channel.sock")
+(setq hive-mcp-channel-socket-path "/tmp/hive-mcp-channel.sock")
 
 ;; Auto-reconnect settings
-(setq emacs-mcp-channel-reconnect-interval 5.0)
-(setq emacs-mcp-channel-max-reconnects 10)
+(setq hive-mcp-channel-reconnect-interval 5.0)
+(setq hive-mcp-channel-max-reconnects 10)
 
 ;; Auto-connect on load (optional)
-(setq emacs-mcp-channel-auto-connect t)
-(emacs-mcp-channel-setup-auto-connect)
+(setq hive-mcp-channel-auto-connect t)
+(hive-mcp-channel-setup-auto-connect)
 
 ;; Event history size
-(setq emacs-mcp-channel-event-history-size 100)
+(setq hive-mcp-channel-event-history-size 100)
 ```
 
 ### Clojure Configuration
@@ -201,7 +201,7 @@ The server starts automatically when the MCP server starts (in `server.clj`):
 ### Check Server Status (Clojure)
 
 ```clojure
-(let [state @(var-get #'emacs-mcp.channel/server-state)]
+(let [state @(var-get #'hive-mcp.channel/server-state)]
   {:running @(:running state)
    :client-count (count @(:clients state))
    :port (:port state)})
@@ -210,9 +210,9 @@ The server starts automatically when the MCP server starts (in `server.clj`):
 ### Check Connection (Emacs)
 
 ```elisp
-(list :connected (emacs-mcp-channel-connected-p)
-      :process emacs-mcp-channel--process
-      :recent-events (length emacs-mcp-channel--recent-events))
+(list :connected (hive-mcp-channel-connected-p)
+      :process hive-mcp-channel--process
+      :recent-events (length hive-mcp-channel--recent-events))
 ```
 
 ### Check Port Binding (Shell)
@@ -224,7 +224,7 @@ ss -tlnp | grep 9999
 ### View Recent Events (Emacs)
 
 ```elisp
-(emacs-mcp-channel-get-recent-events 5)
+(hive-mcp-channel-get-recent-events 5)
 ;; Returns list of (TIMESTAMP . EVENT-ALIST)
 ```
 
@@ -239,10 +239,10 @@ The previous server socket wasn't properly closed. Either:
 
 ### Messages Not Received
 
-1. Check connection: `(emacs-mcp-channel-connected-p)`
-2. Check handlers: `emacs-mcp-channel--handlers`
-3. Check buffer: `emacs-mcp-channel--buffer`
-4. Check decoder: Test with `(emacs-mcp-channel--decode "d4:type4:teste")`
+1. Check connection: `(hive-mcp-channel-connected-p)`
+2. Check handlers: `hive-mcp-channel--handlers`
+3. Check buffer: `hive-mcp-channel--buffer`
+4. Check decoder: Test with `(hive-mcp-channel--decode "d4:type4:teste")`
 
 ### Broken Pipe Errors
 
@@ -286,10 +286,10 @@ All messages MUST have a `type` field:
 
 | File | Purpose |
 |------|---------|
-| `src/emacs_mcp/channel.clj` | Clojure server implementation |
-| `elisp/emacs-mcp-channel.el` | Emacs client implementation |
-| `elisp/addons/emacs-mcp-swarm.el` | Swarm integration (uses channel) |
-| `test/emacs_mcp/channel_test.clj` | Clojure tests |
+| `src/hive_mcp/channel.clj` | Clojure server implementation |
+| `elisp/hive-mcp-channel.el` | Emacs client implementation |
+| `elisp/addons/hive-mcp-swarm.el` | Swarm integration (uses channel) |
+| `test/hive_mcp/channel_test.clj` | Clojure tests |
 
 ## Version History
 
