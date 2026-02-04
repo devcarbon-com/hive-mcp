@@ -136,6 +136,34 @@ mcp_memory_add(
 This feedback improves the swarm tools for all agents."
   "Footer injected into all presets to ensure lings auto-shout on completion.")
 
+(defconst hive-mcp-swarm-presets--lazy-instructions
+  "## Presets Available (Lazy-Loaded)
+
+Your coordinator has assigned these presets: %s
+
+**CRITICAL: Fetch your assigned presets IMMEDIATELY at session start:**
+
+```
+preset(command: \"get\", name: \"<preset-name>\")
+```
+
+For quick summary (~200 tokens):
+```
+preset(command: \"core\", name: \"<preset-name>\")
+```
+
+**Workflow:**
+1. Fetch each assigned preset via `preset(command: 'get', name: ...)`
+2. Read and internalize the instructions
+3. Follow the preset rules throughout your session
+
+**Search for additional presets:**
+```
+preset(command: \"search\", query: \"<description>\")
+preset(command: \"list_slim\")
+```"
+  "Instructions injected when lazy mode is active.")
+
 ;;;; File-Based Presets:
 
 (defun hive-mcp-swarm-presets--scan-dir (dir)
@@ -291,8 +319,8 @@ Memory-based presets allow project-scoped and semantically searchable presets."
   "Merge EXPLICIT-PRESETS with default presets and task-detected presets.
 When TASK-DESCRIPTION is provided, auto-detect and inject relevant presets
 \(e.g., SAA preset for Silence/Abstract/Act workflow tasks\).
-Returns combined list with explicit presets first, then task-detected, then defaults.
-Duplicates are removed, preserving first occurrence (explicit wins)."
+Returns combined list: explicit first, then task-detected, then defaults.
+Duplicates removed, preserving first occurrence (explicit wins)."
   (let ((defaults (or hive-mcp-swarm-default-presets '()))
         (task-presets (when task-description
                         (hive-mcp-swarm-presets-detect-from-task task-description))))
@@ -328,16 +356,10 @@ overrides via memory, and file-based fallback."
       (hive-mcp-swarm-presets--get-memory-content name)
       (hive-mcp-swarm-presets--get-file-content name)))
 
-(defun hive-mcp-swarm-presets-build-system-prompt (presets &optional injected-context)
-  "Build combined system prompt from list of PRESETS.
-Returns concatenated content with separator and auto-shout footer,
-or nil if no presets found.  The footer ensures lings automatically
-call hivemind_shout when they complete tasks.
-
-When INJECTED-CONTEXT is non-nil, prepend it as a
-\"## Project Context (Auto-Injected)\" section before the preset content.
-This implements Architecture > LLM behavior: context injected at spawn
-rather than relying on lings to /catchup themselves."
+(defun hive-mcp-swarm-presets--build-full-prompt (presets injected-context)
+  "Build full system prompt by concatenating PRESETS content.
+INJECTED-CONTEXT is prepended if non-nil.
+Internal helper for `hive-mcp-swarm-presets-build-system-prompt'."
   (let ((contents '()))
     (dolist (preset presets)
       (when-let* ((content (hive-mcp-swarm-presets-get preset)))
@@ -351,6 +373,62 @@ rather than relying on lings to /catchup themselves."
            (concat injected-context "\n\n---\n\n"))
          (or preset-body "")
          hive-mcp-swarm-presets--auto-shout-footer)))))
+
+(defun hive-mcp-swarm-presets--build-lazy-prompt (presets &optional injected-context)
+  "Build lightweight system prompt with preset names only.
+PRESETS is a list of preset names.
+INJECTED-CONTEXT is optional catchup context.
+Returns ~300 token prompt instead of ~5K full content."
+  (let ((preset-names (string-join presets ", ")))
+    (concat
+     (when injected-context
+       (concat injected-context "\n\n---\n\n"))
+     (format hive-mcp-swarm-presets--lazy-instructions preset-names)
+     hive-mcp-swarm-presets--auto-shout-footer)))
+
+(defun hive-mcp-swarm-presets--fetch-lazy-header (presets)
+  "Fetch lazy header for PRESETS via MCP tool.
+Returns header string or nil if unavailable."
+  (condition-case err
+      (when (fboundp 'hive-mcp-api-call-tool)
+        (let ((result (hive-mcp-api-call-tool
+                       "preset"
+                       `(:command "header" :presets ,presets :lazy t))))
+          (when (and result (not (plist-get result :error)))
+            (plist-get result :header))))
+    (error
+     (message "hive-mcp-swarm-presets: Lazy header fetch failed: %s" err)
+     nil)))
+
+(defun hive-mcp-swarm-presets-build-system-prompt (presets &optional injected-context)
+  "Build combined system prompt from list of PRESETS.
+When `hive-mcp-swarm-presets-lazy-mode' is non-nil, returns lightweight
+prompt with preset names and fetch instructions (~300 tokens).
+Otherwise, returns full preset content concatenated (~5K+ tokens).
+
+Returns concatenated content with separator and auto-shout footer,
+or nil if no presets found.  The footer ensures lings automatically
+call hivemind_shout when they complete tasks.
+
+When INJECTED-CONTEXT is non-nil, prepend it as a
+\"## Project Context (Auto-Injected)\" section before the preset content.
+This implements Architecture > LLM behavior: context injected at spawn
+rather than relying on lings to /catchup themselves."
+  (if hive-mcp-swarm-presets-lazy-mode
+      ;; Lazy mode: try MCP tool first, fallback to local Elisp builder
+      (when (or presets injected-context)
+        (let ((header (when presets
+                        (hive-mcp-swarm-presets--fetch-lazy-header presets))))
+          (if header
+              (concat
+               (when injected-context
+                 (concat injected-context "\n\n---\n\n"))
+               header
+               hive-mcp-swarm-presets--auto-shout-footer)
+            ;; Fallback to local lazy prompt builder (not full mode!)
+            (hive-mcp-swarm-presets--build-lazy-prompt presets injected-context))))
+    ;; Full mode: current behavior (concatenate content)
+    (hive-mcp-swarm-presets--build-full-prompt presets injected-context)))
 
 (defun hive-mcp-swarm-presets-add-custom-dir (dir)
   "Add DIR to custom preset directories and reload."
