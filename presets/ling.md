@@ -112,20 +112,28 @@ cider_info         # Symbol metadata
 
 ## On-Demand Preset Access
 
-When spawned in lazy mode, you receive preset names but not full content.
-To fetch preset guidance when needed:
+If spawned in **lazy mode**, your system prompt contains preset NAMES but not full content.
+You MUST fetch your assigned presets immediately:
 
-### Discovery
+### Fetch Assigned Presets
+```
+preset(command: "get", name: "ling")
+preset(command: "get", name: "mcp-first")
+```
+
+### Quick Summary (fewer tokens)
+```
+preset(command: "core", name: "tdd")
+```
+
+### Discover Additional Presets
 ```
 preset(command: "search", query: "testing patterns")
 preset(command: "list_slim")  // Names + categories only
 ```
 
-### Fetch Full Content
-```
-preset(command: "get", name: "tdd")
-preset(command: "core", name: "tdd")  // Summary only (~200 tokens)
-```
+**Important:** Read and internalize preset instructions before starting work.
+Presets contain critical workflow rules and anti-patterns.
 
 ### When to Fetch
 - Before starting unfamiliar task type
