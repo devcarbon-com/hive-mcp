@@ -91,6 +91,23 @@
                                            :kg_edges_removed (or edges-removed 0)})})))
 
 ;; ============================================================
+;; Expire (Delete) Handler
+;; ============================================================
+
+(defn handle-expire
+  "Force-expire (delete) a memory entry by ID.
+   Also cleans up KG edges for the deleted entry."
+  [{:keys [id]}]
+  (log/info "mcp-memory-expire:" id)
+  (with-entry [_entry id]
+    (let [edges-removed (kg-edges/remove-edges-for-node! id)]
+      (chroma/delete-entry! id)
+      (when (pos? edges-removed)
+        (log/info "Cleaned up" edges-removed "KG edges for expired entry" id))
+      {:type "text" :text (json/write-str {:expired id
+                                           :kg_edges_removed edges-removed})})))
+
+;; ============================================================
 ;; Expiring Soon Handler
 ;; ============================================================
 

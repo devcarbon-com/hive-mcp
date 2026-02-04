@@ -544,21 +544,43 @@
 
 (deftest test-validate-diff-path-detects-cross-project-escape
   (testing "Absolute path from project A fails validation against project B root"
-    ;; This was the original bug - drone working on /home/lages/PP/arara
-    ;; but MCP server at /home/lages/dotfiles/gitthings/hive-mcp
-    (let [result (diff/validate-diff-path
-                  "/home/lages/PP/arara/internal/config.go"
-                  "/home/lages/dotfiles/gitthings/hive-mcp")]
-      (is (not (:valid result)))
-      (is (re-find #"(?i)escapes.*project" (:error result)))))
+    ;; This was the original bug - drone working on one project
+    ;; but MCP server at a different project root
+    ;; Create real temp directories to test path escaping logic
+    (let [temp-dir (System/getProperty "java.io.tmpdir")
+          project-a (str temp-dir "/test-project-a-" (System/currentTimeMillis))
+          project-b (str temp-dir "/test-project-b-" (System/currentTimeMillis))
+          test-file (str project-a "/internal/config.go")]
+      ;; Setup: create project-a with the file
+      (io/make-parents test-file)
+      (spit test-file "package config")
+      (io/make-parents (str project-b "/.keep"))
+      (try
+        (let [result (diff/validate-diff-path test-file project-b)]
+          (is (not (:valid result)))
+          (is (re-find #"(?i)escapes.*project" (:error result))))
+        (finally
+          (io/delete-file test-file true)
+          (io/delete-file (str project-a "/internal") true)
+          (io/delete-file project-a true)
+          (io/delete-file project-b true)))))
 
   (testing "Absolute path within project root is valid"
     ;; Same path validated against correct root should work
-    (let [result (diff/validate-diff-path
-                  "/home/lages/PP/arara/internal/config.go"
-                  "/home/lages/PP/arara")]
-      (is (:valid result))
-      (is (= "/home/lages/PP/arara/internal/config.go" (:resolved-path result))))))
+    (let [temp-dir (System/getProperty "java.io.tmpdir")
+          project-a (str temp-dir "/test-project-valid-" (System/currentTimeMillis))
+          test-file (str project-a "/internal/config.go")]
+      ;; Setup: create project-a with the file
+      (io/make-parents test-file)
+      (spit test-file "package config")
+      (try
+        (let [result (diff/validate-diff-path test-file project-a)]
+          (is (:valid result))
+          (is (= test-file (:resolved-path result))))
+        (finally
+          (io/delete-file test-file true)
+          (io/delete-file (str project-a "/internal") true)
+          (io/delete-file project-a true))))))
 
 (deftest test-propose-diff-uses-directory-parameter-for-path-validation
   (testing "propose_diff uses directory parameter as project root"

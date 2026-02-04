@@ -188,6 +188,28 @@ hivemind_shout(
 )
 ```
 
+## Tool Error Recovery
+
+When a tool returns `"Missing required field: X"`:
+
+1. **DO NOT ask** - infer the value
+2. **Retry IMMEDIATELY**
+
+| Missing Field | How to Infer |
+|---------------|--------------|
+| `drone_id` | Use your drone name (e.g., `"drone-validator"`) |
+| `directory` | Use the project root from your task |
+| `file_path` | The file you're proposing changes to |
+| `description` | Summarize what the diff does |
+
+**Example:**
+```
+# Error: {"error": "Missing required field: directory"}
+# → Retry: propose_diff(..., directory: "/home/user/project")
+```
+
+---
+
 ## Constraints
 
 - **No direct writes** - ONLY use propose_diff

@@ -1,15 +1,15 @@
 # Addon API Reference
 
-Complete reference for emacs-mcp addon development.
+Complete reference for hive-mcp addon development.
 
 ## Registration
 
-### `emacs-mcp-addon-register`
+### `hive-mcp-addon-register`
 
 Register an addon with the addon system.
 
 ```elisp
-(emacs-mcp-addon-register ADDON &rest PROPS)
+(hive-mcp-addon-register ADDON &rest PROPS)
 ```
 
 **ADDON**: Symbol identifying the addon (e.g., `'cider`, `'vibe-kanban`)
@@ -29,11 +29,11 @@ Register an addon with the addon system.
 **Example:**
 
 ```elisp
-(emacs-mcp-addon-register
+(hive-mcp-addon-register
  'my-addon
  :version "1.0.0"
  :description "My awesome addon"
- :requires '(emacs-mcp-api some-package)
+ :requires '(hive-mcp-api some-package)
  :provides '(my-addon-mode my-addon-transient)
  :init #'my-addon--init
  :async-init #'my-addon--async-init
@@ -84,7 +84,7 @@ Called after `:init`. Should not block Emacs.
 
 **Signature:** `(defun my-addon--shutdown ())`
 
-Called when addon is unloaded via `emacs-mcp-addon-unload`.
+Called when addon is unloaded via `hive-mcp-addon-unload`.
 
 - Cleanup is automatic for tracked processes/timers
 - Use for additional cleanup (save state, remove hooks)
@@ -100,26 +100,26 @@ Called when addon is unloaded via `emacs-mcp-addon-unload`.
 
 ## Load/Unload Functions
 
-### `emacs-mcp-addon-load`
+### `hive-mcp-addon-load`
 
 Load an addon.
 
 ```elisp
-(emacs-mcp-addon-load ADDON)
+(hive-mcp-addon-load ADDON)
 ```
 
 - Loads the addon file from addon directories
 - Calls `:init` then `:async-init`
 - Returns `t` if successful, `nil` otherwise
 
-**Interactive:** `M-x emacs-mcp-addon-load`
+**Interactive:** `M-x hive-mcp-addon-load`
 
-### `emacs-mcp-addon-unload`
+### `hive-mcp-addon-unload`
 
 Unload an addon.
 
 ```elisp
-(emacs-mcp-addon-unload ADDON)
+(hive-mcp-addon-unload ADDON)
 ```
 
 - Calls `:shutdown` hook
@@ -127,82 +127,82 @@ Unload an addon.
 - Cancels tracked timers
 - Marks addon as unloaded
 
-**Interactive:** `M-x emacs-mcp-addon-unload`
+**Interactive:** `M-x hive-mcp-addon-unload`
 
-### `emacs-mcp-addon-restart`
+### `hive-mcp-addon-restart`
 
 Restart an addon.
 
 ```elisp
-(emacs-mcp-addon-restart ADDON)
+(hive-mcp-addon-restart ADDON)
 ```
 
 Equivalent to unload + load.
 
-**Interactive:** `M-x emacs-mcp-addon-restart`
+**Interactive:** `M-x hive-mcp-addon-restart`
 
 ## Query Functions
 
-### `emacs-mcp-addon-loaded-p`
+### `hive-mcp-addon-loaded-p`
 
 Check if addon is loaded.
 
 ```elisp
-(emacs-mcp-addon-loaded-p ADDON) ; => t or nil
+(hive-mcp-addon-loaded-p ADDON) ; => t or nil
 ```
 
-### `emacs-mcp-addon-running-p`
+### `hive-mcp-addon-running-p`
 
 Check if addon has active processes or timers.
 
 ```elisp
-(emacs-mcp-addon-running-p ADDON) ; => t or nil
+(hive-mcp-addon-running-p ADDON) ; => t or nil
 ```
 
-### `emacs-mcp-addon-available-p`
+### `hive-mcp-addon-available-p`
 
 Check if addon file exists.
 
 ```elisp
-(emacs-mcp-addon-available-p ADDON) ; => t or nil
+(hive-mcp-addon-available-p ADDON) ; => t or nil
 ```
 
-### `emacs-mcp-addon-list-available`
+### `hive-mcp-addon-list-available`
 
 List all available addons.
 
 ```elisp
-(emacs-mcp-addon-list-available) ; => (cider vibe-kanban ...)
+(hive-mcp-addon-list-available) ; => (cider vibe-kanban ...)
 ```
 
-### `emacs-mcp-addon-list-loaded`
+### `hive-mcp-addon-list-loaded`
 
 List currently loaded addons.
 
 ```elisp
-(emacs-mcp-addon-list-loaded) ; => (cider ...)
+(hive-mcp-addon-list-loaded) ; => (cider ...)
 ```
 
 ## Process/Timer Management
 
-### `emacs-mcp-addon-register-process`
+### `hive-mcp-addon-register-process`
 
 Register a process for lifecycle tracking.
 
 ```elisp
-(emacs-mcp-addon-register-process ADDON PROCESS)
+(hive-mcp-addon-register-process ADDON PROCESS)
 ```
 
 Processes are automatically killed on addon unload.
 
 **Note:** Returning a process from `:async-init` auto-registers it.
 
-### `emacs-mcp-addon-register-timer`
+### `hive-mcp-addon-register-timer`
 
 Register a timer for lifecycle tracking.
 
 ```elisp
-(emacs-mcp-addon-register-timer ADDON TIMER)
+(hive-mcp-addon-register-timer ADDON TIMER)
 ```
 
 Timers are automatically cancelled on addon unload.
@@ -211,25 +211,25 @@ Timers are automatically cancelled on addon unload.
 
 ```elisp
 (let ((timer (run-with-timer 1 1 #'my-tick)))
-  (emacs-mcp-addon-register-timer 'my-addon timer))
+  (hive-mcp-addon-register-timer 'my-addon timer))
 ```
 
-### `emacs-mcp-addon-unregister-timer`
+### `hive-mcp-addon-unregister-timer`
 
 Unregister a timer.
 
 ```elisp
-(emacs-mcp-addon-unregister-timer ADDON TIMER)
+(hive-mcp-addon-unregister-timer ADDON TIMER)
 ```
 
 ## Auto-Loading
 
-### `emacs-mcp-addon-auto-load-list`
+### `hive-mcp-addon-auto-load-list`
 
 Customizable alist of `(ADDON . TRIGGER-FEATURE)` pairs.
 
 ```elisp
-(setq emacs-mcp-addon-auto-load-list
+(setq hive-mcp-addon-auto-load-list
       '((cider . cider)
         (org-ai . org-ai)
         (my-addon . my-package)))
@@ -237,61 +237,61 @@ Customizable alist of `(ADDON . TRIGGER-FEATURE)` pairs.
 
 When `TRIGGER-FEATURE` is loaded, `ADDON` is automatically loaded.
 
-### `emacs-mcp-addon-always-load`
+### `hive-mcp-addon-always-load`
 
 List of addons to always load on startup.
 
 ```elisp
-(setq emacs-mcp-addon-always-load '(cider vibe-kanban))
+(setq hive-mcp-addon-always-load '(cider vibe-kanban))
 ```
 
-### `emacs-mcp-addons-auto-load`
+### `hive-mcp-addons-auto-load`
 
-Enable auto-loading based on `emacs-mcp-addon-auto-load-list`.
+Enable auto-loading based on `hive-mcp-addon-auto-load-list`.
 
 ```elisp
-(emacs-mcp-addons-auto-load)
+(hive-mcp-addons-auto-load)
 ```
 
-### `emacs-mcp-addons-load-always`
+### `hive-mcp-addons-load-always`
 
-Load all addons in `emacs-mcp-addon-always-load`.
+Load all addons in `hive-mcp-addon-always-load`.
 
 ```elisp
-(emacs-mcp-addons-load-always)
+(hive-mcp-addons-load-always)
 ```
 
-### `emacs-mcp-addons-setup`
+### `hive-mcp-addons-setup`
 
 Main entry point - loads always-load addons and enables auto-loading.
 
 ```elisp
-(emacs-mcp-addons-setup)
+(hive-mcp-addons-setup)
 ```
 
-Called automatically by `emacs-mcp-initialize` when `emacs-mcp-setup-addons` is non-nil.
+Called automatically by `hive-mcp-initialize` when `hive-mcp-setup-addons` is non-nil.
 
 ## MCP API Functions
 
-Available via `(require 'emacs-mcp-api)`:
+Available via `(require 'hive-mcp-api)`:
 
-### `emacs-mcp-api-get-context`
+### `hive-mcp-api-get-context`
 
 Get current context (buffer, project, git status).
 
 ```elisp
-(emacs-mcp-api-get-context)
+(hive-mcp-api-get-context)
 ;; => (:buffer (:name "foo.el" :mode "emacs-lisp-mode")
 ;;     :project (:name "my-project" :root "/path/to/project")
 ;;     :git (:branch "main" :dirty t))
 ```
 
-### `emacs-mcp-api-memory-add`
+### `hive-mcp-api-memory-add`
 
 Add entry to persistent memory.
 
 ```elisp
-(emacs-mcp-api-memory-add TYPE CONTENT TAGS)
+(hive-mcp-api-memory-add TYPE CONTENT TAGS)
 ```
 
 - **TYPE**: "note", "snippet", "decision", etc.
@@ -301,39 +301,39 @@ Add entry to persistent memory.
 **Example:**
 
 ```elisp
-(emacs-mcp-api-memory-add "snippet" "(defn foo [])" '("clojure" "function"))
+(hive-mcp-api-memory-add "snippet" "(defn foo [])" '("clojure" "function"))
 ```
 
-### `emacs-mcp-api-memory-query`
+### `hive-mcp-api-memory-query`
 
 Query persistent memory.
 
 ```elisp
-(emacs-mcp-api-memory-query TYPE TAGS LIMIT)
+(hive-mcp-api-memory-query TYPE TAGS LIMIT)
 ```
 
 Returns vector of matching entries.
 
 ## Customization Variables
 
-### `emacs-mcp-addon-directories`
+### `hive-mcp-addon-directories`
 
 List of directories to search for addons.
 
 ```elisp
-(add-to-list 'emacs-mcp-addon-directories "~/my-addons")
+(add-to-list 'hive-mcp-addon-directories "~/my-addons")
 ```
 
-Default includes `elisp/addons/` in the emacs-mcp installation.
+Default includes `elisp/addons/` in the hive-mcp installation.
 
 ## Info Command
 
-### `emacs-mcp-addon-info`
+### `hive-mcp-addon-info`
 
 Display buffer with addon information.
 
 ```elisp
-M-x emacs-mcp-addon-info
+M-x hive-mcp-addon-info
 ```
 
 Shows:

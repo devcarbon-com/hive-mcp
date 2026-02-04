@@ -235,7 +235,7 @@
                   {:commit_msg "feat(session): complete sprint tasks"
                    :task_ids ["kanban-task-1" "kanban-task-2"]
                    :agent_id "ling-sprint-worker"
-                   :directory "/home/lages/project"})
+                   :directory "/tmp/test-project"})
           parsed (parse-mcp-response result)]
 
       (is (= "ok" (:status parsed)) "Should succeed")
@@ -295,7 +295,7 @@
           (let [result (sc/handle-session-complete
                         {:commit_msg "feat: exploration complete"
                          :agent_id "explorer-ling-test"
-                         :directory "/home/lages/test-project"})
+                         :directory "/tmp/hive-test-project"})
                 parsed (parse-mcp-response result)]
             (is (= "ok" (:status parsed)) "Should succeed")
             ;; Should indicate plan_to_kanban was triggered
@@ -321,7 +321,7 @@
       (let [result (sc/handle-session-complete
                     {:commit_msg "feat: regular work done"
                      :agent_id "worker-ling-test"
-                     :directory "/home/lages/test-project"})
+                     :directory "/tmp/hive-test-project"})
             parsed (parse-mcp-response result)]
         (is (= "ok" (:status parsed)) "Should succeed")
         (is (nil? (:plan_to_kanban_triggered parsed))
@@ -343,7 +343,7 @@
           (let [result (sc/handle-session-complete
                         {:commit_msg "feat: explore with disabled trigger"
                          :agent_id "explorer-disabled-test"
-                         :directory "/home/lages/test-project"})
+                         :directory "/tmp/hive-test-project"})
                 parsed (parse-mcp-response result)]
             (is (= "ok" (:status parsed)) "Should succeed")
             (is (nil? (:plan_to_kanban_triggered parsed))
@@ -365,7 +365,7 @@
       (let [result (sc/handle-session-complete
                     {:commit_msg "feat: explored but no plan"
                      :agent_id "explorer-no-plan-test"
-                     :directory "/home/lages/test-project"})
+                     :directory "/tmp/hive-test-project"})
             parsed (parse-mcp-response result)]
         (is (= "ok" (:status parsed)) "Should succeed even without plan")
         (is (nil? (:plan_to_kanban_triggered parsed))

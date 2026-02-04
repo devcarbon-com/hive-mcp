@@ -16,7 +16,7 @@ The Swarm Protocol defines communication between a **Master Claude** (orchestrat
                          │ MCP Protocol
                          v
 ┌─────────────────────────────────────────────────────────────┐
-│                 emacs-mcp-swarm.el                          │
+│                 hive-mcp-swarm.el                          │
 │              (Orchestration Layer)                          │
 │                                                             │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
@@ -313,9 +313,9 @@ The orchestrator watches for these patterns in the slave's buffer:
 ### Response Collection Method
 
 ```elisp
-(defun emacs-mcp-swarm--collect-response (slave-id)
+(defun hive-mcp-swarm--collect-response (slave-id)
   "Collect response from SLAVE-ID buffer."
-  (let* ((slave (emacs-mcp-swarm--get-slave slave-id))
+  (let* ((slave (hive-mcp-swarm--get-slave slave-id))
          (buffer (plist-get slave :buffer))
          (task-start (plist-get slave :task-start-marker)))
     (with-current-buffer buffer
@@ -532,7 +532,7 @@ On master session end or explicit cleanup:
 
 ```elisp
 ;; Slave registry
-(defvar emacs-mcp-swarm--slaves (make-hash-table :test 'equal)
+(defvar hive-mcp-swarm--slaves (make-hash-table :test 'equal)
   "Hash table of slave-id -> slave-plist.")
 
 ;; Slave plist structure

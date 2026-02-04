@@ -2,11 +2,11 @@
 
 ## What Was Added
 
-Following the CLARITY principle "Telemetry first - observability is essential", comprehensive telemetry has been added to all evaluation operations in emacs-mcp.
+Following the CLARITY principle "Telemetry first - observability is essential", comprehensive telemetry has been added to all evaluation operations in hive-mcp.
 
 ## Files Created
 
-1. **`src/emacs_mcp/telemetry.clj`** - Core telemetry utilities
+1. **`src/hive_mcp/telemetry.clj`** - Core telemetry utilities
    - `with-timing` - Macro for timing operations
    - `log-eval-request` - Log evaluation requests
    - `log-eval-result` - Log success/failure
@@ -14,7 +14,7 @@ Following the CLARITY principle "Telemetry first - observability is essential", 
    - `with-eval-telemetry` - Complete wrapper for evaluations
    - `configure-logging!` - Configure Timbre logging
 
-2. **`test/emacs_mcp/telemetry_test.clj`** - Comprehensive test suite
+2. **`test/hive_mcp/telemetry_test.clj`** - Comprehensive test suite
    - Tests for all telemetry functions
    - Examples of usage patterns
    - Verification of log output structure
@@ -27,13 +27,13 @@ Following the CLARITY principle "Telemetry first - observability is essential", 
 
 ## Files Modified
 
-1. **`src/emacs_mcp/tools.clj`**
-   - Added `emacs-mcp.telemetry` require
+1. **`src/hive_mcp/tools.clj`**
+   - Added `hive-mcp.telemetry` require
    - Wrapped `handle-eval-elisp` with telemetry
    - Wrapped `handle-cider-eval-silent` with telemetry
    - Wrapped `handle-cider-eval-explicit` with telemetry
 
-2. **`src/emacs_mcp/emacsclient.clj`**
+2. **`src/hive_mcp/emacsclient.clj`**
    - Enhanced `eval-elisp` to include timing information
    - Added structured logging for success/failure/exceptions
    - Returns duration-ms in result map
@@ -42,7 +42,7 @@ Following the CLARITY principle "Telemetry first - observability is essential", 
 
 ### Basic Timing
 ```clojure
-(require '[emacs-mcp.telemetry :as telemetry])
+(require '[hive-mcp.telemetry :as telemetry])
 
 (telemetry/with-timing "my-operation"
   (expensive-computation))
@@ -95,9 +95,9 @@ For every evaluation operation, you now get:
 ## Example Log Output
 
 ```
-info [emacs-mcp.tools] :eval-request {:mode :elisp, :code-length 13, :code-preview "(buffer-list)"}
-debug [emacs-mcp.emacsclient] :emacsclient-success {:duration-ms 12, :result-length 156}
-info [emacs-mcp.tools] :eval-success {:duration-ms 12, :result-length 156}
+info [hive-mcp.tools] :eval-request {:mode :elisp, :code-length 13, :code-preview "(buffer-list)"}
+debug [hive-mcp.emacsclient] :emacsclient-success {:duration-ms 12, :result-length 156}
+info [hive-mcp.tools] :eval-success {:duration-ms 12, :result-length 156}
 ```
 
 ## Benefits
@@ -113,22 +113,22 @@ info [emacs-mcp.tools] :eval-success {:duration-ms 12, :result-length 156}
 Run the test suite to verify everything works:
 
 ```bash
-clojure -M:test -n emacs-mcp.telemetry-test
+clojure -M:test -n hive-mcp.telemetry-test
 ```
 
 ## Integration
 
 The telemetry is automatically active in:
 - `eval-elisp` tool
-- `cider-eval-silent` tool (if emacs-mcp-cider is loaded)
-- `cider-eval-explicit` tool (if emacs-mcp-cider is loaded)
+- `cider-eval-silent` tool (if hive-mcp-cider is loaded)
+- `cider-eval-explicit` tool (if hive-mcp-cider is loaded)
 
 No configuration required - it works out of the box with sensible defaults (`:info` level).
 
 ## Next Steps
 
 1. Review `doc/telemetry.md` for complete API documentation
-2. Check `test/emacs_mcp/telemetry_test.clj` for usage examples
+2. Check `test/hive_mcp/telemetry_test.clj` for usage examples
 3. Customize logging configuration if needed
 4. Add metadata to track user sessions or other context
 

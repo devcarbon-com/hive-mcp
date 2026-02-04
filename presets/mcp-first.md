@@ -75,6 +75,39 @@ mcp__emacs__mcp_memory_search_semantic - Semantic search
 6. Git:         mcp__emacs__magit_* (status/stage/commit)
 ```
 
+## Tool Error Recovery
+
+When an MCP tool returns `"Missing required field: X"`:
+
+1. **DO NOT ask the user** - infer the value
+2. **Retry IMMEDIATELY** with the missing field
+
+### Common Inferences
+
+| Missing Field | Inference Strategy |
+|---------------|-------------------|
+| `directory` | Your current working directory (`$PWD`) |
+| `path` | The file you're working on or last read |
+| `agent_id` | Your `$CLAUDE_SWARM_SLAVE_ID` |
+| `commit_msg` | Summarize your recent work |
+| `buffer_name` | The file path you want to read |
+
+### Example
+
+```
+# Error: {"error": "Missing required field: directory"}
+
+# WRONG - Ask user
+"What directory?"
+
+# RIGHT - Infer and retry
+mcp__emacs__magit_status(directory: "/home/user/project")
+```
+
+**Principle**: Required fields usually have obvious values from context. Only ask when genuinely ambiguous.
+
+---
+
 ## Anti-Patterns (AVOID)
 
 ```

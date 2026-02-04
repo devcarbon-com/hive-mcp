@@ -95,10 +95,10 @@ The **hivemind** is the collective coordination layer that:
 ### Layer 1: Emacs (Elisp) - User Interface & Terminal Management
 
 ```elisp
-;; emacs-mcp-swarm.el - Terminal orchestration
-(emacs-mcp-swarm-spawn "worker" :presets '("hivemind" "tdd"))
-(emacs-mcp-swarm-dispatch slave-id "Run all tests")
-(emacs-mcp-swarm-collect task-id)
+;; hive-mcp-swarm.el - Terminal orchestration
+(hive-mcp-swarm-spawn "worker" :presets '("hivemind" "tdd"))
+(hive-mcp-swarm-dispatch slave-id "Run all tests")
+(hive-mcp-swarm-collect task-id)
 ```
 
 **Responsibilities:**
@@ -234,7 +234,7 @@ Agent                    Hivemind                    Coordinator
 ### Spawning Agents
 
 ```
-Master Claude ──> swarm_spawn ──> emacs-mcp-swarm.el
+Master Claude ──> swarm_spawn ──> hive-mcp-swarm.el
                                          │
                                          ▼
                               ┌──────────────────┐
@@ -261,7 +261,7 @@ Presets are markdown files that configure agent behavior:
 
 **Preset stacking:** Agents can load multiple presets:
 ```elisp
-(emacs-mcp-swarm-spawn "worker" :presets '("hivemind" "tdd" "clarity"))
+(hive-mcp-swarm-spawn "worker" :presets '("hivemind" "tdd" "clarity"))
 ```
 
 ### Task Dispatch
@@ -424,9 +424,9 @@ Agent ──> polls ──> ?         Agent ──> shout ──> Channel
 ┌─────────────────────────────────────────────────────────────┐
 │                         Emacs                                │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │            emacs-mcp-channel.el                      │    │
+│  │            hive-mcp-channel.el                      │    │
 │  │                                                      │    │
-│  │  (emacs-mcp-channel-on :task-completed              │    │
+│  │  (hive-mcp-channel-on :task-completed              │    │
 │  │    (lambda (event)                                  │    │
 │  │      (message "Task %s done!" (alist-get 'task-id   │    │
 │  │                                           event)))) │    │
@@ -454,7 +454,7 @@ Agent ──> polls ──> ?         Agent ──> shout ──> Channel
 
 **Emacs (subscribe):**
 ```elisp
-(emacs-mcp-channel-on :custom-event
+(hive-mcp-channel-on :custom-event
   (lambda (event)
     (message "Got: %s" (alist-get 'data event))))
 ```
@@ -719,8 +719,8 @@ Orphaned JVM processes from crashed agents:
 ## File Structure
 
 ```
-emacs-mcp/
-├── src/emacs_mcp/
+hive-mcp/
+├── src/hive_mcp/
 │   ├── hivemind.clj          # Agent coordination (shout/ask/respond)
 │   ├── channel.clj           # Bidirectional TCP channel
 │   └── swarm/
@@ -729,8 +729,8 @@ emacs-mcp/
 │       ├── hive.clj          # Memory integration
 │       └── sync.clj          # Channel → Logic sync
 ├── elisp/addons/
-│   ├── emacs-mcp-swarm.el    # Terminal orchestration
-│   └── emacs-mcp-channel.el  # Emacs channel client
+│   ├── hive-mcp-swarm.el    # Terminal orchestration
+│   └── hive-mcp-channel.el  # Emacs channel client
 └── elisp/presets/
     ├── hivemind.md           # Hivemind agent preset
     ├── tdd.md                # Test-driven development
@@ -746,8 +746,8 @@ emacs-mcp/
 
 ```elisp
 ;; Emacs
-(require 'emacs-mcp-swarm)
-(emacs-mcp-swarm-mode 1)
+(require 'hive-mcp-swarm)
+(hive-mcp-swarm-mode 1)
 ```
 
 ### 2. Connect Channel

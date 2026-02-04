@@ -1,10 +1,10 @@
-# PROJECT_SUMMARY.md - emacs-mcp
+# PROJECT_SUMMARY.md - hive-mcp
 
 > **For LLM Assistants**: This summary provides essential context for understanding and working with this codebase. Scan through section headers to find relevant areas for your task.
 
 ## Overview
 
-**emacs-mcp** is a Model Context Protocol (MCP) server that enables Claude to interact with a running Emacs instance. It provides bidirectional integration between Claude and Emacs through:
+**hive-mcp** is a Model Context Protocol (MCP) server that enables Claude to interact with a running Emacs instance. It provides bidirectional integration between Claude and Emacs through:
 
 1. **Clojure MCP Server** - Communicates with Claude via STDIO, executes commands in Emacs via `emacsclient`
 2. **Emacs Lisp Package** - Provides memory, context gathering, workflows, and UI for users
@@ -13,8 +13,8 @@
 ## Project Structure
 
 ```
-emacs-mcp/
-├── src/emacs_mcp/           # Clojure MCP server
+hive-mcp/
+├── src/hive_mcp/           # Clojure MCP server
 │   ├── server.clj           # MCP server entry point
 │   ├── tools.clj            # MCP tool handlers (50+ tools)
 │   ├── emacsclient.clj      # Shell wrapper for emacsclient
@@ -31,18 +31,18 @@ emacs-mcp/
 │       └── render.clj       # Kanban board rendering (OCP)
 │
 ├── elisp/                   # Emacs Lisp package
-│   ├── emacs-mcp.el         # Main entry, minor mode
-│   ├── emacs-mcp-memory.el  # Persistent JSON storage per-project
-│   ├── emacs-mcp-context.el # Buffer/project/git context gathering
-│   ├── emacs-mcp-api.el     # Stable API for Claude calls
-│   ├── emacs-mcp-workflows.el  # Multi-step automations
-│   ├── emacs-mcp-triggers.el   # Keybindings and hooks
-│   ├── emacs-mcp-addons.el     # Lazy-load addon system
-│   ├── emacs-mcp-transient.el  # Transient UI menus
+│   ├── hive-mcp.el         # Main entry, minor mode
+│   ├── hive-mcp-memory.el  # Persistent JSON storage per-project
+│   ├── hive-mcp-context.el # Buffer/project/git context gathering
+│   ├── hive-mcp-api.el     # Stable API for Claude calls
+│   ├── hive-mcp-workflows.el  # Multi-step automations
+│   ├── hive-mcp-triggers.el   # Keybindings and hooks
+│   ├── hive-mcp-addons.el     # Lazy-load addon system
+│   ├── hive-mcp-transient.el  # Transient UI menus
 │   └── addons/              # Modular integrations
-│       ├── emacs-mcp-cider.el      # CIDER nREPL integration
-│       ├── emacs-mcp-org-kanban.el # Interactive kanban board
-│       ├── emacs-mcp-swarm.el      # Multi-agent orchestration
+│       ├── hive-mcp-cider.el      # CIDER nREPL integration
+│       ├── hive-mcp-org-kanban.el # Interactive kanban board
+│       ├── hive-mcp-swarm.el      # Multi-agent orchestration
 │       └── ...
 │
 ├── test/                    # Clojure tests
@@ -174,14 +174,14 @@ Emacs requirements: Emacs 28.1+, transient 0.4.0+
 
 **Categories**: coding, debug, planning, meta, research, config, workflow, architecture
 **Quality Ratings**: success, partial, failure, untested
-**Storage**: `~/.emacs.d/emacs-mcp/prompts.org` (org-mode format)
+**Storage**: `~/.emacs.d/hive-mcp/prompts.org` (org-mode format)
 
 ## Prompt Capture Library Architecture
 
 Clojure-native prompt engineering knowledge base for RAG:
 
 ```clojure
-(require '[emacs-mcp.prompt-capture :as pc])
+(require '[hive-mcp.prompt-capture :as pc])
 
 ;; Capture a prompt with full analysis
 (pc/capture-prompt 
@@ -229,26 +229,26 @@ Native Clojure org-mode parser with immutable data structures:
 
 ```clojure
 ;; Parse
-(require '[emacs-mcp.org-clj.parser :as parser])
+(require '[hive-mcp.org-clj.parser :as parser])
 (def doc (parser/parse-document (slurp "file.org")))
 
 ;; Query
-(require '[emacs-mcp.org-clj.query :as query])
+(require '[hive-mcp.org-clj.query :as query])
 (query/find-by-status doc "TODO")
 (query/find-by-property doc :ID "abc123")
 (query/task-stats doc) ; => {:total 10 :todo 3 :in-progress 2 :done 5}
 
 ;; Transform (immutable - returns new document)
-(require '[emacs-mcp.org-clj.transform :as transform])
+(require '[hive-mcp.org-clj.transform :as transform])
 (transform/set-status doc "id123" "DONE")
 (transform/add-tag doc "id123" "urgent")
 
 ;; Write back
-(require '[emacs-mcp.org-clj.writer :as writer])
+(require '[hive-mcp.org-clj.writer :as writer])
 (writer/write-document-to-file updated-doc "file.org")
 
 ;; Render kanban board
-(require '[emacs-mcp.org-clj.render :as render])
+(require '[hive-mcp.org-clj.render :as render])
 (println (render/render-to-terminal "kanban.org"))
 ```
 
@@ -271,10 +271,10 @@ Native Clojure org-mode parser with immutable data structures:
 ### From Claude (via MCP tools)
 ```elisp
 ;; These are called via the Clojure server's tools
-(emacs-mcp-api-get-context)           ; Full context
-(emacs-mcp-api-memory-add "note" "content" '("tag"))
-(emacs-mcp-api-memory-query "convention")
-(emacs-mcp-api-run-workflow "name")
+(hive-mcp-api-get-context)           ; Full context
+(hive-mcp-api-memory-add "note" "content" '("tag"))
+(hive-mcp-api-memory-query "convention")
+(hive-mcp-api-run-workflow "name")
 ```
 
 ### User Keybindings (C-c m prefix)
@@ -314,12 +314,12 @@ Addons are lazy-loaded when their trigger packages are detected:
   (swarm . vterm))          ; Load when vterm loads
 
 ;; Always-load addons
-(setq emacs-mcp-addon-always-load '(cider org-kanban))
+(setq hive-mcp-addon-always-load '(cider org-kanban))
 ```
 
 ### Addon Lifecycle Hooks
 ```elisp
-(emacs-mcp-addon-register
+(hive-mcp-addon-register
  'my-addon
  :version "1.0.0"
  :description "My addon"
@@ -353,7 +353,7 @@ bb mcp
 ### Test MCP Tools
 ```clojure
 ;; In REPL
-(require '[emacs-mcp.tools :as tools])
+(require '[hive-mcp.tools :as tools])
 (tools/handle-emacs-status {})
 (tools/handle-mcp-get-context {})
 ```
@@ -386,35 +386,35 @@ All org-clj transforms return new documents:
 ### Backend Abstraction (Elisp)
 The kanban addon uses `cl-defgeneric` for multiple backends:
 ```elisp
-(cl-defgeneric emacs-mcp-kanban--create-task (backend project-id title &optional description))
-(cl-defmethod emacs-mcp-kanban--create-task ((_backend (eql standalone)) ...)
-(cl-defmethod emacs-mcp-kanban--create-task ((_backend (eql vibe)) ...)
+(cl-defgeneric hive-mcp-kanban--create-task (backend project-id title &optional description))
+(cl-defmethod hive-mcp-kanban--create-task ((_backend (eql standalone)) ...)
+(cl-defmethod hive-mcp-kanban--create-task ((_backend (eql vibe)) ...)
 ```
 
 ### Auto-sync Pattern
 Board operations go through unified API for consistency:
 ```elisp
-(defun emacs-mcp-kanban-board-move-task ()
+(defun hive-mcp-kanban-board-move-task ()
   ;; Use addon API - handles auto-sync and agent tracking
-  (emacs-mcp-kanban-move-task id vibe-status))
+  (hive-mcp-kanban-move-task id vibe-status))
 ```
 
 ## Extension Points
 
 1. **New MCP Tools**: Add handler in `tools.clj`, register in `tools` vector
 2. **New org-clj Renderers**: Implement `KanbanRenderer` protocol
-3. **New Elisp Addons**: Copy `addon-template.el`, register with `emacs-mcp-addon-register`
+3. **New Elisp Addons**: Copy `addon-template.el`, register with `hive-mcp-addon-register`
 4. **New Kanban Backends**: Implement `cl-defmethod` for each generic function
-5. **New Workflows**: Register via `(emacs-mcp-workflow-register name spec)`
+5. **New Workflows**: Register via `(hive-mcp-workflow-register name spec)`
 
 ## Quick Troubleshooting
 
 | Issue | Check |
 |-------|-------|
 | Tools not working | `(handle-emacs-status _)` - Emacs server running? |
-| Memory tools fail | `(handle-mcp-capabilities _)` - emacs-mcp.el loaded? |
+| Memory tools fail | `(handle-mcp-capabilities _)` - hive-mcp.el loaded? |
 | CIDER tools fail | `(handle-cider-status _)` - CIDER connected? |
-| Kanban board empty | Verify `emacs-mcp-kanban-org-file` path |
+| Kanban board empty | Verify `hive-mcp-kanban-org-file` path |
 | Evil-mode keybindings | Board uses emacs state by default |
 
 ## Recent Session Context
@@ -425,7 +425,7 @@ Board operations go through unified API for consistency:
 - **Multi-CIDER Session Management** - Isolated REPL sessions for parallel agent work
   - 5 MCP tools: spawn, list, eval, kill, kill-all sessions
   - Port range 7920-7999 for spawned sessions
-  - Session registry in emacs-mcp-cider.el
+  - Session registry in hive-mcp-cider.el
   - Verified session isolation between agents
 - **TDD Bug Regression Suite** - 7 tests, 21 assertions
   - Fixed 4 bugs via swarm collaboration

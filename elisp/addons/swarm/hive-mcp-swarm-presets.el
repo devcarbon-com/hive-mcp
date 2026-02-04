@@ -72,6 +72,13 @@ Set to nil to disable default presets."
   :type '(repeat string)
   :group 'hive-mcp-swarm-presets)
 
+(defcustom hive-mcp-swarm-presets-lazy-mode nil
+  "When non-nil, inject preset names + query instructions instead of full content.
+Lings fetch preset content on-demand via MCP tools (preset_get, preset_search).
+This reduces spawn token overhead by 80-90%."
+  :type 'boolean
+  :group 'hive-mcp-swarm-presets)
+
 ;;;; Internal State:
 
 (defvar hive-mcp-swarm-presets--cache nil
@@ -128,6 +135,34 @@ mcp_memory_add(
 
 This feedback improves the swarm tools for all agents."
   "Footer injected into all presets to ensure lings auto-shout on completion.")
+
+(defconst hive-mcp-swarm-presets--lazy-instructions
+  "## Presets Available (Lazy-Loaded)
+
+Your coordinator has assigned these presets: %s
+
+**CRITICAL: Fetch your assigned presets IMMEDIATELY at session start:**
+
+```
+preset(command: \"get\", name: \"<preset-name>\")
+```
+
+For quick summary (~200 tokens):
+```
+preset(command: \"core\", name: \"<preset-name>\")
+```
+
+**Workflow:**
+1. Fetch each assigned preset via `preset(command: 'get', name: ...)`
+2. Read and internalize the instructions
+3. Follow the preset rules throughout your session
+
+**Search for additional presets:**
+```
+preset(command: \"search\", query: \"<description>\")
+preset(command: \"list_slim\")
+```"
+  "Instructions injected when lazy mode is active.")
 
 ;;;; File-Based Presets:
 
@@ -280,13 +315,17 @@ Memory-based presets allow project-scoped and semantically searchable presets."
 
 ;;;; Public API:
 
-(defun hive-mcp-swarm-presets-merge-defaults (explicit-presets)
-  "Merge EXPLICIT-PRESETS with default presets.
-Returns combined list with explicit presets first, then defaults.
-Duplicates are removed, preserving first occurrence (explicit wins)."
-  (let ((defaults (or hive-mcp-swarm-default-presets '())))
+(defun hive-mcp-swarm-presets-merge-defaults (explicit-presets &optional task-description)
+  "Merge EXPLICIT-PRESETS with default presets and task-detected presets.
+When TASK-DESCRIPTION is provided, auto-detect and inject relevant presets
+\(e.g., SAA preset for Silence/Abstract/Act workflow tasks\).
+Returns combined list: explicit first, then task-detected, then defaults.
+Duplicates removed, preserving first occurrence (explicit wins)."
+  (let ((defaults (or hive-mcp-swarm-default-presets '()))
+        (task-presets (when task-description
+                        (hive-mcp-swarm-presets-detect-from-task task-description))))
     (cl-remove-duplicates
-     (append explicit-presets defaults)
+     (append explicit-presets task-presets defaults)
      :test #'string=
      :from-end t)))
 
@@ -317,16 +356,10 @@ overrides via memory, and file-based fallback."
       (hive-mcp-swarm-presets--get-memory-content name)
       (hive-mcp-swarm-presets--get-file-content name)))
 
-(defun hive-mcp-swarm-presets-build-system-prompt (presets &optional injected-context)
-  "Build combined system prompt from list of PRESETS.
-Returns concatenated content with separator and auto-shout footer,
-or nil if no presets found.  The footer ensures lings automatically
-call hivemind_shout when they complete tasks.
-
-When INJECTED-CONTEXT is non-nil, prepend it as a
-\"## Project Context (Auto-Injected)\" section before the preset content.
-This implements Architecture > LLM behavior: context injected at spawn
-rather than relying on lings to /catchup themselves."
+(defun hive-mcp-swarm-presets--build-full-prompt (presets injected-context)
+  "Build full system prompt by concatenating PRESETS content.
+INJECTED-CONTEXT is prepended if non-nil.
+Internal helper for `hive-mcp-swarm-presets-build-system-prompt'."
   (let ((contents '()))
     (dolist (preset presets)
       (when-let* ((content (hive-mcp-swarm-presets-get preset)))
@@ -340,6 +373,62 @@ rather than relying on lings to /catchup themselves."
            (concat injected-context "\n\n---\n\n"))
          (or preset-body "")
          hive-mcp-swarm-presets--auto-shout-footer)))))
+
+(defun hive-mcp-swarm-presets--build-lazy-prompt (presets &optional injected-context)
+  "Build lightweight system prompt with preset names only.
+PRESETS is a list of preset names.
+INJECTED-CONTEXT is optional catchup context.
+Returns ~300 token prompt instead of ~5K full content."
+  (let ((preset-names (string-join presets ", ")))
+    (concat
+     (when injected-context
+       (concat injected-context "\n\n---\n\n"))
+     (format hive-mcp-swarm-presets--lazy-instructions preset-names)
+     hive-mcp-swarm-presets--auto-shout-footer)))
+
+(defun hive-mcp-swarm-presets--fetch-lazy-header (presets)
+  "Fetch lazy header for PRESETS via MCP tool.
+Returns header string or nil if unavailable."
+  (condition-case err
+      (when (fboundp 'hive-mcp-api-call-tool)
+        (let ((result (hive-mcp-api-call-tool
+                       "preset"
+                       `(:command "header" :presets ,presets :lazy t))))
+          (when (and result (not (plist-get result :error)))
+            (plist-get result :header))))
+    (error
+     (message "hive-mcp-swarm-presets: Lazy header fetch failed: %s" err)
+     nil)))
+
+(defun hive-mcp-swarm-presets-build-system-prompt (presets &optional injected-context)
+  "Build combined system prompt from list of PRESETS.
+When `hive-mcp-swarm-presets-lazy-mode' is non-nil, returns lightweight
+prompt with preset names and fetch instructions (~300 tokens).
+Otherwise, returns full preset content concatenated (~5K+ tokens).
+
+Returns concatenated content with separator and auto-shout footer,
+or nil if no presets found.  The footer ensures lings automatically
+call hivemind_shout when they complete tasks.
+
+When INJECTED-CONTEXT is non-nil, prepend it as a
+\"## Project Context (Auto-Injected)\" section before the preset content.
+This implements Architecture > LLM behavior: context injected at spawn
+rather than relying on lings to /catchup themselves."
+  (if hive-mcp-swarm-presets-lazy-mode
+      ;; Lazy mode: try MCP tool first, fallback to local Elisp builder
+      (when (or presets injected-context)
+        (let ((header (when presets
+                        (hive-mcp-swarm-presets--fetch-lazy-header presets))))
+          (if header
+              (concat
+               (when injected-context
+                 (concat injected-context "\n\n---\n\n"))
+               header
+               hive-mcp-swarm-presets--auto-shout-footer)
+            ;; Fallback to local lazy prompt builder (not full mode!)
+            (hive-mcp-swarm-presets--build-lazy-prompt presets injected-context))))
+    ;; Full mode: current behavior (concatenate content)
+    (hive-mcp-swarm-presets--build-full-prompt presets injected-context)))
 
 (defun hive-mcp-swarm-presets-add-custom-dir (dir)
   "Add DIR to custom preset directories and reload."
@@ -359,8 +448,19 @@ rather than relying on lings to /catchup themselves."
     ("clarity-dev" . ("clarity" "solid" "ddd" "tdd"))
     ("coordinator" . ("task-coordinator"))
     ("ling" . ("ling" "minimal"))
-    ("worker" . ("ling")))
+    ("worker" . ("ling"))
+    ;; SAA workflow roles (Silence-Abstract-Act, Korzybski methodology)
+    ;; Silence phase: grounding, exploration, territory mapping
+    ("silence" . ("saa" "explorer"))
+    ("explorer" . ("saa" "explorer"))
+    ;; Abstract phase: planning, structuring
+    ("abstract" . ("saa" "planner"))
+    ("planner" . ("saa" "planner"))
+    ;; Act phase: execution, implementation
+    ("act" . ("saa" "executor"))
+    ("executor" . ("saa" "executor")))
   "Mapping of role names to preset lists.
+SAA roles use Korzybski terminology: silence/abstract/act.
 Each entry is (ROLE . PRESETS-LIST)."
   :type '(alist :key-type string :value-type (repeat string))
   :group 'hive-mcp-swarm-presets)
@@ -403,6 +503,36 @@ Returns plist with :backend and optionally :model, or nil for default."
   "Convert ROLE to list of preset names."
   (or (cdr (assoc role hive-mcp-swarm-presets-role-mapping))
       (list role)))
+
+(defcustom hive-mcp-swarm-presets-task-patterns
+  '(;; SAA explicit mentions (Silence-Abstract-Act, Korzybski methodology)
+    ("\\bSAA\\b\\|\\bSilence[- ]Abstract[- ]Act\\b" . ("saa"))
+    ;; Silence phase: grounding, exploration, territory mapping, reading first
+    ("\\b[Ss]ilence\\b\\|\\bground\\(ing\\)?\\b\\|\\bterritory\\b\\|\\bread first\\b\\|\\bexplor\\(e\\|ation\\|ing\\)\\b" . ("saa" "explorer"))
+    ;; Abstract phase: planning, structuring, EDN plan creation
+    ("\\b[Aa]bstract\\b\\|\\bEDN plan\\b\\|\\bstructure\\b\\|\\bcreate.*plan\\b\\|\\bplan\\(ning\\)?\\b" . ("saa" "planner"))
+    ;; Act phase: execution, implementation, TDD, DAG-Wave
+    ("\\b[Aa]ct\\b\\|\\bexecut\\(e\\|ion\\)\\b\\|\\bimplement\\(ation\\)?\\b\\|\\bTDD\\b\\|\\bDAG-Wave\\b" . ("saa" "executor")))
+  "Patterns to detect SAA-related tasks and inject appropriate presets.
+SAA = Silence-Abstract-Act (Korzybski's general semantics methodology):
+- Silence: grounding in territory, exploration, reading before acting
+- Abstract: creating plans/structures from observations
+- Act: executing plans via TDD/DAG-Wave
+
+Each entry is (REGEXP . PRESETS-LIST).
+When task description matches REGEXP, PRESETS-LIST is added."
+  :type '(alist :key-type regexp :value-type (repeat string))
+  :group 'hive-mcp-swarm-presets)
+
+(defun hive-mcp-swarm-presets-detect-from-task (task-description)
+  "Detect additional presets needed based on TASK-DESCRIPTION.
+Returns list of preset names to inject, or nil if no patterns match."
+  (when task-description
+    (let ((extra-presets '()))
+      (dolist (pattern-entry hive-mcp-swarm-presets-task-patterns)
+        (when (string-match-p (car pattern-entry) task-description)
+          (setq extra-presets (append extra-presets (cdr pattern-entry)))))
+      (cl-remove-duplicates extra-presets :test #'string=))))
 
 ;;;; Lifecycle:
 

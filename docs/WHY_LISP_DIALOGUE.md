@@ -1,6 +1,6 @@
 # Why Lisp: An AI's Perspective
 
-*A candid dialogue between a human developer and Claude (Opus 4.5) during development of emacs-mcp. Unscripted, unprimed - just observations that emerged from actually building the thing.*
+*A candid dialogue between a human developer and Claude (Opus 4.5) during development of hive-mcp. Unscripted, unprimed - just observations that emerged from actually building the thing.*
 
 ---
 
@@ -14,7 +14,7 @@
 
 - The layered design (Elisp ↔ Clojure MCP ↔ Claude) is clean. Each layer has clear responsibilities.
 - The memory system with duration tiers (session → short-term → long-term → permanent) is a practical solution for context persistence across sessions.
-- The graceful degradation patterns (`emacs-mcp-with-fallback`) show maturity - things fail safely rather than explosively.
+- The graceful degradation patterns (`hive-mcp-with-fallback`) show maturity - things fail safely rather than explosively.
 
 ### What I appreciate working with:
 
@@ -63,7 +63,7 @@ vs Emacs:
 (eval elisp) → done
 ```
 
-VSCode's extension model is deliberately sandboxed. Security benefit, but you can't build `emacs-mcp` in that paradigm. You'd hit walls everywhere - can't eval arbitrary code, can't introspect arbitrary state, can't modify the editor's own behavior dynamically.
+VSCode's extension model is deliberately sandboxed. Security benefit, but you can't build `hive-mcp` in that paradigm. You'd hit walls everywhere - can't eval arbitrary code, can't introspect arbitrary state, can't modify the editor's own behavior dynamically.
 
 The irony: Lisp was dismissed as "academic" for decades. Now LLMs need exactly what Lisp provides - homoiconicity, runtime metaprogramming, data-as-code. The "weird" features are suddenly the killer features.
 
@@ -124,7 +124,7 @@ This dialogue occurred on **2026-01-01** during a development session where we:
 - Built the feature in ~3 minutes of wall-clock time
 - All because Emacs lets you eval arbitrary code at runtime
 
-The project: [emacs-mcp](https://github.com/BuddhiLW/hive-mcp) - MCP server enabling Claude to interact with a running Emacs instance.
+The project: [hive-mcp](https://github.com/BuddhiLW/hive-mcp) - MCP server enabling Claude to interact with a running Emacs instance.
 
 ---
 

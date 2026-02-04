@@ -1,14 +1,15 @@
 (ns hive-mcp.tools.consolidated.kanban
   "Consolidated Kanban CLI tool.
 
-   Subcommands: list, create, move, status
+   Subcommands: list, create, move, status, plan-to-kanban
 
    Usage via MCP: kanban {\"command\": \"list\", \"status\": \"inprogress\"}
 
    SOLID: Facade pattern - single tool entry point for Kanban operations.
    CLARITY: L - Thin adapter delegating to memory-kanban (Chroma backend)."
   (:require [hive-mcp.tools.cli :refer [make-cli-handler format-help]]
-            [hive-mcp.tools.memory-kanban :as mem-kanban]))
+            [hive-mcp.tools.memory-kanban :as mem-kanban]
+            [hive-mcp.plan.tool :as plan-tool]))
 
 ;; =============================================================================
 ;; Handlers Map - Wire commands to memory-kanban handlers (Chroma backend)
@@ -16,14 +17,15 @@
 
 (def handlers
   "Map of command keywords to handler functions."
-  {:list     mem-kanban/handle-mem-kanban-list-slim
-   :create   mem-kanban/handle-mem-kanban-create
-   :move     mem-kanban/handle-mem-kanban-move
-   :status   mem-kanban/handle-mem-kanban-stats
-   :update   mem-kanban/handle-mem-kanban-move  ; move handles status updates
-   :roadmap  mem-kanban/handle-mem-kanban-stats ; stats includes overview
-   :my-tasks mem-kanban/handle-mem-kanban-list-slim
-   :sync     (fn [_] {:success true :message "Memory kanban is single-backend, no sync needed"})})
+  {:list           mem-kanban/handle-mem-kanban-list-slim
+   :create         mem-kanban/handle-mem-kanban-create
+   :move           mem-kanban/handle-mem-kanban-move
+   :status         mem-kanban/handle-mem-kanban-stats
+   :update         mem-kanban/handle-mem-kanban-move  ; move handles status updates
+   :roadmap        mem-kanban/handle-mem-kanban-stats ; stats includes overview
+   :my-tasks       mem-kanban/handle-mem-kanban-list-slim
+   :sync           (fn [_] {:success true :message "Memory kanban is single-backend, no sync needed"})
+   :plan-to-kanban plan-tool/handle-plan-to-kanban})
 
 ;; =============================================================================
 ;; CLI Handler
@@ -41,10 +43,10 @@
   "MCP tool definition for consolidated kanban command."
   {:name "kanban"
    :consolidated true
-   :description "Kanban task management: list (all/filtered tasks), create (new task), move (change status), status (board overview), update (modify task), roadmap (milestones), my-tasks (agent's tasks), sync (backends). Use command='help' to list all."
+   :description "Kanban task management: list (all/filtered tasks), create (new task), move (change status), status (board overview), update (modify task), roadmap (milestones), my-tasks (agent's tasks), sync (backends), plan-to-kanban (convert plan to tasks). Use command='help' to list all."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
-                                         :enum ["list" "create" "move" "status" "update" "roadmap" "my-tasks" "sync" "help"]
+                                         :enum ["list" "create" "move" "status" "update" "roadmap" "my-tasks" "sync" "plan-to-kanban" "help"]
                                          :description "Kanban operation to perform"}
                               ;; list params
                               "status" {:type "string"
@@ -61,6 +63,9 @@
                               "new_status" {:type "string"
                                             :enum ["todo" "inprogress" "inreview" "done"]
                                             :description "Target status for move"}
+                              ;; plan-to-kanban params
+                              "plan_id" {:type "string"
+                                         :description "Memory entry ID containing the plan (for plan-to-kanban)"}
                               ;; scope params
                               "directory" {:type "string"
                                            :description "Working directory for project scope (auto-detected if not provided)"}}

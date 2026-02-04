@@ -21,7 +21,7 @@ start-mcp.sh
        └─ server.clj reads env var, binds to port
 
 Emacs (separate process)
-  └─ emacs-mcp-channel.el reads same env var
+  └─ hive-mcp-channel.el reads same env var
        └─ Connects to matching port
 ```
 
@@ -30,8 +30,8 @@ Emacs (separate process)
 | File | Role |
 |------|------|
 | `start-mcp.sh` | Sets env var, kills stale port |
-| `src/emacs_mcp/server.clj` | Reads env var, starts channel server |
-| `elisp/emacs-mcp-channel.el` | Reads env var, connects to server |
+| `src/hive_mcp/server.clj` | Reads env var, starts channel server |
+| `elisp/hive-mcp-channel.el` | Reads env var, connects to server |
 
 ## Design Decision (2026-01-03)
 
@@ -39,11 +39,11 @@ Emacs (separate process)
 
 **Rationale**:
 - Simple: 3 small changes, follows existing pattern (like `CHROMA_PORT`)
-- Sufficient for single-instance: emacs-mcp is designed as unique instance
+- Sufficient for single-instance: hive-mcp is designed as unique instance
 - Handles stale processes: `fuser -k` cleans up zombie processes
 
 **Architecture context**:
-- emacs-mcp is the heavyweight JVM (unique instance)
+- hive-mcp is the heavyweight JVM (unique instance)
 - Multiple lightweight bb-mcp servers connect to it via nREPL
 - Channel port conflicts only occur with stale processes from previous runs
 

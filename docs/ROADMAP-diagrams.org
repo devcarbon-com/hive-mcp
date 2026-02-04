@@ -5,14 +5,14 @@
 
 * Overview
 
-Diagram-building capabilities for emacs-mcp ecosystem using an adapter-based
+Diagram-building capabilities for hive-mcp ecosystem using an adapter-based
 architecture. Supports multiple backends: Overarch (C4/UML), TikZ (LaTeX), 
 Mermaid (web-friendly).
 
 * ✅ Completed: Core Architecture
 
 ** Diagram Adapter Protocol
-Located in: =src/emacs_mcp/diagrams/core.clj=
+Located in: =src/hive_mcp/diagrams/core.clj=
 
 #+begin_src clojure
 (defprotocol DiagramAdapter
@@ -37,7 +37,7 @@ Located in: =src/emacs_mcp/diagrams/core.clj=
 * ✅ Completed: Adapters
 
 ** Overarch Adapter (C4/UML)
-File: =src/emacs_mcp/diagrams/adapters/overarch.clj=
+File: =src/hive_mcp/diagrams/adapters/overarch.clj=
 
 Integrates with [[https://github.com/soulspace-org/overarch][soulspace-org/overarch]] for:
 - C4 Context/Container/Component diagrams
@@ -48,7 +48,7 @@ Integrates with [[https://github.com/soulspace-org/overarch][soulspace-org/overa
 Outputs: PlantUML, GraphViz DOT, Markdown
 
 ** TikZ Adapter (LaTeX)
-File: =src/emacs_mcp/diagrams/adapters/tikz.clj=
+File: =src/hive_mcp/diagrams/adapters/tikz.clj=
 
 Generates LaTeX/TikZ for:
 - Flowcharts
@@ -60,7 +60,7 @@ Generates LaTeX/TikZ for:
 Outputs: .tex, .pdf (via pdflatex)
 
 ** Mermaid Adapter (Web)
-File: =src/emacs_mcp/diagrams/adapters/mermaid.clj=
+File: =src/hive_mcp/diagrams/adapters/mermaid.clj=
 
 Generates Mermaid.js for:
 - Flowcharts
@@ -75,7 +75,7 @@ Outputs: .mmd, .html (with CDN), .svg/.png (via mmdc)
 
 * ✅ Completed: MCP Tools
 
-File: =src/emacs_mcp/diagrams/tools.clj=
+File: =src/hive_mcp/diagrams/tools.clj=
 
 | Tool | Description |
 |------+-------------|
@@ -85,13 +85,13 @@ File: =src/emacs_mcp/diagrams/tools.clj=
 | =diagram_create_flowchart= | Create flowchart/workflow |
 | =diagram_create_sequence= | Create sequence diagram |
 | =diagram_render_edn= | Render from EDN file/string |
-| =diagram_emacs_mcp_architecture= | Generate system architecture |
+| =diagram_hive_mcp_architecture= | Generate system architecture |
 
 * Architecture Diagram
 
 #+begin_src 
 ┌─────────────────────────────────────────────────────────────┐
-│                    emacs-mcp Diagram System                  │
+│                    hive-mcp Diagram System                  │
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
 │  ┌──────────────┐    ┌───────────────────────────────────┐  │
@@ -117,30 +117,30 @@ File: =src/emacs_mcp/diagrams/tools.clj=
 
 * Phase 2: Elisp Integration (Pending)
 
-** TODO emacs-mcp-diagrams.el addon
+** TODO hive-mcp-diagrams.el addon
 Create Emacs interface for the Clojure diagram system:
 
 *** Commands
 | Command | Description |
 |---------+-------------|
-| =emacs-mcp-diagram-create= | Interactive diagram creation |
-| =emacs-mcp-diagram-compile= | Compile to output format |
-| =emacs-mcp-diagram-preview= | Preview in buffer/browser |
-| =emacs-mcp-diagram-from-region= | Create from selected EDN |
+| =hive-mcp-diagram-create= | Interactive diagram creation |
+| =hive-mcp-diagram-compile= | Compile to output format |
+| =hive-mcp-diagram-preview= | Preview in buffer/browser |
+| =hive-mcp-diagram-from-region= | Create from selected EDN |
 
 *** Transient Menu
 #+begin_src elisp
-(transient-define-prefix emacs-mcp-diagram-menu ()
+(transient-define-prefix hive-mcp-diagram-menu ()
   "Diagram creation menu."
   ["Create"
-   ("f" "Flowchart" emacs-mcp-diagram-flowchart)
-   ("s" "Sequence" emacs-mcp-diagram-sequence)
-   ("c" "C4 Context" emacs-mcp-diagram-c4-context)
-   ("a" "Architecture" emacs-mcp-diagram-architecture)]
+   ("f" "Flowchart" hive-mcp-diagram-flowchart)
+   ("s" "Sequence" hive-mcp-diagram-sequence)
+   ("c" "C4 Context" hive-mcp-diagram-c4-context)
+   ("a" "Architecture" hive-mcp-diagram-architecture)]
   ["Output"
-   ("h" "HTML" emacs-mcp-diagram-to-html)
-   ("p" "PDF" emacs-mcp-diagram-to-pdf)
-   ("t" "TikZ" emacs-mcp-diagram-to-tikz)])
+   ("h" "HTML" hive-mcp-diagram-to-html)
+   ("p" "PDF" hive-mcp-diagram-to-pdf)
+   ("t" "TikZ" hive-mcp-diagram-to-tikz)])
 #+end_src
 
 ** TODO Presentation Integration

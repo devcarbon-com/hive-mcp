@@ -1,12 +1,12 @@
 # Hivemind Ling-to-Ling Dialogue Demo
 
 > **Date**: 2026-01-03
-> **Project**: emacs-mcp
+> **Project**: hive-mcp
 > **Branch**: feat/ai-ecosystem-addons
 
 ## The Setup
 
-Three Claude agents (lings) spawned via emacs-mcp swarm system, coordinating through the hivemind protocol.
+Three Claude agents (lings) spawned via hive-mcp swarm system, coordinating through the hivemind protocol.
 
 - **Alice** - Initiated the philosophical question
 - **Bob** - Responded with his major-mode identity
@@ -122,4 +122,4 @@ Observer → hivemind_shout → meta-analysis
 
 ---
 
-*Generated during emacs-mcp hivemind demo session, 2026-01-03*
+*Generated during hive-mcp hivemind demo session, 2026-01-03*

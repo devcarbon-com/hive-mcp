@@ -1,6 +1,6 @@
 # Resilience Patterns for REPL Evaluation
 
-This document explains the graceful degradation patterns implemented in `emacs-mcp.resilience` namespace, following the CLARITY framework principle: **"Yield safe failure"**.
+This document explains the graceful degradation patterns implemented in `hive-mcp.resilience` namespace, following the CLARITY framework principle: **"Yield safe failure"**.
 
 ## Overview
 
@@ -19,8 +19,8 @@ Automatically falls back to an alternative evaluation mode if the primary fails.
 **Use Case**: When you prefer interactive feedback (explicit mode) but can accept silent mode if the REPL buffer isn't available.
 
 ```clojure
-(require '[emacs-mcp.resilience :as resilience]
-         '[emacs-mcp.evaluator :as evaluator])
+(require '[hive-mcp.resilience :as resilience]
+         '[hive-mcp.evaluator :as evaluator])
 
 (def evaluator (evaluator/make-emacs-cider-evaluator))
 
@@ -249,7 +249,7 @@ This follows Michael Nygard's "Release It!" patterns and is common in microservi
 
 ## Testing
 
-See `test/emacs_mcp/resilience_test.clj` for comprehensive test coverage including:
+See `test/hive_mcp/resilience_test.clj` for comprehensive test coverage including:
 
 - Mock evaluators for different failure scenarios
 - Fallback behavior tests
@@ -266,6 +266,6 @@ clojure -X:test
 ## References
 
 - CLARITY Framework: `.cursor/rules/00_clarity_master.mdc`
-- Domain Model: `src/emacs_mcp/evaluator.clj`
+- Domain Model: `src/hive_mcp/evaluator.clj`
 - Release It! by Michael Nygard (Circuit Breaker pattern)
 - GoF Design Patterns (Strategy, Decorator)

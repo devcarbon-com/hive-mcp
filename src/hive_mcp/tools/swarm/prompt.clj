@@ -13,6 +13,7 @@
             [hive-mcp.validation :as v]
             [hive-mcp.channel :as channel]
             [clojure.data.json :as json]
+            [clojure.string :as str]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -97,3 +98,62 @@
 
         :else
         (core/mcp-error (str "Error: " error))))))
+
+;; ============================================================
+;; Lazy Preset Header Builder
+;; ============================================================
+
+(defn build-lazy-preset-header
+  "Generate lightweight system prompt header with preset names + fetch instructions.
+   Returns ~300 tokens instead of ~1500 tokens per preset.
+
+   Instead of injecting full preset content, this generates compact instructions
+   telling lings how to fetch presets on-demand via the consolidated preset tool.
+
+   Args:
+     preset-names - vector of preset name strings (e.g., [\"ling\" \"mcp-first\"])
+
+   Returns:
+     String with preset names and instructions to fetch via preset(command: 'get', name: ...)
+
+   Token budget: ~300 tokens max (vs ~1500 per full preset)
+
+   Example output for [\"ling\" \"tdd\"]:
+     ## Assigned Presets
+     You have access to these presets: ling, tdd
+     ...fetch instructions..."
+  [preset-names]
+  (when (seq preset-names)
+    (let [names-str (str/join ", " preset-names)]
+      (str
+       ;; Section 1: Assigned presets (~30 tokens)
+       "## Assigned Presets\n\n"
+       "You have access to: **" names-str "**\n\n"
+
+       ;; Section 2: IMMEDIATE fetch instruction (~50 tokens)
+       "### IMMEDIATE: Fetch at Session Start\n\n"
+       "**Before starting work**, fetch your assigned presets:\n"
+       "```\n"
+       (str/join "\n" (map #(str "preset(command: \"get\", name: \"" % "\")") preset-names))
+       "\n```\n\n"
+
+       ;; Section 3: Quick summary option (~40 tokens)
+       "### Quick Summary (Lower Tokens)\n\n"
+       "For orientation without full content (~200 tokens vs ~1500):\n"
+       "```\n"
+       "preset(command: \"core\", name: \"<preset-name>\")\n"
+       "```\n\n"
+
+       ;; Section 4: Discovery (~40 tokens)
+       "### Discovery\n\n"
+       "Find presets by topic:\n"
+       "```\n"
+       "preset(command: \"search\", query: \"testing patterns\")\n"
+       "preset(command: \"list_slim\")  ; Names + categories only\n"
+       "```\n\n"
+
+       ;; Section 5: When to fetch (~30 tokens)
+       "### When to Fetch\n\n"
+       "- Session start: fetch assigned presets\n"
+       "- Unfamiliar task: search for relevant presets\n"
+       "- Need guidance: use `core` for quick summary\n"))))

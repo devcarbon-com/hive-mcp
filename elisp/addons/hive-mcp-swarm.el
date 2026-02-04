@@ -319,7 +319,14 @@ Also records shout timestamp for Layer 2 idle detection."
   (let* ((agent-id (plist-get event-data :agent-id))
          (event-type (plist-get event-data :event-type))
          (slave (gethash agent-id hive-mcp-swarm--slaves)))
-    (when slave
+    (if (not slave)
+        ;; DEBUG: Log when agent-id not found in hash table
+        ;; This helps diagnose status sync failures
+        (when (and agent-id (not (string-empty-p agent-id)))
+          (message "[swarm-sync] Agent '%s' not found (event: %s). Known slaves: %s"
+                   agent-id event-type
+                   (mapconcat #'identity (hash-table-keys hive-mcp-swarm--slaves) ", ")))
+      ;; Agent found - proceed with sync
       ;; Layer 2: Record shout for idle detection
       ;; This proves the ling is communicating (not dead/hung)
       (when (fboundp 'hive-mcp-swarm-terminal--record-shout)

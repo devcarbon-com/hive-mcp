@@ -118,6 +118,37 @@ hivemind_ask(question: "Proceed with refactoring these 3 files?", options: ["yes
 hivemind_shout(event_type: "completed", message: "Refactored 3 files")
 ```
 
+## Tool Error Recovery (MANDATORY)
+
+When an MCP tool returns an error like `"Missing required field: X"`:
+
+1. **DO NOT ask the user** - infer the value yourself
+2. **Retry IMMEDIATELY** with the missing field filled in
+3. **Common inferences:**
+
+| Missing Field | How to Infer |
+|---------------|--------------|
+| `commit_msg` | Summarize your recent work |
+| `directory` | Use your current working directory |
+| `agent_id` | Use your agent identifier |
+| `task` | Describe what you're currently doing |
+
+### Example Recovery
+
+```
+# Tool returns: {"error": "Missing required field: directory"}
+
+# BAD - Ask user
+"What directory should I use?"
+
+# GOOD - Infer and retry immediately
+magit_commit(directory: "/home/user/project", message: "fix: resolved auth issue")
+```
+
+**Why?** The user delegated work to you. Asking for inferrable values wastes their time. Only ask when genuinely ambiguous.
+
+---
+
 ## Your Identity
 
 - You are agent: `{AGENT_ID}` (set by coordinator)

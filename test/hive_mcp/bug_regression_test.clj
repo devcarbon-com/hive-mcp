@@ -25,7 +25,7 @@
 
 (deftest test-parse-file-works
   (testing "BUG #1: parse-file should parse org file directly from path"
-    (let [test-file "/home/lages/dotfiles/gitthings/hive-mcp/kanban.org"
+    (let [test-file (str (System/getProperty "user.dir") "/kanban.org")
           result (parser/parse-file test-file)]
       (is (map? result) "parse-file should return a map")
       (is (contains? result :headlines) "Result should contain :headlines")
@@ -80,7 +80,7 @@
 
 (deftest test-render-stats-match-columns
   (testing "BUG #4: Kanban render stats should match column counts"
-    (let [test-file "/home/lages/dotfiles/gitthings/hive-mcp/kanban.org"
+    (let [test-file (str (System/getProperty "user.dir") "/kanban.org")
           output (render/render-to-terminal test-file)]
       ;; Extract stats line
       (let [stats-match (re-find #"(\d+) todo" output)
@@ -195,7 +195,7 @@
 
 (deftest test-org-kanban-native-stats-match-array
   (testing "BUG #10: org_kanban_native_status stats should match by_status arrays"
-    (let [test-file "/home/lages/dotfiles/gitthings/hive-mcp/kanban.org"
+    (let [test-file (str (System/getProperty "user.dir") "/kanban.org")
           result (org/handle-org-kanban-native-status {:file_path test-file})]
       (when-not (:isError result)
         (let [parsed (clojure.data.json/read-str (:text result) :key-fn keyword)

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The `emacs-mcp.evaluator` namespace provides a protocol-based abstraction for REPL evaluation, following Domain-Driven Design (DDD) principles. This is an **Infrastructure Layer** adapter that bridges the MCP server with Emacs CIDER REPL.
+The `hive-mcp.evaluator` namespace provides a protocol-based abstraction for REPL evaluation, following Domain-Driven Design (DDD) principles. This is an **Infrastructure Layer** adapter that bridges the MCP server with Emacs CIDER REPL.
 
 ## Architecture
 
@@ -18,19 +18,19 @@ The core abstraction defines three operations:
 
 The `EmacsCiderEvaluator` record implements `ReplEvaluator` using:
 - `emacsclient` to communicate with a running Emacs instance
-- CIDER elisp functions via `emacs-mcp-cider.el`
+- CIDER elisp functions via `hive-mcp-cider.el`
 - Two evaluation modes: silent and explicit/interactive
 
 ## Evaluation Modes
 
 ### Silent Evaluation (`:silent? true`)
-- Executes code via `emacs-mcp-cider-eval-silent`
+- Executes code via `hive-mcp-cider-eval-silent`
 - Returns result without showing in REPL buffer
 - Minimal UI feedback
 - Best for: Background operations, automated scripts, MCP tool handlers
 
 ### Explicit/Interactive Evaluation (`:silent? false`, default)
-- Executes code via `emacs-mcp-cider-eval-explicit`
+- Executes code via `hive-mcp-cider-eval-explicit`
 - Shows evaluation in the REPL buffer
 - Full interactive feedback (namespace, value, output)
 - Best for: User-initiated evaluations, debugging, exploratory programming
@@ -40,7 +40,7 @@ The `EmacsCiderEvaluator` record implements `ReplEvaluator` using:
 ### Basic Usage
 
 ```clojure
-(require '[emacs-mcp.evaluator :as eval])
+(require '[hive-mcp.evaluator :as eval])
 
 ;; Create an evaluator
 (def evaluator (eval/make-emacs-cider-evaluator))
@@ -87,7 +87,7 @@ The `EmacsCiderEvaluator` record implements `ReplEvaluator` using:
 
 ;; When CIDER is not loaded
 (eval/get-status evaluator)
-;; => {:connected false, :error "emacs-mcp-cider not loaded"}
+;; => {:connected false, :error "hive-mcp-cider not loaded"}
 ```
 
 ## Integration with MCP Tools
@@ -96,7 +96,7 @@ The evaluator can be used in MCP tool handlers to provide consistent REPL evalua
 
 ```clojure
 (ns my-app.tools
-  (:require [emacs-mcp.evaluator :as eval]))
+  (:require [hive-mcp.evaluator :as eval]))
 
 (def ^:private repl-evaluator (eval/make-emacs-cider-evaluator))
 
@@ -113,7 +113,7 @@ The evaluator can be used in MCP tool handlers to provide consistent REPL evalua
 The evaluator requires:
 1. A running Emacs instance with `emacsclient` server enabled
 2. CIDER installed in Emacs
-3. `emacs-mcp-cider.el` loaded (provides the elisp functions)
+3. `hive-mcp-cider.el` loaded (provides the elisp functions)
 4. An active CIDER REPL connection
 
 ## Design Principles

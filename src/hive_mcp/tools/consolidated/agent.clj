@@ -146,7 +146,7 @@
      parent  - Parent agent ID (optional)
 
    CLARITY: I - Validates type before dispatch."
-  [{:keys [type name cwd presets model task files parent project_id]}]
+  [{:keys [type name cwd presets model task files parent project_id kanban_task_id]}]
   (let [agent-type (keyword type)]
     (if-not (#{:ling :drone} agent-type)
       (mcp-error "type must be 'ling' or 'drone'")
@@ -169,7 +169,8 @@
                                                     :project-id effective-project-id})
                   ;; spawn! returns the actual elisp slave-id (may differ from agent-id)
                   elisp-slave-id (proto/spawn! ling-agent {:task task
-                                                           :parent parent})]
+                                                           :parent parent
+                                                           :kanban-task-id kanban_task_id})]
               (log/info "Spawned ling" {:requested-id agent-id
                                         :elisp-slave-id elisp-slave-id
                                         :cwd cwd :presets presets-vec})
@@ -265,28 +266,35 @@
    accidentally killing lings from other projects.
 
    Ownership rules:
-   - Caller without project context (coordinator): can kill anything
+   - Caller without explicit directory (coordinator): can kill anything
    - Legacy lings without project-id: can be killed by anyone
    - Same project: kill proceeds normally
    - Different project: requires force_cross_project=true
 
    CLARITY: Y - Safe failure, checks ownership + critical ops before killing.
-   CLARITY: I - Inputs guarded with HIL for cross-project safety."
+   CLARITY: I - Inputs guarded with HIL for cross-project safety.
+
+   BUG FIX (2026-02): Only use EXPLICIT directory param for ownership check.
+   ctx/current-directory falls back to MCP server's install dir (via
+   System/getProperty user.dir in wrap-handler-context), which caused
+   false cross-project detection. Coordinators typically don't pass
+   directory, so they should have unrestricted kill access."
   [{:keys [agent_id directory force force_cross_project]}]
   (if (empty? agent_id)
     (mcp-error "agent_id is required")
     (try
       (if-let [agent-data (queries/get-slave agent_id)]
         (let [;; Get caller's project context
-              ;; Fallback chain: explicit param → ctx binding → nil
-              effective-dir (or directory (ctx/current-directory))
-              caller-project-id (when effective-dir
-                                  (scope/get-current-project-id effective-dir))
+              ;; CRITICAL: Only use EXPLICIT directory param, not ctx fallback.
+              ;; ctx/current-directory falls back to MCP server's install dir,
+              ;; which would incorrectly restrict coordinator's kill access.
+              caller-project-id (when directory
+                                  (scope/get-current-project-id directory))
               ;; Get target's project-id
               target-project-id (:slave/project-id agent-data)
               ;; Check ownership (HIL guard)
               can-kill? (or force_cross_project
-                            (nil? caller-project-id)   ; coordinator context - no restriction
+                            (nil? caller-project-id)   ; no explicit directory = coordinator context
                             (nil? target-project-id)   ; legacy ling - can be killed by anyone
                             (= caller-project-id target-project-id))]  ; same project
           (if-not can-kill?
@@ -574,6 +582,8 @@
                                           :description "Task priority for dispatch"}
                               "parent" {:type "string"
                                         :description "Parent agent ID for spawn"}
+                              "kanban_task_id" {:type "string"
+                                                :description "Kanban task ID to link to ling. On session_complete, linked task auto-moves to done."}
                               ;; kill params
                               "force" {:type "boolean"
                                        :description "Force kill even if critical ops in progress"}

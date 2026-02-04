@@ -8,12 +8,12 @@
 #+OPTIONS: timestamp:nil toc:2 num:nil
 :END:
 
-#+title: emacs-mcp
+#+title: hive-mcp
 #+subtitle: Claude + Emacs Integration
 #+AUTHOR: Pedro G. Branquinho
 #+OPTIONS: toc:nil
 
-* emacs-mcp
+* hive-mcp
 ** What is it?
 #+ATTR_REVEAL: :frag (appear)
 - MCP Server for Emacs integration
@@ -24,7 +24,7 @@
 ** Architecture
 #+ATTR_REVEAL: :frag (appear)
 - *Clojure MCP Server* — STDIO communication
-- *Elisp Package* — emacs-mcp.el
+- *Elisp Package* — hive-mcp.el
 - *org-clj Library* — Native org-mode parser
 
 * Core Features
@@ -39,7 +39,7 @@
 *** Usage
 #+begin_src elisp
 ;; Add to memory
-(emacs-mcp-api-memory-add
+(hive-mcp-api-memory-add
  "convention"
  "Use kebab-case for functions"
  '("elisp" "style"))
@@ -57,7 +57,7 @@
 ** Workflows
 *** Automated Multi-Step Tasks
 #+begin_src elisp
-(emacs-mcp-workflow-register
+(hive-mcp-workflow-register
  "test-and-commit"
  '((:type shell :command "make test")
    (:type confirm :message "Tests passed?")
@@ -114,11 +114,11 @@
 *** Multi-Agent Coordination
 #+begin_src elisp
 ;; Spawn specialized agents
-(emacs-mcp-swarm-spawn "tester" :presets '("tdd"))
-(emacs-mcp-swarm-spawn "reviewer" :role 'reviewer)
+(hive-mcp-swarm-spawn "tester" :presets '("tdd"))
+(hive-mcp-swarm-spawn "reviewer" :role 'reviewer)
 
 ;; Broadcast to all
-(emacs-mcp-swarm-broadcast "Report status")
+(hive-mcp-swarm-broadcast "Report status")
 #+end_src
 
 ** Diagram System
@@ -133,19 +133,19 @@
 
 *** C4 Context Example
 #+ATTR_HTML: :width 600px
-[[file:images/emacs-mcp-c4-context.png]]
+[[file:images/hive-mcp-c4-context.png]]
 
 *** Code That Generated It
 #+begin_src clojure
 {:type :c4-context
- :title "emacs-mcp System Context"
+ :title "hive-mcp System Context"
  :elements [{:id :developer :name "Developer" :el :person}
             {:id :claude :name "Claude AI" :el :system :external? true}
-            {:id :emacs-mcp :name "emacs-mcp" :el :system}
+            {:id :hive-mcp :name "hive-mcp" :el :system}
             {:id :emacs :name "Emacs" :el :system}]
  :relations [{:from :developer :to :emacs :name "edits code"}
-             {:from :claude :to :emacs-mcp :name "MCP protocol"}
-             {:from :emacs-mcp :to :emacs :name "emacsclient"}]}
+             {:from :claude :to :hive-mcp :name "MCP protocol"}
+             {:from :hive-mcp :to :emacs :name "emacsclient"}]}
 #+end_src
 
 * org-clj Library
@@ -160,8 +160,8 @@
 ** Usage
 *** Parse → Query → Transform
 #+begin_src clojure
-(require '[emacs-mcp.org-clj.parser :as p])
-(require '[emacs-mcp.org-clj.query :as q])
+(require '[hive-mcp.org-clj.parser :as p])
+(require '[hive-mcp.org-clj.query :as q])
 
 (def doc (p/parse-document (slurp "tasks.org")))
 
@@ -188,13 +188,13 @@
 ** Installation
 *** Clone & Configure
 #+begin_src bash
-git clone https://github.com/BuddhiLW/emacs-mcp.git
+git clone https://github.com/BuddhiLW/hive-mcp.git
 #+end_src
 
 #+begin_src elisp
-(add-to-list 'load-path "path/to/emacs-mcp/elisp")
-(require 'emacs-mcp)
-(require 'emacs-mcp-addons)
+(add-to-list 'load-path "path/to/hive-mcp/elisp")
+(require 'hive-mcp)
+(require 'hive-mcp-addons)
 #+end_src
 
 ** Keybindings
@@ -210,7 +210,7 @@ git clone https://github.com/BuddhiLW/emacs-mcp.git
 ** This Presentation Was Built Live
 #+ATTR_REVEAL: :frag (appear)
 - User: "Create presentation addon"
-- Claude: Creates =emacs-mcp-presentation.el=
+- Claude: Creates =hive-mcp-presentation.el=
 - User: "Update my email"
 - Claude: Edits file → exports → opens browser
 - Instant feedback loop!
@@ -227,8 +227,8 @@ git clone https://github.com/BuddhiLW/emacs-mcp.git
 | Tool | Purpose |
 |------|---------|
 | =mcp__clojure-mcp-emacs__file_edit= | Edit org files |
-| =mcp__emacs-mcp__eval_elisp= | Export & preview |
-| =mcp__emacs-mcp__mcp_memory_add= | Save conventions |
+| =mcp__hive-mcp__eval_elisp= | Export & preview |
+| =mcp__hive-mcp__mcp_memory_add= | Save conventions |
 | =mcp__dynamic-kanban__add_feature= | Track tasks |
 
 ** Why This Matters

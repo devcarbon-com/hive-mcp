@@ -1,18 +1,18 @@
-#+TITLE: emacs-mcp Addons
+#+TITLE: hive-mcp Addons
 #+AUTHOR: Pedro G. Branquinho
 #+STARTUP: overview
 #+OPTIONS: toc:2
 
 * Overview
 
-The addon system provides modular integrations between emacs-mcp and other Emacs packages.
+The addon system provides modular integrations between hive-mcp and other Emacs packages.
 Addons are *lazy-loaded* only when their target packages are detected, keeping startup fast.
 
 ** Design Principles
 
 - *Lazy loading*: Addons load via =with-eval-after-load= when target packages are used
 - *Non-intrusive*: Never modify target packages, only extend them
-- *Consistent API*: All addons register via =emacs-mcp-addon-register=
+- *Consistent API*: All addons register via =hive-mcp-addon-register=
 - *User extensible*: Custom addon directories supported
 
 * Built-in Addons
@@ -40,7 +40,7 @@ Addons are *lazy-loaded* only when their target packages are detected, keeping s
 :CUSTOM_ID: claude-code
 :END:
 
-Integrates [[https://github.com/karthink/claude-code][claude-code.el]] (Claude Code CLI interface) with emacs-mcp.
+Integrates [[https://github.com/karthink/claude-code][claude-code.el]] (Claude Code CLI interface) with hive-mcp.
 
 ** Features
 
@@ -52,7 +52,7 @@ Integrates [[https://github.com/karthink/claude-code][claude-code.el]] (Claude C
 ** Installation
 
 #+begin_src elisp
-(emacs-mcp-addon-load 'claude-code)
+(hive-mcp-addon-load 'claude-code)
 (claude-code-mcp-mode 1)
 #+end_src
 
@@ -85,7 +85,7 @@ Integrates [[https://github.com/karthink/claude-code][claude-code.el]] (Claude C
 :CUSTOM_ID: cider
 :END:
 
-Integrates [[https://github.com/clojure-emacs/cider][CIDER]] (Clojure IDE) with emacs-mcp.
+Integrates [[https://github.com/clojure-emacs/cider][CIDER]] (Clojure IDE) with hive-mcp.
 
 ** Features
 
@@ -97,8 +97,8 @@ Integrates [[https://github.com/clojure-emacs/cider][CIDER]] (Clojure IDE) with 
 ** Installation
 
 #+begin_src elisp
-(emacs-mcp-addon-load 'cider)
-(emacs-mcp-cider-mode 1)
+(hive-mcp-addon-load 'cider)
+(hive-mcp-cider-mode 1)
 #+end_src
 
 ** MCP Tools
@@ -123,8 +123,8 @@ Integrates [[https://github.com/clojure-emacs/cider][CIDER]] (Clojure IDE) with 
 
 #+begin_src elisp
 ;; Auto-log results above threshold
-(setq emacs-mcp-cider-auto-log-results t)
-(setq emacs-mcp-cider-log-threshold 100)
+(setq hive-mcp-cider-auto-log-results t)
+(setq hive-mcp-cider-log-threshold 100)
 #+end_src
 
 * org-ai Addon
@@ -132,7 +132,7 @@ Integrates [[https://github.com/clojure-emacs/cider][CIDER]] (Clojure IDE) with 
 :CUSTOM_ID: org-ai
 :END:
 
-Integrates [[https://github.com/rksm/org-ai][org-ai]] with emacs-mcp.
+Integrates [[https://github.com/rksm/org-ai][org-ai]] with hive-mcp.
 
 ** Features
 
@@ -144,8 +144,8 @@ Integrates [[https://github.com/rksm/org-ai][org-ai]] with emacs-mcp.
 ** Installation
 
 #+begin_src elisp
-(emacs-mcp-addon-load 'org-ai)
-(emacs-mcp-org-ai-mode 1)
+(hive-mcp-addon-load 'org-ai)
+(hive-mcp-org-ai-mode 1)
 #+end_src
 
 ** Keybindings (Transient)
@@ -162,13 +162,13 @@ Integrates [[https://github.com/rksm/org-ai][org-ai]] with emacs-mcp.
 
 #+begin_src elisp
 ;; Auto-inject context into new blocks
-(setq emacs-mcp-org-ai-auto-context t)
+(setq hive-mcp-org-ai-auto-context t)
 
 ;; Auto-save conversations
-(setq emacs-mcp-org-ai-auto-save t)
+(setq hive-mcp-org-ai-auto-save t)
 
 ;; Context sections to include
-(setq emacs-mcp-org-ai-context-sections '(buffer project git))
+(setq hive-mcp-org-ai-context-sections '(buffer project git))
 #+end_src
 
 * org-kanban Addon
@@ -185,7 +185,7 @@ Follows SOLID/DDD principles with Strategy Pattern for interchangeable backends:
 #+begin_src
 ┌─────────────────────────────────────────────────────────┐
 │                   Unified API                           │
-│  emacs-mcp-kanban-{list,create,update,move}-task       │
+│  hive-mcp-kanban-{list,create,update,move}-task       │
 ├─────────────────────┬───────────────────────────────────┤
 │   Standalone        │         Vibe-Kanban               │
 │   Backend           │         Backend                   │
@@ -212,19 +212,19 @@ Follows SOLID/DDD principles with Strategy Pattern for interchangeable backends:
 ** Installation
 
 #+begin_src elisp
-(emacs-mcp-addon-load 'org-kanban)
-(emacs-mcp-kanban-mode 1)
+(hive-mcp-addon-load 'org-kanban)
+(hive-mcp-kanban-mode 1)
 
 ;; For standalone backend (default)
-(setq emacs-mcp-kanban-backend 'standalone)
+(setq hive-mcp-kanban-backend 'standalone)
 
 ;; For vibe-kanban cloud sync
-(setq emacs-mcp-kanban-backend 'vibe)
-(setq emacs-mcp-kanban-default-project "your-project-uuid")
+(setq hive-mcp-kanban-backend 'vibe)
+(setq hive-mcp-kanban-default-project "your-project-uuid")
 
 ;; Enable dual-backend with auto-sync
-(setq emacs-mcp-kanban-enable-dual-backend t)
-(setq emacs-mcp-kanban-auto-sync t)
+(setq hive-mcp-kanban-enable-dual-backend t)
+(setq hive-mcp-kanban-auto-sync t)
 #+end_src
 
 ** MCP Tools
@@ -257,7 +257,7 @@ Follows SOLID/DDD principles with Strategy Pattern for interchangeable backends:
 The standalone backend uses this org structure:
 
 #+begin_src org
-,#+TITLE: emacs-mcp Kanban
+,#+TITLE: hive-mcp Kanban
 ,#+TODO: TODO IN-PROGRESS IN-REVIEW | DONE CANCELLED
 
 ,* Project Name
@@ -281,7 +281,7 @@ Tasks automatically track which AI agent worked on them:
 
 #+begin_src elisp
 ;; Enable agent tracking (default: t)
-(setq emacs-mcp-kanban-track-agents t)
+(setq hive-mcp-kanban-track-agents t)
 #+end_src
 
 Properties recorded:
@@ -296,60 +296,60 @@ Properties recorded:
 Copy the template to start:
 
 #+begin_src bash
-cp elisp/addons/emacs-mcp-addon-template.el \
-   elisp/addons/emacs-mcp-my-addon.el
+cp elisp/addons/hive-mcp-addon-template.el \
+   elisp/addons/hive-mcp-my-addon.el
 #+end_src
 
 ** Structure
 
 #+begin_src elisp
-;;; emacs-mcp-my-addon.el --- My integration -*- lexical-binding: t; -*-
+;;; hive-mcp-my-addon.el --- My integration -*- lexical-binding: t; -*-
 
-(require 'emacs-mcp-api)
+(require 'hive-mcp-api)
 
 ;; Soft dependencies
 (declare-function target-package-function "target-package")
 
 ;;; Customization
-(defgroup emacs-mcp-my-addon nil
+(defgroup hive-mcp-my-addon nil
   "My addon settings."
-  :group 'emacs-mcp)
+  :group 'hive-mcp)
 
 ;;; Integration functions
-(defun emacs-mcp-my-addon-do-thing ()
+(defun hive-mcp-my-addon-do-thing ()
   "Integration function."
   (interactive)
   ;; Your code here
   )
 
 ;;; Minor mode
-(define-minor-mode emacs-mcp-my-addon-mode
+(define-minor-mode hive-mcp-my-addon-mode
   "My addon mode."
   :lighter " MCP-My"
   :global t)
 
 ;;; Registration
-(with-eval-after-load 'emacs-mcp-addons
-  (emacs-mcp-addon-register
+(with-eval-after-load 'hive-mcp-addons
+  (hive-mcp-addon-register
    'my-addon
    :version "0.1.0"
    :description "My integration"
-   :requires '(target-package emacs-mcp-api)
-   :provides '(emacs-mcp-my-addon-mode)))
+   :requires '(target-package hive-mcp-api)
+   :provides '(hive-mcp-my-addon-mode)))
 
-(provide 'emacs-mcp-my-addon)
+(provide 'hive-mcp-my-addon)
 #+end_src
 
 ** Custom Addon Directory
 
 #+begin_src elisp
-(add-to-list 'emacs-mcp-addon-directories "~/my-addons")
+(add-to-list 'hive-mcp-addon-directories "~/my-addons")
 #+end_src
 
 ** Listing Available Addons
 
 #+begin_src elisp
-M-x emacs-mcp-addon-info
+M-x hive-mcp-addon-info
 #+end_src
 
 * Auto-Loading
@@ -357,8 +357,8 @@ M-x emacs-mcp-addon-info
 Enable automatic addon loading when target packages are detected:
 
 #+begin_src elisp
-;; In init.el after loading emacs-mcp
-(emacs-mcp-addons-auto-load)
+;; In init.el after loading hive-mcp
+(hive-mcp-addons-auto-load)
 #+end_src
 
 This sets up =with-eval-after-load= hooks so addons load only when needed.
