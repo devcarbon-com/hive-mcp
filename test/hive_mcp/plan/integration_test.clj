@@ -37,6 +37,10 @@
 ;; Test Fixtures
 ;; =============================================================================
 
+(def project-root
+  "Dynamic project root for testing - avoids hardcoded paths."
+  (System/getProperty "user.dir"))
+
 (def ^:dynamic *test-memory-ids*
   "Atom to track memory entries created during tests for cleanup."
   (atom []))
@@ -323,7 +327,7 @@ Please review and approve before implementation begins.")
 
           ;; Call plan_to_kanban tool
           result (tool/handle-plan-to-kanban {:plan_id memory-id
-                                              :directory "/home/lages/dotfiles/gitthings/hive-mcp"})
+                                              :directory project-root})
           parsed (parse-json-result result)]
 
       ;; Assert: Not an error
@@ -343,7 +347,7 @@ Please review and approve before implementation begins.")
   (testing "EDN diamond dependency creates correct KG structure"
     (let [memory-id (create-test-memory! edn-plan-diamond)
           result (tool/handle-plan-to-kanban {:plan_id memory-id
-                                              :directory "/home/lages/dotfiles/gitthings/hive-mcp"})
+                                              :directory project-root})
           parsed (parse-json-result result)]
 
       ;; Assert: 4 tasks created (step-1 through step-4)
@@ -367,7 +371,7 @@ Please review and approve before implementation begins.")
   (testing "Simple markdown plan converts to kanban tasks"
     (let [memory-id (create-test-memory! markdown-plan-simple)
           result (tool/handle-plan-to-kanban {:plan_id memory-id
-                                              :directory "/home/lages/dotfiles/gitthings/hive-mcp"})
+                                              :directory project-root})
           parsed (parse-json-result result)]
 
       ;; Assert: Success
@@ -379,7 +383,7 @@ Please review and approve before implementation begins.")
   (testing "Complex markdown plan with chained dependencies"
     (let [memory-id (create-test-memory! markdown-plan-complex)
           result (tool/handle-plan-to-kanban {:plan_id memory-id
-                                              :directory "/home/lages/dotfiles/gitthings/hive-mcp"})
+                                              :directory project-root})
           parsed (parse-json-result result)]
 
       ;; Assert: 4 tasks created
@@ -400,7 +404,7 @@ Please review and approve before implementation begins.")
   (testing "Plan with circular dependencies is rejected"
     (let [memory-id (create-test-memory! edn-plan-with-cycle)
           result (tool/handle-plan-to-kanban {:plan_id memory-id
-                                              :directory "/home/lages/dotfiles/gitthings/hive-mcp"})]
+                                              :directory project-root})]
 
       ;; Assert: Returns error
       (is (:isError result) "Cyclic plan should return error")
@@ -412,7 +416,7 @@ Please review and approve before implementation begins.")
   (testing "Invalid dependency references are rejected"
     (let [memory-id (create-test-memory! edn-plan-invalid-deps)
           result (tool/handle-plan-to-kanban {:plan_id memory-id
-                                              :directory "/home/lages/dotfiles/gitthings/hive-mcp"})]
+                                              :directory project-root})]
 
       ;; Assert: Returns error
       (is (:isError result) "Invalid deps should return error")
@@ -431,7 +435,7 @@ Please review and approve before implementation begins.")
 ```"
           memory-id (create-test-memory! self-ref-plan)
           result (tool/handle-plan-to-kanban {:plan_id memory-id
-                                              :directory "/home/lages/dotfiles/gitthings/hive-mcp"})]
+                                              :directory project-root})]
 
       (is (:isError result) "Self-referential dependency should be rejected"))))
 
@@ -566,7 +570,7 @@ Please review and approve before implementation begins.")
   (testing "KG edges link plan to tasks"
     (let [memory-id (create-test-memory! edn-plan-simple)
           result (tool/handle-plan-to-kanban {:plan_id memory-id
-                                              :directory "/home/lages/dotfiles/gitthings/hive-mcp"})
+                                              :directory project-root})
           parsed (parse-json-result result)]
 
       ;; Assert: Success
@@ -582,7 +586,7 @@ Please review and approve before implementation begins.")
   (testing "Inter-task dependency edges exist"
     (let [memory-id (create-test-memory! edn-plan-simple)
           result (tool/handle-plan-to-kanban {:plan_id memory-id
-                                              :directory "/home/lages/dotfiles/gitthings/hive-mcp"})
+                                              :directory project-root})
           parsed (parse-json-result result)]
 
       (when-not (:isError result)
@@ -600,19 +604,19 @@ Please review and approve before implementation begins.")
 (deftest error-handling-test
   (testing "Non-existent memory ID returns error"
     (let [result (tool/handle-plan-to-kanban {:plan_id "non-existent-id-12345"
-                                              :directory "/home/lages/dotfiles/gitthings/hive-mcp"})]
+                                              :directory project-root})]
       (is (:isError result) "Non-existent memory should return error")))
 
   (testing "Memory without plan structure returns error"
     (let [memory-id (create-test-memory! "This is just regular text, no plan here.")
           result (tool/handle-plan-to-kanban {:plan_id memory-id
-                                              :directory "/home/lages/dotfiles/gitthings/hive-mcp"})]
+                                              :directory project-root})]
       (is (:isError result) "Non-plan content should return error")))
 
   (testing "Invalid EDN in plan returns error"
     (let [memory-id (create-test-memory! "```edn\n{:broken :edn without closing\n```")
           result (tool/handle-plan-to-kanban {:plan_id memory-id
-                                              :directory "/home/lages/dotfiles/gitthings/hive-mcp"})]
+                                              :directory project-root})]
       (is (:isError result) "Invalid EDN should return error"))))
 
 ;; =============================================================================
@@ -705,7 +709,7 @@ Please review and approve before implementation begins.")
   (testing "SAA plan to kanban E2E pipeline"
     (let [memory-id (create-test-memory! saa-style-plan-raw)
           result (tool/handle-plan-to-kanban {:plan_id memory-id
-                                              :directory "/home/lages/dotfiles/gitthings/hive-mcp"})
+                                              :directory project-root})
           parsed (parse-json-result result)]
 
       ;; Assert: Not an error
