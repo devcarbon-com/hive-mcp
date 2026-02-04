@@ -8,7 +8,7 @@ Following the CLARITY principle "Inputs are guarded", this implementation provid
 
 ### Core Validation Module
 
-**File**: `/home/lages/dotfiles/gitthings/emacs-mcp/src/emacs_mcp/validation.clj`
+**File**: `src/emacs_mcp/validation.clj`
 
 The validation module provides:
 
@@ -31,7 +31,7 @@ The validation module provides:
 
 ### Integration Points
 
-**File**: `/home/lages/dotfiles/gitthings/emacs-mcp/src/emacs_mcp/tools.clj`
+**File**: `src/emacs_mcp/tools.clj`
 
 Updated handlers:
 - `handle-eval-elisp` - Validates elisp code
@@ -178,7 +178,7 @@ Validation errors are converted to MCP error responses:
 
 ## Testing
 
-Comprehensive test suite in `/home/lages/dotfiles/gitthings/emacs-mcp/test/emacs_mcp/validation_test.clj`:
+Comprehensive test suite in `test/emacs_mcp/validation_test.clj`:
 
 - 14 test cases covering all validators
 - Edge cases: nil, blank, wrong types, out of range

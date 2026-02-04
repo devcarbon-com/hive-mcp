@@ -52,19 +52,19 @@ The system now supports two complementary evaluation strategies:
 ## Files Modified/Created
 
 ### Modified
-- `/home/lages/dotfiles/gitthings/emacs-mcp/src/emacs_mcp/evaluator.clj` (309 lines)
+- `src/emacs_mcp/evaluator.clj` (309 lines)
   - Added EmacsCiderEvaluator implementation
   - Added convenience functions
   - Updated namespace docs
 
 ### Created
-- `/home/lages/dotfiles/gitthings/emacs-mcp/examples/evaluator_usage.clj` (205 lines)
+- `examples/evaluator_usage.clj` (205 lines)
   - Comprehensive usage examples
   - MCP tool integration patterns
   - Stateful service pattern
   - Mock evaluator pattern for testing
 
-- `/home/lages/dotfiles/gitthings/emacs-mcp/doc/evaluator.md` (150 lines)
+- `doc/evaluator.md` (150 lines)
   - Architecture documentation
   - Usage guide
   - Design principles
