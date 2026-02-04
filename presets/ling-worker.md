@@ -124,6 +124,28 @@ session_complete(
 
 Call this AFTER your final `hivemind_shout(completed)`. The shout tells the coordinator you're done; `session_complete` persists your learnings for the flywheel.
 
+## Tool Error Recovery
+
+When an MCP tool returns `"Missing required field: X"`:
+
+1. **DO NOT ask the user** - infer the value
+2. **Retry IMMEDIATELY** with the missing field
+
+| Missing Field | How to Infer |
+|---------------|--------------|
+| `commit_msg` | Summarize what you modified |
+| `directory` | Use `$PWD` |
+| `agent_id` | Use `$CLAUDE_SWARM_SLAVE_ID` |
+| `path` / `file_path` | The file you're working on |
+
+**Example:**
+```
+# Error: {"error": "Missing required field: agent_id"}
+# → Retry: session_complete(agent_id: $CLAUDE_SWARM_SLAVE_ID, directory: $PWD)
+```
+
+---
+
 ## Constraints
 
 - **Max 15 tool calls** - be efficient

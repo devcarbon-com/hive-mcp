@@ -418,6 +418,47 @@ The dogfooding section above covers tool friction specifically — this section 
 
 ---
 
+## Tool Error Recovery (MANDATORY)
+
+When an MCP tool returns an error like `"Missing required field: X"`:
+
+1. **DO NOT ask the user** - infer the value yourself
+2. **Retry IMMEDIATELY** with the missing field filled in
+3. **Common inferences:**
+
+| Missing Field | How to Infer |
+|---------------|--------------|
+| `commit_msg` | Summarize your recent work (e.g., "feat: added validation to handlers") |
+| `directory` | Use your current working directory (`$PWD`) |
+| `agent_id` | Use your `$CLAUDE_SWARM_SLAVE_ID` environment variable |
+| `task` | Describe what you're currently doing |
+| `file_path` | Use the file you just read or are working on |
+
+### Example Recovery
+
+```
+# Tool returns: {"error": "Missing required field: commit_msg"}
+
+# BAD - Ask user
+"What commit message would you like?"
+
+# GOOD - Infer and retry immediately
+session_complete(
+  agent_id: $CLAUDE_SWARM_SLAVE_ID,
+  directory: $PWD,
+  commit_msg: "feat: added input validation to API handlers"  # ← Inferred from your work
+)
+```
+
+### Why This Matters
+
+- Asking the user for inferrable values wastes their time
+- Required fields usually have obvious values from context
+- The user delegated to you for autonomous work
+- Only ask when you genuinely cannot infer (e.g., ambiguous requirements)
+
+---
+
 ## Constraints
 
 - Do not spawn other lings (you are a leaf worker)
