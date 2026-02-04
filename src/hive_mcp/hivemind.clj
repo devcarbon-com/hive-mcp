@@ -463,7 +463,7 @@
 (def tools
   [{:name "hivemind_shout"
     :description "Broadcast status/progress to the hivemind coordinator.
-                  
+
 USE THIS to report:
 - Task progress: (hivemind_shout :progress {:task \"..\" :percent 50})
 - Completion: (hivemind_shout :completed {:task \"..\" :result \"..\"})
@@ -472,10 +472,11 @@ USE THIS to report:
 
 The coordinator sees all shouts in real-time.
 
-NOTE: agent_id is auto-detected from CLAUDE_SWARM_SLAVE_ID env var if not provided."
+IMPORTANT: Lings MUST pass agent_id explicitly (use your $CLAUDE_SWARM_SLAVE_ID).
+The env var fallback reads from MCP server process, NOT your ling process!"
     :inputSchema {:type "object"
                   :properties {"agent_id" {:type "string"
-                                           :description "Your agent identifier (auto-detected from CLAUDE_SWARM_SLAVE_ID if omitted)"}
+                                           :description "REQUIRED for lings: Pass your $CLAUDE_SWARM_SLAVE_ID. Without this, status sync will fail."}
                                "event_type" {:type "string"
                                              :enum ["progress" "completed" "error" "blocked" "started"]
                                              :description "Type of event"}
@@ -491,16 +492,30 @@ NOTE: agent_id is auto-detected from CLAUDE_SWARM_SLAVE_ID env var if not provid
     :handler (fn [{:keys [agent_id event_type task message directory data]}]
                ;; P1 FIX: Check ctx/current-agent-id for drone context
                ;; Fallback chain: explicit param → context binding → env var → unknown
-               (let [effective-id (or agent_id
-                                      (ctx/current-agent-id)
-                                      (System/getenv "CLAUDE_SWARM_SLAVE_ID")
+               ;; WARNING: System/getenv reads MCP SERVER's env, NOT the calling ling's env!
+               ;; Lings MUST pass agent_id explicitly for status sync to work.
+               (let [ctx-agent (ctx/current-agent-id)
+                     env-agent (System/getenv "CLAUDE_SWARM_SLAVE_ID")
+                     effective-id (or agent_id
+                                      ctx-agent
+                                      env-agent
                                       "unknown-agent")
+                     ;; Warn when falling back to env or unknown - helps diagnose status sync issues
+                     _ (when (and (not agent_id) (not ctx-agent))
+                         (log/warn "[hivemind_shout] No agent_id in args or context. Using fallback:"
+                                   (if env-agent
+                                     (str "env CLAUDE_SWARM_SLAVE_ID=" env-agent " (MCP server's env, NOT ling's!)")
+                                     "unknown-agent")))
+                     fallback-used? (and (not agent_id) (not ctx-agent))
                      effective-dir (or directory
                                        (ctx/current-directory))]
                  (shout! effective-id (keyword event_type)
                          (merge {:task task :message message :directory effective-dir} data))
-                 {:type "text" :text (json/write-str {:success true
-                                                      :agent_id effective-id})}))}
+                 {:type "text" :text (json/write-str (cond-> {:success true
+                                                              :agent_id effective-id}
+                                                       fallback-used?
+                                                       (assoc :warning (str "agent_id not provided - using fallback: " effective-id
+                                                                            ". Lings should always pass agent_id explicitly for status sync."))))}))}
 
    {:name "hivemind_ask"
     :description "Request a decision from the human coordinator.
@@ -514,10 +529,11 @@ BLOCKS until human responds (up to timeout).
 
 Example: hivemind_ask('Should I delete these 50 files?', ['yes', 'no', 'show me first'])
 
-NOTE: agent_id is auto-detected from CLAUDE_SWARM_SLAVE_ID env var if not provided."
+IMPORTANT: Lings MUST pass agent_id explicitly (use your $CLAUDE_SWARM_SLAVE_ID).
+The env var fallback reads from MCP server process, NOT your ling process!"
     :inputSchema {:type "object"
                   :properties {"agent_id" {:type "string"
-                                           :description "Your agent identifier (auto-detected from CLAUDE_SWARM_SLAVE_ID if omitted)"}
+                                           :description "REQUIRED for lings: Pass your $CLAUDE_SWARM_SLAVE_ID. Without this, coordination may fail."}
                                "question" {:type "string"
                                            :description "What decision do you need?"}
                                "options" {:type "array"
