@@ -11,11 +11,9 @@
 
    CLARITY-A: Architectural performance via KG-first lookup."
   (:require [hive-mcp.knowledge-graph.disc :as disc]
-            [hive-mcp.knowledge-graph.edges :as edges]
             [hive-mcp.chroma :as chroma]
             [hive-mcp.agent.drone.sandbox :as sandbox]
             [clojure.string :as str]
-            [clojure.java.io :as io]
             [taoensso.timbre :as log]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>

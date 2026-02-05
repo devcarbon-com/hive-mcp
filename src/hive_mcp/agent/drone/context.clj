@@ -12,7 +12,6 @@
   (:require [hive-mcp.tools.kondo :as kondo]
             [hive-mcp.chroma :as chroma]
             [hive-mcp.knowledge-graph.disc :as kg-disc]
-            [hive-mcp.knowledge-graph.edges :as kg-edges]
             [clojure.string :as str]
             [clojure.java.io :as io]
             [taoensso.timbre :as log]))
