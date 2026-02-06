@@ -25,6 +25,7 @@
             [hive-mcp.tools.catchup.enrichment :as enrichment]
             [hive-mcp.tools.catchup.spawn :as catchup-spawn]
             [hive-mcp.tools.catchup.permeation :as permeation]
+            [hive-mcp.channel.memory-piggyback :as memory-piggyback]
             [hive-mcp.project.tree :as project-tree]
             [clojure.data.json :as json]
             [taoensso.timbre :as log]))
@@ -121,7 +122,17 @@
                                   (project-tree/maybe-scan-project-tree! (or directory "."))
                                   (catch Exception e
                                     (log/debug "Project tree scan failed (non-fatal):" (.getMessage e))
-                                    {:scanned false :error (.getMessage e)}))]
+                                    {:scanned false :error (.getMessage e)}))
+
+              ;; Memory piggyback: enqueue axioms + priority conventions for
+              ;; incremental delivery via ---MEMORY--- blocks on subsequent calls.
+              ;; Axioms first (highest priority), then priority conventions.
+              agent-id (or (:agent_id args) (:agent-id args)
+                           (when project-id (str "coordinator-" project-id))
+                           "coordinator")
+              piggyback-entries (into (vec axioms) priority-conventions)
+              _ (when (seq piggyback-entries)
+                  (memory-piggyback/enqueue! agent-id project-id piggyback-entries))]
 
           (fmt/build-catchup-response
            {:project-name project-name :project-id project-id
