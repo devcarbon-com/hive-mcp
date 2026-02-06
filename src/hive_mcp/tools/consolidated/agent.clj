@@ -1,9 +1,11 @@
 (ns hive-mcp.tools.consolidated.agent
   "Consolidated Agent CLI tool.
 
-   Subcommands: spawn, status, kill, dispatch, claims, list, collect, broadcast
+   Subcommands: spawn, status, kill, dispatch, claims, list (deprecated → status), collect, broadcast
 
    Usage via MCP: agent {\"command\": \"spawn\", \"type\": \"drone\", \"cwd\": \"/project\"}
+
+   NOTE: 'list' is a deprecated alias for 'status'. Use 'status' as the canonical command.
 
    SOLID: Facade pattern - single tool entry point for agent lifecycle.
    CLARITY: L - Thin adapter delegating to domain handlers."
@@ -462,17 +464,18 @@
       (mcp-error (str "Failed to get claims: " (ex-message e))))))
 
 ;; =============================================================================
-;; List Handler
+;; List Handler (DEPRECATED — alias for status)
 ;; =============================================================================
 
 (defn handle-list
-  "List all agents (shorthand for status with no filters).
+  "DEPRECATED: Use 'status' instead. 'list' is a backward-compatible alias.
 
-   Parameters:
-     type       - Optional filter: 'ling' or 'drone'
-     project_id - Optional filter by project
+   Delegates directly to handle-status. Kept for backward compatibility only.
+   Canonical command: agent status
 
-   CLARITY: R - Convenience wrapper around status."
+   Parameters: same as status (agent_id, type, project_id)
+
+   CLARITY: R - Thin redirect to handle-status."
   [params]
   (handle-status params))
 
@@ -646,8 +649,9 @@
 (def handlers
   "Map of command keywords to handler functions.
    Supports n-depth dispatch via cli/make-cli-handler:
-   - Flat: spawn, status, kill, dispatch, claims, list, collect, broadcast, cleanup
-   - Nested: dag start, dag stop, dag status (dag alone defaults to status)"
+   - Flat: spawn, status, kill, dispatch, claims, list (deprecated → status), collect, broadcast, cleanup
+   - Nested: dag start, dag stop, dag status (dag alone defaults to status)
+   NOTE: :list is a backward-compatible alias for :status."
   {:spawn     handle-spawn
    :status    handle-status
    :kill      handle-kill
@@ -678,7 +682,7 @@
   "MCP tool definition for consolidated agent command."
   {:name "agent"
    :consolidated true
-   :description "Unified agent operations: spawn (create ling/drone), status (query agents), kill (terminate), dispatch (send task), claims (file ownership), list (all agents), collect (get task result), broadcast (prompt all), cleanup (remove orphan agents after Emacs restart). Type: 'ling' (Claude Code instance) or 'drone' (OpenRouter leaf worker). Nested: dag (start/stop/status DAGWave scheduler). Use command='help' to list all."
+   :description "Unified agent operations: spawn (create ling/drone), status (query agents), kill (terminate), dispatch (send task), claims (file ownership), list (deprecated alias for status), collect (get task result), broadcast (prompt all), cleanup (remove orphan agents after Emacs restart). Type: 'ling' (Claude Code instance) or 'drone' (OpenRouter leaf worker). Nested: dag (start/stop/status DAGWave scheduler). Use command='help' to list all."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
                                          :enum ["spawn" "status" "kill" "dispatch" "claims" "list" "collect" "broadcast" "cleanup" "dag start" "dag stop" "dag status" "help"]

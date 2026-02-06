@@ -1,7 +1,8 @@
 (ns hive-mcp.tools.consolidated.kanban
   "Consolidated Kanban CLI tool.
 
-   Subcommands: list, create, move, status, plan-to-kanban
+   Canonical commands: list, create, update, status, sync, plan-to-kanban
+   Deprecated aliases: move→update, roadmap→status, my-tasks→list
 
    Usage via MCP: kanban {\"command\": \"list\", \"status\": \"inprogress\"}
 
@@ -12,20 +13,40 @@
             [hive-mcp.plan.tool :as plan-tool]))
 
 ;; =============================================================================
-;; Handlers Map - Wire commands to memory-kanban handlers (Chroma backend)
+;; Canonical Handlers - the real commands
 ;; =============================================================================
 
-(def handlers
-  "Map of command keywords to handler functions."
+(def ^:private canonical-handlers
+  "Core command → handler map. These are the canonical commands."
   {:list           mem-kanban/handle-mem-kanban-list-slim
    :create         mem-kanban/handle-mem-kanban-create
-   :move           mem-kanban/handle-mem-kanban-move
+   :update         mem-kanban/handle-mem-kanban-move
    :status         mem-kanban/handle-mem-kanban-stats
-   :update         mem-kanban/handle-mem-kanban-move  ; move handles status updates
-   :roadmap        mem-kanban/handle-mem-kanban-stats ; stats includes overview
-   :my-tasks       mem-kanban/handle-mem-kanban-list-slim
    :sync           (fn [_] {:success true :message "Memory kanban is single-backend, no sync needed"})
    :plan-to-kanban plan-tool/handle-plan-to-kanban})
+
+;; =============================================================================
+;; Deprecated Aliases → route to canonical handlers
+;; =============================================================================
+
+(def ^:private deprecated-aliases
+  "DEPRECATED alias → canonical command mapping.
+   These exist for backward compatibility only.
+     move     → update  (move is just a status change, subset of update)
+     roadmap  → status  (roadmap is status with milestone view)
+     my-tasks → list    (my-tasks is list with agent filter)"
+  {:move     :update
+   :roadmap  :status
+   :my-tasks :list})
+
+(def handlers
+  "Map of command keywords to handler functions.
+   Merges canonical handlers with deprecated aliases pointing to the same fns."
+  (merge canonical-handlers
+         (reduce-kv (fn [m alias-key canonical-key]
+                      (assoc m alias-key (get canonical-handlers canonical-key)))
+                    {}
+                    deprecated-aliases)))
 
 ;; =============================================================================
 ;; CLI Handler
@@ -43,7 +64,7 @@
   "MCP tool definition for consolidated kanban command."
   {:name "kanban"
    :consolidated true
-   :description "Kanban task management: list (all/filtered tasks), create (new task), move (change status), status (board overview), update (modify task), roadmap (milestones), my-tasks (agent's tasks), sync (backends), plan-to-kanban (convert plan to tasks). Use command='help' to list all."
+   :description "Kanban task management: list (all/filtered tasks), create (new task), update (change status/modify task), status (board overview + milestones), sync (backends), plan-to-kanban (convert plan to tasks). Aliases (deprecated): move→update, roadmap→status, my-tasks→list. Use command='help' to list all."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
                                          :enum ["list" "create" "move" "status" "update" "roadmap" "my-tasks" "sync" "plan-to-kanban" "help"]

@@ -15,18 +15,20 @@
 ;; =============================================================================
 
 (def handlers
-  "Map of command keywords to handler functions."
-  {:eval     cider-handlers/handle-cider-eval-silent
-   :eval-explicit cider-handlers/handle-cider-eval-explicit
-   :doc      cider-handlers/handle-cider-doc
-   :info     cider-handlers/handle-cider-info
-   :complete cider-handlers/handle-cider-complete
-   :apropos  cider-handlers/handle-cider-apropos
-   :status   cider-handlers/handle-cider-status
-   :spawn    cider-handlers/handle-cider-spawn-session
-   :sessions cider-handlers/handle-cider-list-sessions
-   :eval-session cider-handlers/handle-cider-eval-session
-   :kill-session cider-handlers/handle-cider-kill-session})
+  "Map of command keywords to handler functions.
+   eval: unified handler routing via mode + session_name params.
+   eval-explicit, eval-session: backward-compat aliases (thin wrappers)."
+  {:eval          cider-handlers/handle-cider-eval
+   :eval-explicit (fn [params] (cider-handlers/handle-cider-eval (assoc params :mode "explicit")))
+   :eval-session  (fn [params] (cider-handlers/handle-cider-eval params))
+   :doc           cider-handlers/handle-cider-doc
+   :info          cider-handlers/handle-cider-info
+   :complete      cider-handlers/handle-cider-complete
+   :apropos       cider-handlers/handle-cider-apropos
+   :status        cider-handlers/handle-cider-status
+   :spawn         cider-handlers/handle-cider-spawn-session
+   :sessions      cider-handlers/handle-cider-list-sessions
+   :kill-session  cider-handlers/handle-cider-kill-session})
 
 ;; =============================================================================
 ;; CLI Handler
@@ -44,7 +46,7 @@
   "MCP tool definition for consolidated cider command."
   {:name "cider"
    :consolidated true
-   :description "CIDER REPL operations: eval (silent), eval-explicit (show in REPL), doc (docstring), info (full metadata), complete (completions), apropos (search symbols), status (connection), spawn/sessions/kill-session (multi-REPL). Use command='help' to list all."
+   :description "CIDER REPL operations: eval (silent|explicit, optional session routing), doc (docstring), info (full metadata), complete (completions), apropos (search symbols), status (connection), spawn/sessions/kill-session (multi-REPL). Use command='help' to list all."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
                                          :enum ["eval" "eval-explicit" "doc" "info" "complete" "apropos" "status" "spawn" "sessions" "eval-session" "kill-session" "help"]
@@ -52,6 +54,9 @@
                               ;; eval params
                               "code" {:type "string"
                                       :description "Clojure code to evaluate"}
+                              "mode" {:type "string"
+                                      :enum ["silent" "explicit"]
+                                      :description "Eval mode: 'silent' (default) or 'explicit' (shows in REPL buffer). Only used with eval command."}
                               ;; doc/info/complete params
                               "symbol" {:type "string"
                                         :description "Symbol name for doc/info lookup"}
@@ -66,7 +71,7 @@
                               "name" {:type "string"
                                       :description "Session name for spawn"}
                               "session_name" {:type "string"
-                                              :description "Session name for eval-session/kill-session"}
+                                              :description "Session name for eval-session/kill-session. When provided with eval command, routes to session eval."}
                               "project_dir" {:type "string"
                                              :description "Project directory for spawn"}
                               "agent_id" {:type "string"
