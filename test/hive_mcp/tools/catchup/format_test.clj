@@ -70,18 +70,69 @@
       (is (= ["catchup-priority"] (:tags result))))))
 
 ;; =============================================================================
+;; Content Budget Helper Tests
+;; =============================================================================
+
+(deftest cap-axiom-content-test
+  (testing "short axiom passes through unchanged"
+    (let [entry {:id "ax-1" :content "Short rule" :tags ["axiom"]}
+          result (fmt/cap-axiom-content entry)]
+      (is (= "Short rule" (:content result)))))
+
+  (testing "long axiom is truncated with retrieval hint"
+    (let [long-content (apply str (repeat 700 "x"))
+          entry {:id "ax-2" :content long-content :tags ["axiom"]}
+          result (fmt/cap-axiom-content entry)]
+      (is (< (count (:content result)) (+ fmt/axiom-content-cap 100)))
+      (is (.contains (:content result) "[TRUNCATED"))
+      (is (.contains (:content result) "ax-2"))))
+
+  (testing "exactly at cap passes through"
+    (let [exact-content (apply str (repeat 600 "a"))
+          entry {:id "ax-3" :content exact-content}
+          result (fmt/cap-axiom-content entry)]
+      (is (= exact-content (:content result))))))
+
+(deftest trim-kg-insights-test
+  (testing "nil insights returns nil"
+    (is (nil? (fmt/trim-kg-insights nil))))
+
+  (testing "trims stale-files to 5"
+    (let [insights {:stale-files (vec (range 20))}
+          result (fmt/trim-kg-insights insights)]
+      (is (= 5 (count (:stale-files result))))))
+
+  (testing "trims contradictions and superseded to 5"
+    (let [insights {:contradictions (vec (range 10))
+                    :superseded (vec (range 10))}
+          result (fmt/trim-kg-insights insights)]
+      (is (= 5 (count (:contradictions result))))
+      (is (= 5 (count (:superseded result))))))
+
+  (testing "trims grounding-warnings.stale-entries to 10"
+    (let [insights {:grounding-warnings {:stale-entries (vec (range 20))}}
+          result (fmt/trim-kg-insights insights)]
+      (is (= 10 (count (get-in result [:grounding-warnings :stale-entries]))))))
+
+  (testing "passes through insights with small lists unchanged"
+    (let [insights {:stale-files [1 2] :contradictions [3]}
+          result (fmt/trim-kg-insights insights)]
+      (is (= [1 2] (:stale-files result)))
+      (is (= [3] (:contradictions result))))))
+
+;; =============================================================================
 ;; Response Builder Tests
 ;; =============================================================================
 
 (deftest build-catchup-response-test
-  (testing "builds valid JSON response structure"
+  (testing "returns a vector of 4 content blocks (axioms/priority via memory piggyback)"
     (let [resp (fmt/build-catchup-response
                 {:project-name "test-proj" :project-id "test-proj"
                  :scopes ["scope:project:test-proj"]
                  :git-info {:branch "main" :uncommitted false}
                  :permeation {:permeated 0 :agents []}
-                 :axioms-meta [{:id "a1"}]
-                 :priority-meta []
+                 :axioms-meta [{:id "a1" :content "Never do X" :tags ["axiom"] :severity "INVIOLABLE"}]
+                 :priority-meta [{:id "p1" :content "Always do Y" :tags ["catchup-priority"] :type "convention"}]
                  :sessions-meta [{:id "s1"} {:id "s2"}]
                  :decisions-meta [{:id "d1"}]
                  :conventions-meta []
@@ -89,18 +140,45 @@
                  :expiring-meta [{:id "e1"}]
                  :kg-insights {:edge-count 5}
                  :project-tree-scan {:scanned true}
-                 :disc-decay {:updated 3 :skipped 0}})
-          parsed (json/read-str (:text resp) :key-fn keyword)]
-      (is (= "text" (:type resp)))
-      (is (true? (:success parsed)))
-      (is (= "test-proj" (:project parsed)))
-      (is (= 1 (get-in parsed [:counts :axioms])))
-      (is (= 2 (get-in parsed [:counts :sessions])))
-      (is (= 1 (get-in parsed [:counts :decisions])))
-      (is (= 1 (get-in parsed [:counts :expiring])))
-      (is (= 5 (get-in parsed [:kg-insights :edge-count])))
-      (is (= 3 (get-in parsed [:disc-decay :updated])))
-      (is (string? (:hint parsed))))))
+                 :disc-decay {:updated 3 :skipped 0}})]
+      (is (vector? resp))
+      (is (= 4 (count resp)))
+
+      ;; Each block is {:type "text" :text "<json>"}
+      (doseq [block resp]
+        (is (= "text" (:type block)))
+        (is (string? (:text block))))
+
+      ;; Block 0: header with memory-piggyback status
+      (let [header (json/read-str (:text (nth resp 0)) :key-fn keyword)]
+        (is (= "header" (:_block header)))
+        (is (true? (:success header)))
+        (is (= "test-proj" (:project header)))
+        (is (= 1 (get-in header [:counts :axioms])))
+        (is (= 2 (get-in header [:counts :sessions])))
+        (is (= 1 (get-in header [:counts :decisions])))
+        (is (= 1 (get-in header [:counts :expiring])))
+        ;; Memory piggyback replaces follow-up-queries
+        (is (nil? (:follow-up-queries header)))
+        (is (= 2 (get-in header [:memory-piggyback :enqueued])))
+        (is (string? (get-in header [:memory-piggyback :note]))))
+
+      ;; Block 1: context
+      (let [ctx-block (json/read-str (:text (nth resp 1)) :key-fn keyword)]
+        (is (= "context" (:_block ctx-block)))
+        (is (= 2 (count (get-in ctx-block [:context :sessions])))))
+
+      ;; Block 2: kg-insights
+      (let [kg-block (json/read-str (:text (nth resp 2)) :key-fn keyword)]
+        (is (= "kg-insights" (:_block kg-block)))
+        (is (= 5 (get-in kg-block [:kg-insights :edge-count]))))
+
+      ;; Block 3: meta (last - piggyback target)
+      (let [meta-block (json/read-str (:text (nth resp 3)) :key-fn keyword)]
+        (is (= "meta" (:_block meta-block)))
+        (is (= 3 (get-in meta-block [:disc-decay :updated])))
+        (is (string? (:hint meta-block)))
+        (is (.contains (:hint meta-block) "MEMORY"))))))
 
 (deftest chroma-not-configured-error-test
   (testing "returns error with isError flag"

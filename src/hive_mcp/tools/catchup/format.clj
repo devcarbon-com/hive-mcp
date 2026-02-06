@@ -76,43 +76,117 @@
       base)))
 
 ;; =============================================================================
+;; Content Budget Constants
+;; =============================================================================
+
+(def axiom-content-cap
+  "Max chars per axiom entry content. Long axioms get truncated with retrieval hint."
+  600)
+
+(def block-warn-threshold
+  "Log warning if a single block exceeds this char count (logging only)."
+  40000)
+
+;; =============================================================================
+;; Content Budget Helpers
+;; =============================================================================
+
+(defn cap-axiom-content
+  "Cap axiom entry content at `axiom-content-cap` chars.
+   If truncated, appends retrieval hint suffix."
+  [axiom-entry]
+  (let [content (str (:content axiom-entry))
+        cap axiom-content-cap]
+    (if (<= (count content) cap)
+      axiom-entry
+      (assoc axiom-entry :content
+             (str (subs content 0 cap)
+                  " [TRUNCATED - use mcp_memory_get_full " (:id axiom-entry) "]")))))
+
+(defn trim-kg-insights
+  "Trim KG insight lists to bounded sizes.
+   Caps: stale-files 5, grounding-warnings.stale-entries 10,
+   contradictions 5, superseded 5."
+  [insights]
+  (when insights
+    (cond-> insights
+      (:stale-files insights)
+      (update :stale-files #(vec (take 5 %)))
+
+      (get-in insights [:grounding-warnings :stale-entries])
+      (update-in [:grounding-warnings :stale-entries] #(vec (take 10 %)))
+
+      (:contradictions insights)
+      (update :contradictions #(vec (take 5 %)))
+
+      (:superseded insights)
+      (update :superseded #(vec (take 5 %))))))
+
+(defn- warn-if-oversized
+  "Log warning if block text exceeds `block-warn-threshold`."
+  [block-name text]
+  (when (> (count text) block-warn-threshold)
+    (log/warn "Catchup block" block-name "exceeds threshold:"
+              (count text) "chars >" block-warn-threshold)))
+
+(defn- make-block
+  "Build a single catchup content block with warning check."
+  [block-name data]
+  (let [text (json/write-str data)]
+    (warn-if-oversized block-name text)
+    {:type "text" :text text}))
+
+;; =============================================================================
 ;; Response Builders
 ;; =============================================================================
 
 (defn build-catchup-response
-  "Build the final catchup response structure."
+  "Build the final catchup response as a vector of 4 content blocks.
+   Each block is {:type \"text\" :text \"<JSON>\"} with a :_block key in the JSON.
+
+   Axioms and priority conventions are delivered incrementally via the memory
+   piggyback channel (---MEMORY--- blocks on subsequent tool calls). The header
+   includes a memory-piggyback status so the LLM knows entries are coming.
+
+   Returns a vector (sequential?) so routes.clj normalize-content passes through.
+   The last block (meta) is intentionally small for clean hivemind piggyback."
   [{:keys [project-name project-id scopes git-info permeation
            axioms-meta priority-meta sessions-meta decisions-meta
            conventions-meta snippets-meta expiring-meta kg-insights
            project-tree-scan disc-decay]}]
-  {:type "text"
-   :text (json/write-str
-          {:success true
-           :project (or project-name project-id "global")
-           :scopes scopes
-           :git git-info
-           :permeation permeation  ;; Auto-permeated ling wraps
-           :counts {:axioms (count axioms-meta)
-                    :priority-conventions (count priority-meta)
-                    :sessions (count sessions-meta)
-                    :decisions (count decisions-meta)
-                    :conventions (count conventions-meta)
-                    :snippets (count snippets-meta)
-                    :expiring (count expiring-meta)}
-           :axioms axioms-meta
-           :priority-conventions priority-meta
-           :context {:sessions sessions-meta
-                     :decisions decisions-meta
-                     :conventions conventions-meta
-                     :snippets snippets-meta
-                     :expiring expiring-meta}
-           ;; KG insights surface contradictions and superseded entries
-           :kg-insights kg-insights
-           ;; HCR Wave 2: Project tree staleness scan result
-           :project-tree project-tree-scan
-           ;; P0.2: Disc certainty decay results
-           :disc-decay disc-decay
-           :hint "AXIOMS are INVIOLABLE - follow them word-for-word. Priority conventions and axioms loaded with full content. Entries with :kg key have Knowledge Graph relationships. Use mcp_memory_get_full for other entries."})})
+  (let [total-enqueued (+ (count axioms-meta) (count priority-meta))]
+    [(make-block "header"
+                 {:_block "header"
+                  :success true
+                  :project (or project-name project-id "global")
+                  :scopes scopes
+                  :git git-info
+                  :permeation permeation
+                  :counts {:axioms (count axioms-meta)
+                           :priority-conventions (count priority-meta)
+                           :sessions (count sessions-meta)
+                           :decisions (count decisions-meta)
+                           :conventions (count conventions-meta)
+                           :snippets (count snippets-meta)
+                           :expiring (count expiring-meta)}
+                  :memory-piggyback
+                  {:enqueued total-enqueued
+                   :note "Axioms and conventions will arrive via ---MEMORY--- blocks on subsequent tool calls. No manual fetch needed."}})
+     (make-block "context"
+                 {:_block "context"
+                  :context {:sessions sessions-meta
+                            :decisions decisions-meta
+                            :conventions conventions-meta
+                            :snippets snippets-meta
+                            :expiring expiring-meta}})
+     (make-block "kg-insights"
+                 {:_block "kg-insights"
+                  :kg-insights (trim-kg-insights kg-insights)})
+     (make-block "meta"
+                 {:_block "meta"
+                  :project-tree project-tree-scan
+                  :disc-decay disc-decay
+                  :hint "Axioms and priority conventions are being delivered via ---MEMORY--- piggyback blocks. AXIOMS are INVIOLABLE - follow them word-for-word. Entries with :kg key have Knowledge Graph relationships."})]))
 
 (defn chroma-not-configured-error
   "Return error response when Chroma is not configured."
