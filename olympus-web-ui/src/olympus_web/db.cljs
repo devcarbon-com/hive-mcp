@@ -12,10 +12,15 @@
 
 (def default-db
   {:connection {:ws nil
-                :status :disconnected  ; :disconnected | :connecting | :connected
-                :url "ws://localhost:9999"
+                :status :disconnected  ; :disconnected | :connecting | :connected | :reconnecting
+                :url "ws://localhost:7911"
                 :reconnect-attempts 0
-                :last-error nil}
+                :backoff-delay-ms nil   ; current computed backoff delay (nil when not reconnecting)
+                :next-retry-at nil      ; js/Date.now + delay (nil when not reconnecting)
+                :last-error nil
+                :last-snapshot nil       ; timestamp of last init-snapshot
+                :connected-at nil        ; timestamp when connection was established
+                :messages-received 0}
 
    ;; Agents indexed by id
    ;; Shape: {id {:id "..." :type :ling|:drone :status :idle|:working|:completed

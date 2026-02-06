@@ -118,9 +118,18 @@ body {
 
 .status-dot.connected { background-color: var(--status-connected); }
 .status-dot.disconnected { background-color: var(--status-disconnected); }
-.status-dot.connecting { 
+.status-dot.connecting {
     background-color: var(--status-connecting);
     animation: pulse 1.5s ease-in-out infinite;
+}
+.status-dot.reconnecting {
+    background-color: #f97316;
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+.connection-error {
+    color: var(--status-disconnected, #ef4444);
+    margin-left: 0.25rem;
 }
 
 @keyframes pulse {

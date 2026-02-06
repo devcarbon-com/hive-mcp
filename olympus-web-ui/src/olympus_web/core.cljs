@@ -4,6 +4,10 @@
    Initializes re-frame app and mounts to DOM."
   (:require [reagent.dom :as rdom]
             [re-frame.core :as rf]
+            ;; WebSocket client (side-effects: registers :ws/open, :ws/close effects)
+            [olympus-web.ws.client]
+            ;; WebSocket state (side-effects: registers enriched connection subs/events)
+            [olympus-web.ws.state]
             ;; Event namespaces (side-effects: register handlers)
             [olympus-web.events.core]
             [olympus-web.events.ws]

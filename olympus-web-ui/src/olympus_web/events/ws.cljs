@@ -1,18 +1,21 @@
 (ns olympus-web.events.ws
-  "WebSocket connection events for hive-mcp channel.
-   
+  "WebSocket connection events for Olympus WS server.
+
    Handles:
-   - Connection lifecycle (connect, disconnect, reconnect)
+   - Connection lifecycle (connect, disconnect, reconnect with exponential backoff)
    - Message parsing and dispatch to appropriate handlers
-   - Heartbeat/keepalive"
+
+   Connection management delegated to olympus-web.ws.client (exponential backoff,
+   heartbeat, WebSocket creation). This namespace focuses on re-frame event routing.
+
+   Backoff schedule: 1s -> 2s -> 4s -> 8s -> 16s -> 30s (capped)
+   See ws.client/compute-backoff-delay for details."
   (:require [re-frame.core :as rf]
-            [olympus-web.config :as config]))
-
-;; =============================================================================
-;; WebSocket State
-;; =============================================================================
-
-(defonce ws-instance (atom nil))
+            [olympus-web.config :as config]
+            ;; Side-effect: registers :ws/open, :ws/close, :ws/send, :ws/schedule-reconnect effects
+            [olympus-web.ws.client :as ws-client]
+            ;; Side-effect: registers enriched connection state events/subs
+            [olympus-web.ws.state]))
 
 ;; =============================================================================
 ;; Connection Events
@@ -22,8 +25,6 @@
  :ws/connect
  (fn [{:keys [db]} [_ url]]
    (let [ws-url (or url (:url (:connection db)) config/ws-url)]
-     (when-let [old-ws @ws-instance]
-       (.close old-ws))
      {:db (-> db
               (assoc-in [:connection :status] :connecting)
               (assoc-in [:connection :url] ws-url)
@@ -35,27 +36,44 @@
  (fn [db _]
    (-> db
        (assoc-in [:connection :status] :connected)
-       (assoc-in [:connection :reconnect-attempts] 0))))
+       (assoc-in [:connection :reconnect-attempts] 0)
+       (assoc-in [:connection :backoff-delay-ms] nil)
+       (assoc-in [:connection :next-retry-at] nil)
+       (assoc-in [:connection :connected-at] (js/Date.now)))))
 
 (rf/reg-event-fx
  :ws/disconnected
  (fn [{:keys [db]} [_ reason]]
    (let [attempts (get-in db [:connection :reconnect-attempts] 0)]
-     (reset! ws-instance nil)
      (if (< attempts config/ws-max-reconnect-attempts)
+       ;; Schedule reconnect with exponential backoff
+       {:db (-> db
+                (assoc-in [:connection :status] :reconnecting)
+                (assoc-in [:connection :connected-at] nil))
+        :ws/schedule-reconnect {:attempt attempts}}
+       ;; Max attempts reached - give up
        {:db (-> db
                 (assoc-in [:connection :status] :disconnected)
-                (update-in [:connection :reconnect-attempts] inc))
-        :dispatch-later [{:ms config/ws-reconnect-delay-ms
-                          :dispatch [:ws/connect]}]}
-       {:db (-> db
-                (assoc-in [:connection :status] :disconnected)
-                (assoc-in [:connection :last-error] (str "Max reconnect attempts reached: " reason)))}))))
+                (assoc-in [:connection :connected-at] nil)
+                (assoc-in [:connection :last-error]
+                          (str "Max reconnect attempts (" config/ws-max-reconnect-attempts
+                               ") reached. " (when reason (str "Last close reason: " reason)))))}))))
 
 (rf/reg-event-db
  :ws/error
  (fn [db [_ error]]
    (assoc-in db [:connection :last-error] (str error))))
+
+(rf/reg-event-fx
+ :ws/disconnect
+ (fn [{:keys [db]} _]
+   {:ws/close nil
+    :db (-> db
+            (assoc-in [:connection :status] :disconnected)
+            (assoc-in [:connection :reconnect-attempts] 0)
+            (assoc-in [:connection :backoff-delay-ms] nil)
+            (assoc-in [:connection :next-retry-at] nil)
+            (assoc-in [:connection :connected-at] nil))}))
 
 ;; =============================================================================
 ;; Message Handling
@@ -71,7 +89,8 @@
        (case msg-type
          ;; === Initial Snapshot (sent by Olympus WS on connect) ===
          :init-snapshot
-         {:dispatch [:ws/init-snapshot-received msg]}
+         {:dispatch [:ws/init-snapshot-received msg]
+          :db (update-in db [:connection :messages-received] (fnil inc 0))}
 
          ;; === Hivemind Shout Events (from Olympus protocol) ===
          :hivemind-shout
@@ -80,11 +99,13 @@
                       :event-type (keyword (:event-type msg))
                       :message (:message msg)
                       :task (:task msg)
-                      :timestamp (:timestamp msg)}]}
+                      :timestamp (:timestamp msg)}]
+          :db (update-in db [:connection :messages-received] (fnil inc 0))}
 
          ;; Legacy hivemind event types (direct format)
          (:started :progress :completed :error :blocked)
-         {:dispatch [:hivemind/event-received msg]}
+         {:dispatch [:hivemind/event-received msg]
+          :db (update-in db [:connection :messages-received] (fnil inc 0))}
 
          ;; === Agent Lifecycle Events ===
          :agent-spawned {:dispatch [:agents/spawned (:agent msg)]}
@@ -176,53 +197,15 @@
    db))
 
 ;; =============================================================================
-;; WebSocket Effect Handler
-;; =============================================================================
-
-(rf/reg-fx
- :ws/open
- (fn [{:keys [url]}]
-   (try
-     (let [ws (js/WebSocket. url)]
-       (reset! ws-instance ws)
-
-       (set! (.-onopen ws)
-             (fn [_]
-               (js/console.log "WebSocket connected to" url)
-               (rf/dispatch [:ws/connected])))
-
-       (set! (.-onclose ws)
-             (fn [event]
-               (js/console.log "WebSocket closed:" (.-reason event))
-               (rf/dispatch [:ws/disconnected (.-reason event)])))
-
-       (set! (.-onerror ws)
-             (fn [error]
-               (js/console.error "WebSocket error:" error)
-               (rf/dispatch [:ws/error error])))
-
-       (set! (.-onmessage ws)
-             (fn [event]
-               (let [data (.-data event)]
-                 ;; Handle pong responses silently
-                 (when-not (= data "pong")
-                   (rf/dispatch [:ws/message-received data]))))))
-     (catch :default e
-       (js/console.error "Failed to create WebSocket:" e)
-       (rf/dispatch [:ws/error e])))))
-
-;; =============================================================================
-;; Keepalive (ping/pong)
+;; Send Commands via WebSocket
 ;; =============================================================================
 
 (rf/reg-event-fx
- :ws/send-ping
- (fn [_ _]
-   (when-let [ws @ws-instance]
-     (when (= (.-readyState ws) 1) ; OPEN
-       (.send ws "ping")))
-   {}))
+ :ws/send-message
+ (fn [_ [_ msg]]
+   {:ws/send {:message msg}}))
 
-;; Start keepalive interval
-(defonce keepalive-interval
-  (js/setInterval #(rf/dispatch [:ws/send-ping]) 30000))
+(rf/reg-event-fx
+ :ws/request-snapshot
+ (fn [_ [_ view]]
+   {:ws/send {:message {:type "request-snapshot" :view (name view)}}}))

@@ -10,12 +10,32 @@
   "ws://localhost:7911")
 
 (def ws-reconnect-delay-ms
-  "Delay between reconnection attempts"
+  "DEPRECATED: Use ws-backoff-base-ms for exponential backoff.
+   Kept for backward compat."
   3000)
 
 (def ws-max-reconnect-attempts
-  "Maximum reconnection attempts before giving up"
-  10)
+  "Maximum reconnection attempts before giving up.
+   After this many attempts, stops reconnecting and shows error."
+  20)
+
+;; Exponential backoff configuration
+;; Schedule: 1s -> 2s -> 4s -> 8s -> 16s -> 30s (capped)
+(def ws-backoff-base-ms
+  "Initial reconnection delay in milliseconds."
+  1000)
+
+(def ws-backoff-max-ms
+  "Maximum reconnection delay in milliseconds (cap)."
+  30000)
+
+(def ws-backoff-multiplier
+  "Multiplier for each reconnection attempt (used by ws.client)."
+  2)
+
+(def ws-heartbeat-interval-ms
+  "Interval between keepalive pings in milliseconds."
+  30000)
 
 ;; Graph layout configuration
 (def dagre-config
