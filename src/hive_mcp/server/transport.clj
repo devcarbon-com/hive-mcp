@@ -10,6 +10,7 @@
    - Olympus WebSocket server (Olympus Web UI)
    - Legacy TCP channel (deprecated, backward compat)"
   (:require [nrepl.server :as nrepl-server]
+            [hive-mcp.config :as config]
             [hive-mcp.transport.websocket :as ws]
             [hive-mcp.transport.olympus :as olympus-ws]
             [hive-mcp.channel :as channel]
@@ -36,7 +37,10 @@
    Parameters:
      nrepl-server-atom - atom to store nREPL server reference for shutdown"
   [nrepl-server-atom]
-  (let [nrepl-port (parse-long (or (System/getenv "HIVE_MCP_NREPL_PORT") "7910"))]
+  (let [nrepl-port (config/get-service-value :nrepl :port
+                                             :env "HIVE_MCP_NREPL_PORT"
+                                             :parse parse-long
+                                             :default 7910)]
     (try
       ;; Try to load cider middleware if available
       (let [middleware (try
@@ -64,11 +68,17 @@
 ;; =============================================================================
 
 (defn start-websocket-server!
-  "Start WebSocket MCP server if HIVE_MCP_WEBSOCKET=true."
+  "Start WebSocket MCP server if enabled via config or HIVE_MCP_WEBSOCKET=true."
   []
-  (when (= "true" (System/getenv "HIVE_MCP_WEBSOCKET"))
-    (let [port (some-> (System/getenv "HIVE_MCP_WS_PORT") parse-long)
-          project-dir (System/getenv "HIVE_MCP_PROJECT_DIR")]
+  (when (config/get-service-value :websocket :enabled
+                                  :env "HIVE_MCP_WEBSOCKET"
+                                  :parse #(= "true" %)
+                                  :default false)
+    (let [port (config/get-service-value :websocket :port
+                                         :env "HIVE_MCP_WS_PORT"
+                                         :parse parse-long)
+          project-dir (or (:project-dir (config/get-service-config :websocket))
+                          (System/getenv "HIVE_MCP_PROJECT_DIR"))]
       (log/info "Starting WebSocket MCP server" {:port port :project-dir project-dir})
       (ws/start-server! {:port port
                          :project-dir project-dir}))))
@@ -86,7 +96,10 @@
    Parameters:
      ws-channel-monitor - atom to store the monitoring go-loop channel"
   [ws-channel-monitor]
-  (let [port (parse-long (or (System/getenv "HIVE_MCP_WS_CHANNEL_PORT") "9999"))
+  (let [port (config/get-service-value :ws-channel :port
+                                       :env "HIVE_MCP_WS_CHANNEL_PORT"
+                                       :parse parse-long
+                                       :default 9999)
         check-interval-ms 30000] ; Check every 30 seconds
     ;; Start initial server
     (try
@@ -136,7 +149,10 @@
   "Start legacy bidirectional channel server (deprecated - kept for backward compat).
    Marks coordinator as running to protect from test fixture cleanup."
   []
-  (let [channel-port (parse-long (or (System/getenv "HIVE_MCP_CHANNEL_PORT") "9998"))]
+  (let [channel-port (config/get-service-value :channel :port
+                                               :env "HIVE_MCP_CHANNEL_PORT"
+                                               :parse parse-long
+                                               :default 9998)]
     (try
       (channel/start-server! {:type :tcp :port channel-port})
       ;; Mark coordinator as running to protect from test fixture cleanup

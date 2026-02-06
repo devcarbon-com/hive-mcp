@@ -33,11 +33,29 @@
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 ;; =============================================================================
+;; Forward declarations
+;; =============================================================================
+
+(declare broadcast!)
+
+;; =============================================================================
 ;; State
 ;; =============================================================================
 
 (defonce ^:private server-atom (atom nil))
 (defonce ^:private clients (atom #{}))
+
+;; DS State Bridge: Throttled DataScript -> WebSocket push.
+;; Uses plain Java concurrency (LinkedBlockingQueue + daemon Thread)
+;; to avoid core.async executor compatibility issues.
+(defonce ^:private ds-bridge-queue
+  (java.util.concurrent.LinkedBlockingQueue. 100))
+(defonce ^:private ds-bridge-thread (atom nil))
+
+(def ^:private bridge-throttle-ms
+  "Batching window for DS changes before pushing to clients.
+   200ms balances responsiveness vs flood prevention."
+  200)
 
 ;; =============================================================================
 ;; JSON Serialization Helpers
@@ -185,6 +203,143 @@
           :waves (build-waves-snapshot)
           :kg (build-kg-snapshot)
           :project-tree (build-project-tree-snapshot)}})
+
+;; =============================================================================
+;; DataScript State Bridge (Auto-push DS changes to Olympus clients)
+;; =============================================================================
+
+(defn- classify-tx-changes
+  "Classify which entity types changed in a DataScript transaction.
+   Examines tx-report datoms and returns a set of changed domains.
+
+   Returns: #{:agents :waves} (subset based on what actually changed)"
+  [tx-report]
+  (let [datoms (:tx-data tx-report)]
+    (reduce (fn [acc datom]
+              (let [attr-ns (some-> (.-a datom) namespace)]
+                (case attr-ns
+                  "slave" (conj acc :agents)
+                  "wave"  (conj acc :waves)
+                  ;; Ignore other namespaces (olympus, kanban, etc.)
+                  acc)))
+            #{}
+            datoms)))
+
+(defn- flush-state-patch!
+  "Flush accumulated DS changes to all connected Olympus clients.
+   Builds snapshots only for changed domains (selective rebuild).
+   No-ops if no clients are connected (avoid wasted CPU)."
+  [changed-domains]
+  (when (and (seq changed-domains) (seq @clients))
+    (try
+      (let [data (cond-> {}
+                   (:agents changed-domains) (assoc :agents (build-agents-snapshot))
+                   (:waves changed-domains)  (assoc :waves (build-waves-snapshot)))]
+        (when (seq data)
+          (broadcast! {:type :state-patch
+                       :timestamp (System/currentTimeMillis)
+                       :data data
+                       :changed (vec changed-domains)})))
+      (catch Exception e
+        (log/debug "DS bridge flush failed:" (.getMessage e))))))
+
+(defn- start-bridge-loop!
+  "Start background daemon thread that batches DS changes and flushes to clients.
+
+   Uses plain Java concurrency (LinkedBlockingQueue + Thread) to avoid
+   core.async executor compatibility issues.
+
+   Algorithm:
+   1. .take blocks until first change arrives (no busy-wait)
+   2. .poll with timeout accumulates additional changes within throttle window
+   3. Flush accumulated changes as a single :state-patch event
+   4. Repeat
+
+   This prevents flooding clients during rapid DS transactions
+   (e.g., bulk agent spawns) while keeping latency under 200ms."
+  []
+  (when-not @ds-bridge-thread
+    (.clear ds-bridge-queue)
+    (let [thread (Thread.
+                  (fn []
+                    (try
+                      (loop []
+                        ;; Phase 1: Block until first change (no busy-wait)
+                        (let [first-changes (.take ds-bridge-queue)]
+                          (when first-changes
+                            ;; Phase 2: Accumulate more changes within throttle window
+                            (let [all-changes
+                                  (loop [acc first-changes]
+                                    (if-let [more (.poll ds-bridge-queue
+                                                         bridge-throttle-ms
+                                                         java.util.concurrent.TimeUnit/MILLISECONDS)]
+                                      (recur (into acc more))
+                                      acc))]
+                              ;; Phase 3: Flush
+                              (flush-state-patch! all-changes))
+                            (recur))))
+                      (catch InterruptedException _
+                        (log/debug "DS bridge thread interrupted - shutting down"))
+                      (catch Exception e
+                        (log/warn "DS bridge thread error:" (.getMessage e))))))]
+      (.setDaemon thread true)
+      (.setName thread "olympus-ds-bridge")
+      (.start thread)
+      (reset! ds-bridge-thread thread)
+      (log/debug "DS bridge thread started"))))
+
+(defn- stop-bridge-loop!
+  "Interrupt and stop the bridge thread."
+  []
+  (when-let [^Thread thread @ds-bridge-thread]
+    (.interrupt thread)
+    (reset! ds-bridge-thread nil)
+    (.clear ds-bridge-queue)
+    (log/debug "DS bridge thread stopped")))
+
+(defn- on-ds-transaction!
+  "DataScript listen! callback. Classifies changes and enqueues for batching.
+   Fast path: returns immediately if no relevant changes detected.
+   Uses non-blocking .offer so DS transactions are never delayed."
+  [tx-report]
+  (let [changes (classify-tx-changes tx-report)]
+    (when (seq changes)
+      (.offer ds-bridge-queue changes))))
+
+(defn wire-ds-state-bridge!
+  "Install DataScript listener that auto-pushes state changes to Olympus clients.
+
+   Uses d/listen! on the swarm DataScript connection to detect transactions
+   affecting agents (:slave/*) and waves (:wave/*). Changes are batched
+   within a 200ms window and pushed as :state-patch events.
+
+   Event format pushed to clients:
+   {:type :state-patch
+    :timestamp <ms>
+    :data {:agents [...] :waves {...}}   ;; only changed domains included
+    :changed [:agents :waves]}           ;; which domains changed
+
+   Called from wire-hivemind-events! during server startup."
+  []
+  (try
+    (start-bridge-loop!)
+    (let [conn (ds-conn/ensure-conn)]
+      (d-core/listen! conn :olympus-state-bridge on-ds-transaction!)
+      (log/info "Olympus DS state bridge wired - auto-pushing DataScript changes"))
+    (catch Exception e
+      (log/warn "Failed to wire DS state bridge (non-fatal):" (.getMessage e)))))
+
+(defn stop-ds-state-bridge!
+  "Remove DataScript listener and stop bridge loop.
+   Called from stop! during server shutdown."
+  []
+  (try
+    (when-let [conn (try (ds-conn/get-conn) (catch Exception _ nil))]
+      (d-core/unlisten! conn :olympus-state-bridge))
+    (stop-bridge-loop!)
+    (log/debug "DS state bridge stopped")
+    (catch Exception e
+      (log/debug "DS bridge stop error (non-fatal):" (.getMessage e)))))
 
 ;; =============================================================================
 ;; WebSocket Handler
@@ -374,8 +529,9 @@
            nil))))))
 
 (defn stop!
-  "Stop the Olympus WebSocket server."
+  "Stop the Olympus WebSocket server and DS state bridge."
   []
+  (stop-ds-state-bridge!)
   (when-let [{:keys [server port]} @server-atom]
     (.close server)
     (reset! server-atom nil)
@@ -384,12 +540,14 @@
     true))
 
 (defn status
-  "Get Olympus WS server status."
+  "Get Olympus WS server status including DS bridge state."
   []
   {:running? (boolean @server-atom)
    :port (:port @server-atom)
    :clients (count @clients)
-   :connected? (pos? (count @clients))})
+   :connected? (pos? (count @clients))
+   :ds-bridge {:active? (boolean @ds-bridge-thread)
+               :queue-size (.size ds-bridge-queue)}})
 
 ;; =============================================================================
 ;; Public API - Event Broadcasting
@@ -507,7 +665,11 @@
                   (log/debug "Olympus memory event forward failed:" (.getMessage e))))
               (recur))))))
 
-    (log/info "Olympus event wiring complete - :olympus-broadcast effect + memory change subscription")
+    ;; 3. Wire DataScript state bridge (auto-push DS changes to clients)
+    ;;    Installs d/listen! on swarm conn, batches changes, pushes :state-patch.
+    (wire-ds-state-bridge!)
+
+    (log/info "Olympus event wiring complete - :olympus-broadcast effect + memory sub + DS state bridge")
     (catch Exception e
       (log/warn "Failed to wire Olympus events (non-fatal):" (.getMessage e)))))
 
@@ -521,4 +683,15 @@
   ;; Test snapshot
   (build-full-snapshot)
   (build-agents-snapshot)
-  (build-waves-snapshot))
+  (build-waves-snapshot)
+
+  ;; DS State Bridge testing
+  (wire-ds-state-bridge!)
+  ;; Verify listener is installed:
+  (status) ;; => {:ds-bridge {:active? true :channel? true}}
+  ;; Trigger a DS transaction to test auto-push:
+  (require '[datascript.core :as d])
+  (d/transact! (ds-conn/ensure-conn)
+               [{:slave/id "test-bridge" :slave/status :idle :slave/name "test"}])
+  ;; Should see :state-patch broadcast in logs if clients connected
+  (stop-ds-state-bridge!))

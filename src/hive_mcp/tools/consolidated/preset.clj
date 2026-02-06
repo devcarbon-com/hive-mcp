@@ -1,19 +1,21 @@
 (ns hive-mcp.tools.consolidated.preset
   "Consolidated Preset CLI tool.
 
-   Subcommands: list, get, search, add, delete, status, migrate, header
-
-   Usage via MCP: preset {\"command\": \"search\", \"query\": \"testing focused\"}
+   Subcommands: list, get, header, search, add, delete, status, migrate
+   Deprecated aliases: list_slim → list (verbosity=slim), core → get (verbosity=core)
 
    Verbosity:
    - list supports verbosity: full (default) | slim (names+categories only)
    - get supports verbosity: full (default) | core (~200 token summary)
    - header already has lazy:bool (same pattern)
 
+   Usage via MCP: preset {\"command\": \"list\", \"verbosity\": \"slim\"}
+
    SOLID: Facade pattern - single tool entry point for preset operations.
    CLARITY: L - Thin adapter delegating to domain handlers."
   (:require [hive-mcp.tools.cli :refer [make-cli-handler]]
-            [hive-mcp.tools.presets :as preset-handlers]))
+            [hive-mcp.tools.presets :as preset-handlers]
+            [taoensso.timbre :as log]))
 
 ;; =============================================================================
 ;; Verbosity-aware wrappers
@@ -36,21 +38,45 @@
     (preset-handlers/handle-preset-get params)))
 
 ;; =============================================================================
-;; Handlers Map - Wire commands to existing handlers
+;; Deprecated Alias Support
 ;; =============================================================================
 
-(def handlers
-  "Map of command keywords to handler functions."
+(def ^:private deprecated-aliases
+  "Map of deprecated command keywords to their canonical replacements."
+  {:list_slim :list
+   :core      :get})
+
+(defn- wrap-deprecated
+  "Wrap a handler fn to emit a deprecation warning before delegating."
+  [alias-kw canonical-kw handler-fn]
+  (fn [params]
+    (log/warn (str "DEPRECATED: command '" (name alias-kw)
+                   "' is deprecated, use '" (name canonical-kw) "' instead."))
+    (handler-fn params)))
+
+;; =============================================================================
+;; Handlers Map
+;; =============================================================================
+
+(def canonical-handlers
+  "Map of canonical command keywords to handler functions."
   {:list      handle-list
-   :list_slim preset-handlers/handle-preset-list-slim  ;; backward compat alias
    :get       handle-get
-   :core      preset-handlers/handle-preset-core        ;; backward compat alias
    :header    preset-handlers/handle-preset-header
    :search    preset-handlers/handle-preset-search
    :add       preset-handlers/handle-preset-add
    :delete    preset-handlers/handle-preset-delete
    :status    preset-handlers/handle-preset-status
    :migrate   preset-handlers/handle-preset-migrate})
+
+(def handlers
+  "Canonical handlers merged with deprecated aliases (with log warnings)."
+  (merge canonical-handlers
+         (reduce-kv (fn [m alias-kw canonical-kw]
+                      (assoc m alias-kw
+                             (wrap-deprecated alias-kw canonical-kw
+                                              (get canonical-handlers canonical-kw))))
+                    {} deprecated-aliases)))
 
 ;; =============================================================================
 ;; CLI Handler

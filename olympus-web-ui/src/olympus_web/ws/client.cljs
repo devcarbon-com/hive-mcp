@@ -24,21 +24,17 @@
 ;; State (module-private atoms)
 ;; =============================================================================
 
-(defonce ^:private ws-instance
-  "Current WebSocket instance. nil when disconnected."
-  (atom nil))
+;; Current WebSocket instance. nil when disconnected.
+(defonce ^:private ws-instance (atom nil))
 
-(defonce ^:private reconnect-timer
-  "Handle for pending reconnect setTimeout. Used to cancel on disconnect!."
-  (atom nil))
+;; Handle for pending reconnect setTimeout. Used to cancel on disconnect!.
+(defonce ^:private reconnect-timer (atom nil))
 
-(defonce ^:private heartbeat-timer
-  "Handle for periodic heartbeat setInterval."
-  (atom nil))
+;; Handle for periodic heartbeat setInterval.
+(defonce ^:private heartbeat-timer (atom nil))
 
-(defonce ^:private intentional-close?
-  "Flag to distinguish intentional disconnect! from unexpected close."
-  (atom false))
+;; Flag to distinguish intentional disconnect! from unexpected close.
+(defonce ^:private intentional-close? (atom false))
 
 ;; =============================================================================
 ;; Exponential Backoff

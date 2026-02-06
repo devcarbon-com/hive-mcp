@@ -45,7 +45,7 @@
         ;; Store reference
         (swap! terminals assoc ling-id {:term term :fit fit})
         ;; Write welcome message
-        (.writeln term (str "\x1b[36m--- Ling output: " ling-id " ---\x1b[0m"))
+        (.writeln term (str "\u001b[36m--- Ling output: " ling-id " ---\u001b[0m"))
         (.writeln term "")
         term))))
 

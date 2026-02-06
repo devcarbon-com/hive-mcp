@@ -1,11 +1,10 @@
 (ns hive-mcp.tools.consolidated.agent
   "Consolidated Agent CLI tool.
 
-   Subcommands: spawn, status, kill, dispatch, claims, list (deprecated → status), collect, broadcast
+   Subcommands: spawn, status, kill, kill-batch, dispatch, claims, collect, broadcast, cleanup, dag
+   Deprecated aliases: list → status
 
    Usage via MCP: agent {\"command\": \"spawn\", \"type\": \"drone\", \"cwd\": \"/project\"}
-
-   NOTE: 'list' is a deprecated alias for 'status'. Use 'status' as the canonical command.
 
    SOLID: Facade pattern - single tool entry point for agent lifecycle.
    CLARITY: L - Thin adapter delegating to domain handlers."
@@ -301,8 +300,56 @@
         (mcp-error (str "Failed to get status: " (ex-message e)))))))
 
 ;; =============================================================================
-;; Kill Handler
+;; Kill Handler (+ kill-batch)
 ;; =============================================================================
+
+(defn- kill-one!
+  "Core kill logic for a single agent. Returns plain data:
+   - {:killed id :result proto-result} on success
+   - {:error \"reason\" :id id} on failure
+
+   Used by both handle-kill and handle-kill-batch to avoid duplicating
+   ownership checks, agent construction, and proto/kill! dispatch.
+
+   Ownership rules (HIL):
+   - Caller without explicit directory (coordinator): can kill anything
+   - Legacy lings without project-id: can be killed by anyone
+   - Same project: kill proceeds normally
+   - Different project: requires force_cross_project=true"
+  [agent-id {:keys [directory force_cross_project]}]
+  (try
+    (if-let [agent-data (queries/get-slave agent-id)]
+      (let [;; CRITICAL: Only use EXPLICIT directory param, not ctx fallback.
+            caller-project-id (when directory
+                                (scope/get-current-project-id directory))
+            target-project-id (:slave/project-id agent-data)
+            can-kill? (or force_cross_project
+                          (nil? caller-project-id)
+                          (nil? target-project-id)
+                          (= caller-project-id target-project-id))]
+        (if-not can-kill?
+          {:error (format "Agent '%s' belongs to project '%s', not '%s'. Pass force_cross_project=true to kill cross-project."
+                          agent-id target-project-id caller-project-id)
+           :id agent-id}
+          (let [agent-type (if (= 1 (:slave/depth agent-data)) :ling :drone)
+                agent (case agent-type
+                        :ling (ling/->ling agent-id {:cwd (:slave/cwd agent-data)
+                                                     :presets (:slave/presets agent-data)
+                                                     :project-id (:slave/project-id agent-data)
+                                                     :spawn-mode (or (:ling/spawn-mode agent-data) :vterm)})
+                        :drone (drone/->drone agent-id {:cwd (:slave/cwd agent-data)
+                                                        :parent-id (:slave/parent agent-data)
+                                                        :project-id (:slave/project-id agent-data)}))
+                result (proto/kill! agent)]
+            (log/info "Kill agent result" {:agent_id agent-id
+                                           :result result
+                                           :caller-project caller-project-id
+                                           :target-project target-project-id})
+            {:killed agent-id :result result})))
+      {:error (str "Agent not found: " agent-id) :id agent-id})
+    (catch Exception e
+      (log/error "Failed to kill agent" {:agent_id agent-id :error (ex-message e)})
+      {:error (str "Failed to kill agent: " (ex-message e)) :id agent-id})))
 
 (defn handle-kill
   "Terminate an agent.
@@ -315,65 +362,49 @@
 
    HUMAN-IN-THE-LOOP (HIL): Cross-project kill prevention.
    If target agent's project differs from caller's project, kill is denied
-   unless force_cross_project=true is explicitly passed. This prevents
-   accidentally killing lings from other projects.
-
-   Ownership rules:
-   - Caller without explicit directory (coordinator): can kill anything
-   - Legacy lings without project-id: can be killed by anyone
-   - Same project: kill proceeds normally
-   - Different project: requires force_cross_project=true
+   unless force_cross_project=true is explicitly passed.
 
    CLARITY: Y - Safe failure, checks ownership + critical ops before killing.
    CLARITY: I - Inputs guarded with HIL for cross-project safety.
 
-   BUG FIX (2026-02): Only use EXPLICIT directory param for ownership check.
-   ctx/current-directory falls back to MCP server's install dir (via
-   System/getProperty user.dir in wrap-handler-context), which caused
-   false cross-project detection. Coordinators typically don't pass
-   directory, so they should have unrestricted kill access."
-  [{:keys [agent_id directory force_cross_project]}]
+   BUG FIX (2026-02): Only use EXPLICIT directory param for ownership check."
+  [{:keys [agent_id] :as params}]
   (if (empty? agent_id)
     (mcp-error "agent_id is required")
-    (try
-      (if-let [agent-data (queries/get-slave agent_id)]
-        (let [;; Get caller's project context
-              ;; CRITICAL: Only use EXPLICIT directory param, not ctx fallback.
-              ;; ctx/current-directory falls back to MCP server's install dir,
-              ;; which would incorrectly restrict coordinator's kill access.
-              caller-project-id (when directory
-                                  (scope/get-current-project-id directory))
-              ;; Get target's project-id
-              target-project-id (:slave/project-id agent-data)
-              ;; Check ownership (HIL guard)
-              can-kill? (or force_cross_project
-                            (nil? caller-project-id)   ; no explicit directory = coordinator context
-                            (nil? target-project-id)   ; legacy ling - can be killed by anyone
-                            (= caller-project-id target-project-id))]  ; same project
-          (if-not can-kill?
-            ;; HIL: Cross-project kill denied - return actionable error
-            (mcp-error (format "Agent '%s' belongs to project '%s', not '%s'. Pass force_cross_project=true to kill cross-project."
-                               agent_id target-project-id caller-project-id))
-            ;; Ownership OK - proceed with kill
-            (let [agent-type (if (= 1 (:slave/depth agent-data)) :ling :drone)
-                  agent (case agent-type
-                          :ling (ling/->ling agent_id {:cwd (:slave/cwd agent-data)
-                                                       :presets (:slave/presets agent-data)
-                                                       :project-id (:slave/project-id agent-data)
-                                                       :spawn-mode (or (:ling/spawn-mode agent-data) :vterm)})
-                          :drone (drone/->drone agent_id {:cwd (:slave/cwd agent-data)
-                                                          :parent-id (:slave/parent agent-data)
-                                                          :project-id (:slave/project-id agent-data)}))
-                  result (proto/kill! agent)]
-              (log/info "Kill agent result" {:agent_id agent_id
-                                             :result result
-                                             :caller-project caller-project-id
-                                             :target-project target-project-id})
-              (mcp-json result))))
-        (mcp-error (str "Agent not found: " agent_id)))
-      (catch Exception e
-        (log/error "Failed to kill agent" {:agent_id agent_id :error (ex-message e)})
-        (mcp-error (str "Failed to kill agent: " (ex-message e)))))))
+    (let [result (kill-one! agent_id params)]
+      (if (:error result)
+        (mcp-error (:error result))
+        (mcp-json (:result result))))))
+
+(defn handle-kill-batch
+  "Terminate multiple agents in a single call.
+
+   Parameters:
+     agent_ids           - Array of agent IDs to kill (required)
+     force               - Force kill even if critical ops in progress (default: false)
+     force_cross_project - Allow killing agents from different projects (default: false)
+     directory           - Caller's working directory for ownership check (optional)
+
+   Returns: {killed: [...], failed: [{id: ..., error: ...}], summary: {...}}
+
+   Reuses kill-one! core logic — same ownership checks apply per agent.
+
+   CLARITY: I - Validates agent_ids array before processing.
+   CLARITY: R - Returns detailed per-agent results for transparency."
+  [{:keys [agent_ids] :as params}]
+  (if (or (nil? agent_ids) (empty? agent_ids))
+    (mcp-error "agent_ids is required (array of agent ID strings)")
+    (let [results (mapv #(kill-one! % params) agent_ids)
+          killed  (filterv :killed results)
+          failed  (filterv :error results)]
+      (log/info "Kill-batch completed" {:total (count agent_ids)
+                                        :killed (count killed)
+                                        :failed (count failed)})
+      (mcp-json {:killed  (mapv :killed killed)
+                 :failed  (mapv #(select-keys % [:id :error]) failed)
+                 :summary {:total  (count agent_ids)
+                           :killed (count killed)
+                           :failed (count failed)}}))))
 
 ;; =============================================================================
 ;; Dispatch Handler
@@ -462,22 +493,6 @@
     (catch Exception e
       (log/error "Failed to get claims" {:error (ex-message e)})
       (mcp-error (str "Failed to get claims: " (ex-message e))))))
-
-;; =============================================================================
-;; List Handler (DEPRECATED — alias for status)
-;; =============================================================================
-
-(defn handle-list
-  "DEPRECATED: Use 'status' instead. 'list' is a backward-compatible alias.
-
-   Delegates directly to handle-status. Kept for backward compatibility only.
-   Canonical command: agent status
-
-   Parameters: same as status (agent_id, type, project_id)
-
-   CLARITY: R - Thin redirect to handle-status."
-  [params]
-  (handle-status params))
 
 ;; =============================================================================
 ;; Collect Handler (delegates to swarm for backward compat)
@@ -643,28 +658,52 @@
       (mcp-error (str "Failed to get DAG status: " (ex-message e))))))
 
 ;; =============================================================================
+;; Deprecated Alias Support
+;; =============================================================================
+
+(def ^:private deprecated-aliases
+  "Map of deprecated command keywords to their canonical replacements."
+  {:list :status})
+
+(defn- wrap-deprecated
+  "Wrap a handler fn to emit a deprecation warning before delegating."
+  [alias-kw canonical-kw handler-fn]
+  (fn [params]
+    (log/warn (str "DEPRECATED: command '" (name alias-kw)
+                   "' is deprecated, use '" (name canonical-kw) "' instead."))
+    (handler-fn params)))
+
+;; =============================================================================
 ;; Handlers Map
 ;; =============================================================================
 
-(def handlers
-  "Map of command keywords to handler functions.
+(def canonical-handlers
+  "Map of canonical command keywords to handler functions.
    Supports n-depth dispatch via cli/make-cli-handler:
-   - Flat: spawn, status, kill, dispatch, claims, list (deprecated → status), collect, broadcast, cleanup
-   - Nested: dag start, dag stop, dag status (dag alone defaults to status)
-   NOTE: :list is a backward-compatible alias for :status."
-  {:spawn     handle-spawn
-   :status    handle-status
-   :kill      handle-kill
-   :dispatch  handle-dispatch
-   :claims    handle-claims
-   :list      handle-list
-   :collect   handle-collect
-   :broadcast handle-broadcast
-   :cleanup   handle-cleanup
-   :dag       {:start    handle-dag-start
-               :stop     handle-dag-stop
-               :status   handle-dag-status
-               :_handler handle-dag-status}})
+   - Flat: spawn, status, kill, kill-batch, dispatch, claims, collect, broadcast, cleanup
+   - Nested: dag start, dag stop, dag status (dag alone defaults to status)"
+  {:spawn      handle-spawn
+   :status     handle-status
+   :kill       handle-kill
+   :kill-batch handle-kill-batch
+   :dispatch   handle-dispatch
+   :claims     handle-claims
+   :collect    handle-collect
+   :broadcast  handle-broadcast
+   :cleanup    handle-cleanup
+   :dag        {:start    handle-dag-start
+                :stop     handle-dag-stop
+                :status   handle-dag-status
+                :_handler handle-dag-status}})
+
+(def handlers
+  "Canonical handlers merged with deprecated aliases (with log warnings)."
+  (merge canonical-handlers
+         (reduce-kv (fn [m alias-kw canonical-kw]
+                      (assoc m alias-kw
+                             (wrap-deprecated alias-kw canonical-kw
+                                              (get canonical-handlers canonical-kw))))
+                    {} deprecated-aliases)))
 
 ;; =============================================================================
 ;; CLI Handler
@@ -682,10 +721,10 @@
   "MCP tool definition for consolidated agent command."
   {:name "agent"
    :consolidated true
-   :description "Unified agent operations: spawn (create ling/drone), status (query agents), kill (terminate), dispatch (send task), claims (file ownership), list (deprecated alias for status), collect (get task result), broadcast (prompt all), cleanup (remove orphan agents after Emacs restart). Type: 'ling' (Claude Code instance) or 'drone' (OpenRouter leaf worker). Nested: dag (start/stop/status DAGWave scheduler). Use command='help' to list all."
+   :description "Unified agent operations: spawn (create ling/drone), status (query agents), kill (terminate), kill-batch (terminate multiple agents in one call), dispatch (send task), claims (file ownership), list (deprecated alias for status), collect (get task result), broadcast (prompt all), cleanup (remove orphan agents after Emacs restart). Type: 'ling' (Claude Code instance) or 'drone' (OpenRouter leaf worker). Nested: dag (start/stop/status DAGWave scheduler). Use command='help' to list all."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
-                                         :enum ["spawn" "status" "kill" "dispatch" "claims" "list" "collect" "broadcast" "cleanup" "dag start" "dag stop" "dag status" "help"]
+                                         :enum ["spawn" "status" "kill" "kill-batch" "dispatch" "claims" "list" "collect" "broadcast" "cleanup" "dag start" "dag stop" "dag status" "help"]
                                          :description "Agent operation to perform"}
                               ;; spawn params
                               "type" {:type "string"
@@ -708,8 +747,11 @@
                               ;; common params
                               "agent_id" {:type "string"
                                           :description "Agent ID for status/kill/dispatch/claims"}
+                              "agent_ids" {:type "array"
+                                           :items {:type "string"}
+                                           :description "Array of agent IDs for kill-batch"}
                               "project_id" {:type "string"
-                                            :description "Project ID filter for status/list"}
+                                            :description "Project ID filter for status"}
                               ;; dispatch params
                               "prompt" {:type "string"
                                         :description "Task prompt for dispatch or broadcast"}
@@ -765,14 +807,17 @@
   ;; Kill an agent
   ;; (handle-kill {:agent_id "drone-456"})
 
+  ;; Kill multiple agents in one call
+  ;; (handle-kill-batch {:agent_ids ["ling-1" "ling-2" "drone-3"]})
+
   ;; Dispatch a task
   ;; (handle-dispatch {:agent_id "ling-123" :prompt "Fix the bug" :files ["src/bug.clj"]})
 
   ;; Get claims for an agent
   ;; (handle-claims {:agent_id "drone-456"})
 
-  ;; List all agents
-  ;; (handle-list {})
+  ;; List all agents (deprecated — use status)
+  ;; (handle-agent {:command "status"})
 
   ;; DAG Scheduler (n-depth subcommands)
   ;; (handle-agent {:command "dag status"})

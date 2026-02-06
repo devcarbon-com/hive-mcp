@@ -562,6 +562,11 @@
      - \"global\": return only scope:global entries
      - specific scope tag: filter by that scope
 
+   VERBOSITY controls output detail level:
+     - \"full\" (default): return complete entries via entry->json-alist
+     - \"metadata\": return only id, type, preview, tags, created (~10x fewer tokens).
+       Follow up with get-full to fetch specific entries.
+
    HCR Wave 4: include_descendants parameter.
    When true, auto-scope mode also includes entries from child projects
    (downward hierarchy traversal). Useful for coordinators that need
@@ -576,11 +581,12 @@
    SCOPE ISOLATION: Global-scoped memories are only returned when in global
    context or when scope is explicitly set to 'global'. Project queries
    only see project + ancestor + (optionally) descendant entries."
-  [{:keys [type tags limit duration scope directory include_descendants]}]
+  [{:keys [type tags limit duration scope directory include_descendants verbosity]}]
   (let [directory (or directory (ctx/current-directory))
-        include-descendants? (boolean include_descendants)]
+        include-descendants? (boolean include_descendants)
+        metadata-only? (= verbosity "metadata")]
     (log/info "mcp-memory-query:" type "scope:" scope "directory:" directory
-              "include_descendants:" include-descendants?)
+              "include_descendants:" include-descendants? "verbosity:" (or verbosity "full"))
     (try
       (let [limit-val (coerce-int! limit :limit 20)]
         (with-chroma
@@ -655,7 +661,10 @@
                 results (take limit-val dur-filtered)]
             ;; Record co-access pattern asynchronously (CLARITY-Y: non-blocking)
             (record-batch-co-access! (mapv :id results) project-id)
-            (mcp-json (mapv fmt/entry->json-alist results)))))
+            ;; Format based on verbosity
+            (if metadata-only?
+              (mcp-json (mapv fmt/entry->metadata results))
+              (mcp-json (mapv fmt/entry->json-alist results))))))
       (catch clojure.lang.ExceptionInfo e
         (if (= :coercion-error (:type (ex-data e)))
           (mcp-error (.getMessage e))
@@ -666,24 +675,13 @@
 ;; ============================================================
 
 (defn handle-query-metadata
-  "Query project memory by type, returning only metadata (Chroma-only).
+  "Backward-compatible alias: delegates to handle-query with verbosity=metadata.
    Returns id, type, preview, tags, created - ~10x fewer tokens than full query.
    Follow up with mcp_memory_get_full to fetch specific entries.
 
-   When directory is provided, uses that path to determine project scope
-   instead of relying on Emacs's current buffer (fixes /wrap scoping issue)."
-  [{:keys [type tags limit scope directory]}]
-  (let [directory (or directory (ctx/current-directory))]
-    (log/info "mcp-memory-query-metadata:" type "scope:" scope "directory:" directory)
-    (with-chroma
-      (let [;; Reuse query logic - pass directory through
-            {:keys [text isError]} (handle-query
-                                    {:type type :tags tags :limit limit :scope scope :directory directory})]
-        (if isError
-          {:type "text" :text text :isError true}
-          (let [entries (json/read-str text :key-fn keyword)
-                metadata (mapv fmt/entry->metadata entries)]
-            (mcp-json metadata)))))))
+   DEPRECATED: Use query command with verbosity='metadata' instead."
+  [{:keys [type tags limit scope directory] :as params}]
+  (handle-query (assoc params :verbosity "metadata")))
 
 ;; ============================================================
 ;; Get Full Handler (with KG Edge Inclusion)
@@ -731,8 +729,12 @@
     (if-let [entry (or (chroma/get-entry-by-id id)
                        (plans/get-plan id))]
       (let [base-result (fmt/entry->json-alist entry)
-            ;; Include KG edges
-            {:keys [outgoing incoming]} (get-kg-edges-for-entry id)
+            ;; Include KG edges (graceful degradation if KG backend is broken)
+            {:keys [outgoing incoming]}
+            (try (get-kg-edges-for-entry id)
+                 (catch Exception e
+                   (log/warn "KG edge lookup failed for" id ":" (.getMessage e))
+                   {:outgoing [] :incoming []}))
             result (cond-> base-result
                      (seq outgoing) (assoc :kg_outgoing outgoing)
                      (seq incoming) (assoc :kg_incoming incoming))]

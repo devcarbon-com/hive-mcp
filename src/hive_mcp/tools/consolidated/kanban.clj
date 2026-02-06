@@ -8,7 +8,8 @@
 
    SOLID: Facade pattern - single tool entry point for Kanban operations.
    CLARITY: L - Thin adapter delegating to memory-kanban (Chroma backend)."
-  (:require [hive-mcp.tools.cli :refer [make-cli-handler]]
+  (:require [clojure.tools.logging :as log]
+            [hive-mcp.tools.cli :refer [make-cli-handler]]
             [hive-mcp.tools.memory-kanban :as mem-kanban]
             [hive-mcp.plan.tool :as plan-tool]))
 
@@ -39,12 +40,26 @@
    :roadmap  :status
    :my-tasks :list})
 
+(defn- wrap-deprecated
+  "Wrap a canonical handler with deprecation logging."
+  [alias-key canonical-key handler-fn]
+  (fn [params]
+    (log/warn {:event :deprecation-warning
+               :command (name alias-key)
+               :canonical (name canonical-key)
+               :message (str "DEPRECATED: '" (name alias-key)
+                             "' is deprecated. Use '" (name canonical-key)
+                             "' instead.")})
+    (handler-fn params)))
+
 (def handlers
   "Map of command keywords to handler functions.
-   Merges canonical handlers with deprecated aliases pointing to the same fns."
+   Merges canonical handlers with deprecated aliases (with deprecation logging)."
   (merge canonical-handlers
          (reduce-kv (fn [m alias-key canonical-key]
-                      (assoc m alias-key (get canonical-handlers canonical-key)))
+                      (assoc m alias-key
+                             (wrap-deprecated alias-key canonical-key
+                                              (get canonical-handlers canonical-key))))
                     {}
                     deprecated-aliases)))
 

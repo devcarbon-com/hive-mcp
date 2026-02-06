@@ -1,26 +1,43 @@
 (ns hive-mcp.tools.consolidated.cider
   "Consolidated CIDER CLI tool.
 
-   Subcommands: eval, doc, info, session, complete, apropos
+   Subcommands: eval, doc, info, complete, apropos, status, spawn, sessions, kill-session
+   Deprecated aliases: eval-explicit -> eval, eval-session -> eval
 
    Usage via MCP: cider {\"command\": \"eval\", \"code\": \"(+ 1 2)\"}
 
    SOLID: Facade pattern - single tool entry point for CIDER operations.
    CLARITY: L - Thin adapter delegating to domain handlers."
   (:require [hive-mcp.tools.cli :refer [make-cli-handler]]
-            [hive-mcp.tools.cider :as cider-handlers]))
+            [hive-mcp.tools.cider :as cider-handlers]
+            [taoensso.timbre :as log]))
 
 ;; =============================================================================
-;; Handlers Map - Wire commands to existing handlers
+;; Deprecated Alias Support
 ;; =============================================================================
 
-(def handlers
-  "Map of command keywords to handler functions.
-   eval: unified handler routing via mode + session_name params.
-   eval-explicit, eval-session: backward-compat aliases (thin wrappers)."
+(def ^:private deprecated-aliases
+  "Map of deprecated command keywords to their canonical replacements.
+   eval-explicit and eval-session are subsumed by eval with mode/session_name params."
+  {:eval-explicit :eval
+   :eval-session  :eval})
+
+(defn- wrap-deprecated
+  "Wrap a handler fn to emit a deprecation warning before delegating."
+  [alias-kw canonical-kw handler-fn]
+  (fn [params]
+    (log/warn (str "DEPRECATED: command '" (name alias-kw)
+                   "' is deprecated, use '" (name canonical-kw) "' instead."))
+    (handler-fn params)))
+
+;; =============================================================================
+;; Handlers Map
+;; =============================================================================
+
+(def canonical-handlers
+  "Map of canonical command keywords to handler functions.
+   eval: unified handler routing via mode + session_name params."
   {:eval          cider-handlers/handle-cider-eval
-   :eval-explicit (fn [params] (cider-handlers/handle-cider-eval (assoc params :mode "explicit")))
-   :eval-session  (fn [params] (cider-handlers/handle-cider-eval params))
    :doc           cider-handlers/handle-cider-doc
    :info          cider-handlers/handle-cider-info
    :complete      cider-handlers/handle-cider-complete
@@ -29,6 +46,15 @@
    :spawn         cider-handlers/handle-cider-spawn-session
    :sessions      cider-handlers/handle-cider-list-sessions
    :kill-session  cider-handlers/handle-cider-kill-session})
+
+(def handlers
+  "Canonical handlers merged with deprecated aliases (with log warnings)."
+  (merge canonical-handlers
+         (reduce-kv (fn [m alias-kw canonical-kw]
+                      (assoc m alias-kw
+                             (wrap-deprecated alias-kw canonical-kw
+                                              (get canonical-handlers canonical-kw))))
+                    {} deprecated-aliases)))
 
 ;; =============================================================================
 ;; CLI Handler

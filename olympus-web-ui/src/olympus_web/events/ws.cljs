@@ -92,6 +92,16 @@
          {:dispatch [:ws/init-snapshot-received msg]
           :db (update-in db [:connection :messages-received] (fnil inc 0))}
 
+         ;; === State Patch (incremental DS changes from state bridge) ===
+         ;; Server pushes {:type :state-patch :data {:agents [...] :waves {...}} :changed [...]}
+         ;; Only changed domains are included in :data
+         :state-patch
+         (let [data (:data msg)]
+           {:dispatch-n (cond-> []
+                          (:agents data) (conj [:agents/set-all (:agents data)])
+                          (:waves data)  (conj [:waves/set-all (vals (:waves data))]))
+            :db (update-in db [:connection :messages-received] (fnil inc 0))})
+
          ;; === Hivemind Shout Events (from Olympus protocol) ===
          :hivemind-shout
          {:dispatch [:hivemind/event-received

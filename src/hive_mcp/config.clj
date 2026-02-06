@@ -61,7 +61,16 @@
                 :openrouter {:model "qwen/qwen3-embedding-8b"}}
    :services {:chroma {:host "localhost" :port 8000}
               :ollama {:host "http://localhost:11434" :model "nomic-embed-text"}
-              :datahike {:path "data/kg"}}
+              :datahike {:path "data/kg"}
+              :nrepl {:port 7910}
+              :prometheus {:url "http://localhost:9090"}
+              :loki {:url "http://localhost:3100"}
+              :websocket {:enabled false :port nil :project-dir nil}
+              :ws-channel {:port 9999}
+              :channel {:port 9998}
+              :olympus {:ws-port 7911}
+              :overarch {:jar nil}
+              :presets {:dir nil}}
    :secrets {:openrouter-api-key nil
              :openai-api-key nil}})
 
@@ -224,6 +233,26 @@
      (get-service-config :datahike) => {:path \"data/kg\"}"
   [service-key]
   (get-in (get-global-config) [:services service-key]))
+
+(defn get-service-value
+  "Get a specific field from service config with env var fallback.
+
+   Priority: config.edn :services > env var > default value.
+
+   Options:
+     :env     - env var name for fallback (e.g., \"HIVE_MCP_NREPL_PORT\")
+     :parse   - parse fn for env var string (e.g., parse-long)
+     :default - fallback value if not found anywhere
+
+   Examples:
+     (get-service-value :nrepl :port :env \"HIVE_MCP_NREPL_PORT\" :parse parse-long :default 7910)
+     (get-service-value :prometheus :url :env \"PROMETHEUS_URL\" :default \"http://localhost:9090\")"
+  [service-key field-key & {:keys [env parse default]}]
+  (let [config-val (get-in (get-global-config) [:services service-key field-key])
+        env-val (when env
+                  (when-let [raw (System/getenv env)]
+                    (if parse (parse raw) raw)))]
+    (or config-val env-val default)))
 
 (defn get-secret
   "Return a secret value, checking config.edn first, then env var fallback.

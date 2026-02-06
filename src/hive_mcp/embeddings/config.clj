@@ -99,9 +99,9 @@
   ([{:keys [model host]
      :or {model "nomic-embed-text"}}]
    (let [host (or host
-                  (:host (global-config/get-service-config :ollama))
-                  (System/getenv "OLLAMA_HOST")
-                  "http://localhost:11434")
+                  (global-config/get-service-value :ollama :host
+                                                   :env "OLLAMA_HOST"
+                                                   :default "http://localhost:11434"))
          dimension (or (get ollama-models model)
                        (throw (ex-info (str "Unknown Ollama model: " model
                                             ". Supported: " (keys ollama-models))

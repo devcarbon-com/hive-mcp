@@ -107,6 +107,9 @@
                                        :description "[query/search/expiring] Maximum number of results"}
                               "scope" {:type "string"
                                        :description "[query] Scope filter: nil=auto, 'all', 'global', or specific"}
+                              "verbosity" {:type "string"
+                                           :enum ["full" "metadata"]
+                                           :description "[query] Output detail: 'full' (default) returns complete entries, 'metadata' returns only id/type/preview/tags/created (~10x fewer tokens)"}
                               ;; get/promote/demote/feedback/tags params
                               "id" {:type "string"
                                     :description "[get/promote/demote/feedback/tags] Memory entry ID"}
