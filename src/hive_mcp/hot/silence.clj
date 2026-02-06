@@ -65,7 +65,7 @@
                        :files-read []
                        :discoveries []
                        :hot-reload-count 0}})
-    (log/info "[silence] Started exploration session" 
+    (log/info "[silence] Started exploration session"
               {:session-id session-id :task task})
     session-id))
 
@@ -121,7 +121,7 @@
                                                  files)
                                :discoveries discoveries}}]
       (reset! silence-state {:session nil})
-      (log/info "[silence] Ended exploration session" 
+      (log/info "[silence] Ended exploration session"
                 {:session-id (:id session)
                  :files (count files)
                  :discoveries (count discoveries)})
@@ -155,10 +155,10 @@
     (cond
       (nil? session)
       :no-session
-      
+
       (:paused? session)
       :paused
-      
+
       :else
       (do
         (swap! silence-state update-in [:session :files-read]
@@ -190,7 +190,7 @@
      :ok         - Discovery recorded
      :no-session - No active exploration session"
   [discovery]
-  (if-let [session (:session @silence-state)]
+  (if-let [_session (:session @silence-state)]
     (do
       (swap! silence-state update-in [:session :discoveries]
              conj (assoc discovery :discovered-at (now-inst)))

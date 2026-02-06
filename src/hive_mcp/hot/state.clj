@@ -100,7 +100,7 @@
   "Restore state from snapshot on reload failure.
    Note: DataScript connections are defonce, so this is rarely needed."
   []
-  (when-let [snapshot (:snapshot @hot-state)]
+  (when-let [_snapshot (:snapshot @hot-state)]
     (log/warn "[hot-state] Restoring from snapshot...")
     ;; For DataScript, the defonce atom survives so this is a no-op
     ;; For future Datahike integration, this would reset the conn
@@ -131,7 +131,7 @@
     (do
       ;; Listener for all reload events
       (add-listener! :hive-mcp-state
-                     (fn [{:keys [type] :as event}]
+                     (fn [{:keys [type]}]
                        (case type
                          :reload-start (snapshot-state!)
                          :reload-success (validate-state!)

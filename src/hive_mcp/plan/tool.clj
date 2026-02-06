@@ -138,7 +138,7 @@
     (vec
      (for [task-id task-ids
            :let [step-id (get task-id-to-step-id task-id)
-                 wave (get waves step-id 0)]]
+                 _wave (get waves step-id 0)]]
        (kg-edges/add-edge!
         {:from plan-id
          :to task-id
@@ -167,8 +167,8 @@
          :when (and dep-id (contains? step-id-to-task-id dep-id))]
      (let [from-task-id (get step-id-to-task-id (:id step))
            to-task-id (get step-id-to-task-id dep-id)
-           from-wave (get waves (:id step) 0)
-           to-wave (get waves dep-id 0)]
+           _from-wave (get waves (:id step) 0)
+           _to-wave (get waves dep-id 0)]
        (kg-edges/add-edge!
         {:from from-task-id
          :to to-task-id
@@ -197,7 +197,7 @@
      - Creates kanban tasks in memory system
      - Creates KG edges: plan --depends-on--> tasks
      - Creates KG edges: task --depends-on--> task (based on step dependencies)"
-  [plan-memory-id & {:keys [directory auto-assign?]}]
+  [plan-memory-id & {:keys [directory]}]
   (log/info "plan_to_kanban" {:plan-id plan-memory-id :directory directory})
   (try
     (let [directory (or directory (ctx/current-directory))
