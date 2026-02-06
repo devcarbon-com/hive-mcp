@@ -1,213 +1,491 @@
 (ns hive-mcp.protocols.automation
-  "Browser automation abstraction layer for hive-mcp.
+  "Protocols for browser automation and web scraping.
 
-   Provides a unified protocol for browser automation backends,
-   allowing seamless switching between implementations (Playwright, Selenium, etc.).
+   Defines abstractions for programmatic browser control:
+   - Page navigation, interaction, and data extraction
+   - Session lifecycle management
+   - Screenshot capture and JavaScript evaluation
 
    Architecture:
-   - IBrowserAutomation defines core browser operations
-   - Implementations wrap specific automation libraries
-   - Supports headless and headed modes for flexibility
-   - Enables screenshot capture, DOM interaction, and navigation
+   - IBrowserAutomation: Core browser control operations
+   - IAutomationSession: Session identity and lifecycle
+   - NoopBrowserAutomation: No-op fallback (always available)
+   - NoopAutomationSession: No-op session fallback
+   - Registry for managing multiple automation backends
 
-   Use Cases:
-   - Visual regression testing for Olympus UI
-   - Automated documentation screenshots
-   - Integration testing of web components
-   - Web scraping for knowledge acquisition
+   Future implementations:
+   - PlaywrightAutomation: Playwright-based browser automation
+   - PuppeteerAutomation: Puppeteer-based (if needed)
 
-   Usage:
-     ;; Create automation instance
-     (def browser (playwright-automation {:headless? true}))
-
-     ;; Browser operations
-     (launch! browser)
-     (navigate! browser \"https://example.com\")
-     (screenshot! browser \"/tmp/capture.png\")
-     (click! browser \"button.submit\")
-     (type-text! browser \"input#search\" \"query\")
-     (get-text browser \"h1.title\")
-     (close! browser)
-
-   SOLID-O: Open for extension via new implementations
+   SOLID-O: Open for extension via new automation backends.
+   SOLID-D: Depend on IBrowserAutomation abstraction, not concretions.
+   SOLID-S: Session lifecycle separate from browser operations.
+   CLARITY-Y: Yield safe failure - return error maps, never throw.
    CLARITY-L: Layers stay pure - protocol boundary between
-              automation domain logic and library implementation.")
+              automation domain and browser engine implementation.")
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
-;;; =============================================================================
-;;; IBrowserAutomation Protocol
-;;; =============================================================================
+;;; ============================================================================
+;;; IAutomationSession Protocol (Session Identity & Lifecycle)
+;;; ============================================================================
+
+(defprotocol IAutomationSession
+  "Protocol for automation session identity and lifecycle.
+
+   An automation session represents a single browser context with its own
+   cookies, storage, and state. Sessions are lightweight and can be created
+   per-task for isolation.
+
+   Relationship to IBrowserAutomation:
+   - IAutomationSession: Identity and lifecycle (who am I, am I alive?)
+   - IBrowserAutomation: Operations (navigate, click, type, etc.)
+   - An IBrowserAutomation holds one or more IAutomationSessions
+
+   SOLID-I: Interface segregation - session identity separate from operations.
+   CLARITY-I: Introspection first - expose session state for debugging."
+
+  (session-id [this]
+    "Return unique string identifier for this session.
+     Used for registry lookup, logging, and correlation.
+     Example: \"session-abc123\", \"playwright-1234\"")
+
+  (session-info [this]
+    "Return metadata about this automation session.
+     Returns map with:
+       :id          - String identifier (same as session-id)
+       :browser     - Browser type keyword (:chromium, :firefox, :webkit, :noop)
+       :headless?   - Whether browser is running headless
+       :created-at  - Session creation timestamp
+       :user-agent  - User agent string (nil if default)
+       :viewport    - Map with :width :height (nil if default)
+       :metadata    - Backend-specific metadata map")
+
+  (active? [this]
+    "Check if this session is still active and usable.
+     Returns boolean.
+
+     A session becomes inactive when:
+     - close! is called on the parent automation
+     - The browser process crashes
+     - The session times out"))
+
+;;; ============================================================================
+;;; IBrowserAutomation Protocol (Core Browser Control)
+;;; ============================================================================
 
 (defprotocol IBrowserAutomation
-  "Protocol for browser automation backends.
+  "Protocol for programmatic browser control.
 
-   All browser automation modules should use this protocol
-   instead of calling Playwright/Selenium directly.
+   Provides the core operations for web automation:
+   - Browser lifecycle (launch, close)
+   - Navigation (go to URL)
+   - Interaction (click, type)
+   - Data extraction (page source, screenshots)
+   - Waiting (selector-based)
+   - JavaScript evaluation
 
    Implementations:
-   - PlaywrightAutomation: Modern, fast, recommended for new code
-   - SeleniumAutomation: Legacy support, broader browser coverage
-   - PuppeteerAutomation: Chrome-focused, JS ecosystem integration"
+   - NoopBrowserAutomation: No-op fallback (always available)
+   - PlaywrightAutomation: Full Playwright implementation (future)
 
-  (launch! [this]
-    "Launch the browser instance.
-     Must be called before any other operations.
-     Returns true on success, throws on failure.")
+   All mutating methods end with ! (Clojure convention).
+   All methods return result maps, never throw.
+
+   CLARITY-Y: Must not throw - return :success? false on failure.
+   CLARITY-T: Log operations for observability."
+
+  (launch! [this opts]
+    "Launch a browser instance and create an automation session.
+
+     Arguments:
+       opts - Browser launch options:
+              :browser    - Browser type (:chromium, :firefox, :webkit) default :chromium
+              :headless?  - Run headless (default: true)
+              :viewport   - Map with :width :height (default: {:width 1280 :height 720})
+              :user-agent - Custom user agent string (nil for default)
+              :timeout-ms - Launch timeout (default: 30000)
+              :args       - Additional browser args vector
+
+     Returns map with:
+       :success?  - Boolean indicating launch success
+       :session   - IAutomationSession instance (nil on failure)
+       :errors    - Vector of error messages (empty on success)
+       :metadata  - Launch metadata (browser version, pid, etc.)
+
+     CLARITY-Y: Must not throw - return :success? false on failure.")
 
   (close! [this]
     "Close the browser and release all resources.
-     Safe to call multiple times.")
 
-  (launched? [this]
-    "Check if browser instance is currently running.
-     Returns true if browser is active and ready.")
+     Closes all pages, contexts, and the browser process.
 
-  (navigate! [this url]
-    "Navigate to the specified URL.
-     url - full URL string (http/https)
-     Returns true when page load completes.")
+     Returns map with:
+       :success?  - Boolean indicating clean shutdown
+       :errors    - Vector of error messages (empty on success)
 
-  (current-url [this]
-    "Get the current page URL.
-     Returns URL string or nil if no page loaded.")
+     Idempotent - safe to call multiple times.")
 
-  (screenshot! [this path]
-    "Capture screenshot of current page.
-     path - absolute file path for output (png/jpg)
-     Returns true on success.")
+  (navigate! [this url opts]
+    "Navigate the browser to a URL.
 
-  (screenshot-element! [this selector path]
-    "Capture screenshot of specific element.
-     selector - CSS selector string
-     path - absolute file path for output
-     Returns true on success, nil if element not found.")
+     Arguments:
+       url  - Target URL string (must be valid URL)
+       opts - Navigation options:
+              :wait-until  - When to consider navigation done
+                             (:load, :domcontentloaded, :networkidle)
+                             default: :load
+              :timeout-ms  - Navigation timeout (default: 30000)
+              :referer     - Referer header string
 
-  (click! [this selector]
-    "Click on an element matching the selector.
-     selector - CSS selector string
-     Returns true on success, nil if element not found.")
+     Returns map with:
+       :success?    - Boolean indicating navigation success
+       :url         - Final URL after redirects
+       :status-code - HTTP status code (nil if unavailable)
+       :errors      - Vector of error messages (empty on success)
+       :duration-ms - Navigation time in milliseconds")
 
-  (type-text! [this selector text]
-    "Type text into an input element.
-     selector - CSS selector for input/textarea
-     text - string to type
-     Returns true on success.")
+  (click! [this selector opts]
+    "Click an element matching the CSS/XPath selector.
 
-  (clear! [this selector]
-    "Clear text from an input element.
-     selector - CSS selector for input/textarea
-     Returns true on success.")
+     Arguments:
+       selector - CSS selector or XPath expression string
+       opts     - Click options:
+                  :button    - Mouse button (:left, :right, :middle) default :left
+                  :count     - Click count (1=click, 2=double-click) default 1
+                  :timeout-ms - Max wait for element (default: 5000)
+                  :force?    - Click even if element is obscured (default: false)
+                  :position  - {:x n :y n} click position within element
 
-  (get-text [this selector]
-    "Get text content of an element.
-     selector - CSS selector string
-     Returns text string or nil if not found.")
+     Returns map with:
+       :success?  - Boolean indicating click success
+       :selector  - The selector that was clicked
+       :errors    - Vector of error messages (empty on success)")
 
-  (get-attribute [this selector attr]
-    "Get attribute value from an element.
-     selector - CSS selector string
-     attr - attribute name (string)
-     Returns attribute value or nil.")
+  (type-text! [this selector text opts]
+    "Type text into an element matching the selector.
 
-  (exists? [this selector]
-    "Check if element exists in DOM.
-     selector - CSS selector string
-     Returns true if element found.")
+     Arguments:
+       selector - CSS selector or XPath expression for input element
+       text     - String to type
+       opts     - Typing options:
+                  :delay-ms   - Delay between keystrokes (default: 0)
+                  :clear?     - Clear field before typing (default: false)
+                  :timeout-ms - Max wait for element (default: 5000)
 
-  (wait-for! [this selector timeout-ms]
-    "Wait for element to appear in DOM.
-     selector - CSS selector string
-     timeout-ms - maximum wait time in milliseconds
-     Returns true if found, false on timeout.")
+     Returns map with:
+       :success?  - Boolean indicating type success
+       :selector  - The selector that was typed into
+       :text      - The text that was typed
+       :errors    - Vector of error messages (empty on success)")
 
-  (execute-js! [this script]
-    "Execute JavaScript in browser context.
-     script - JavaScript code string
-     Returns evaluation result (may be serialized).")
+  (screenshot! [this opts]
+    "Capture a screenshot of the current page.
+
+     Arguments:
+       opts - Screenshot options:
+              :path      - File path to save screenshot (nil for bytes)
+              :full-page? - Capture full scrollable page (default: false)
+              :format    - Image format (:png, :jpeg) default :png
+              :quality   - JPEG quality 0-100 (only for :jpeg)
+              :selector  - Capture only this element (nil for full page)
+
+     Returns map with:
+       :success?  - Boolean indicating capture success
+       :path      - File path if saved (nil if bytes returned)
+       :bytes     - Screenshot bytes (nil if saved to path)
+       :format    - Image format used
+       :errors    - Vector of error messages (empty on success)")
 
   (get-page-source [this]
-    "Get the full HTML source of current page.
-     Returns HTML string."))
+    "Get the current page's HTML source.
 
-;;; =============================================================================
-;;; IBrowserPage Protocol (Multi-Page Support)
-;;; =============================================================================
+     Returns map with:
+       :success? - Boolean indicating retrieval success
+       :html     - HTML source string (nil on failure)
+       :url      - Current page URL
+       :errors   - Vector of error messages (empty on success)")
 
-(defprotocol IBrowserPage
-  "Extended protocol for multi-page/tab browser operations.
+  (wait-for-selector [this selector opts]
+    "Wait for an element matching the selector to appear.
 
-   Optional extension for automation backends that support
-   multiple concurrent pages or browser contexts."
+     Arguments:
+       selector - CSS selector or XPath expression
+       opts     - Wait options:
+                  :state      - Element state to wait for
+                                (:visible, :hidden, :attached, :detached)
+                                default: :visible
+                  :timeout-ms - Max wait time (default: 30000)
 
-  (new-page! [this]
-    "Open a new page/tab in the browser.
-     Returns a page identifier (implementation-specific).")
+     Returns map with:
+       :success?    - Boolean indicating element was found
+       :selector    - The selector waited for
+       :found?      - Whether the element was found
+       :duration-ms - Time spent waiting
+       :errors      - Vector of error messages (empty on success)")
 
-  (switch-page! [this page-id]
-    "Switch to a specific page/tab.
-     page-id - identifier returned by new-page!
-     Returns true on success.")
+  (evaluate-js [this expression opts]
+    "Evaluate JavaScript expression in the browser context.
 
-  (close-page! [this page-id]
-    "Close a specific page/tab.
-     page-id - identifier of page to close
-     Returns true on success.")
+     Arguments:
+       expression - JavaScript expression string
+       opts       - Evaluation options:
+                    :timeout-ms - Eval timeout (default: 30000)
+                    :arg        - Single argument to pass to the expression
+                                  (accessible as first arg in JS function)
 
-  (list-pages [this]
-    "List all open pages/tabs.
-     Returns sequence of page identifiers."))
+     Returns map with:
+       :success? - Boolean indicating evaluation success
+       :result   - JavaScript return value (auto-converted to Clojure)
+       :errors   - Vector of error messages (empty on success)"))
 
-;;; =============================================================================
-;;; IBrowserContext Protocol (Isolation Support)
-;;; =============================================================================
+;;; ============================================================================
+;;; NoopAutomationSession (No-Op Fallback)
+;;; ============================================================================
 
-(defprotocol IBrowserContext
-  "Protocol for browser context management.
+(defrecord NoopAutomationSession [id created-at]
+  IAutomationSession
 
-   Contexts provide isolated environments with separate:
-   - Cookies and storage
-   - Cache
-   - Proxy settings
+  (session-id [_] id)
 
-   Useful for:
-   - Testing authenticated flows in parallel
-   - Simulating different user sessions
-   - Isolating test state"
+  (session-info [_]
+    {:id id
+     :browser :noop
+     :headless? true
+     :created-at created-at
+     :user-agent nil
+     :viewport nil
+     :metadata {:engine :noop}})
 
-  (new-context! [this opts]
-    "Create a new browser context with isolation.
-     opts - map with optional keys:
-       :viewport {:width 1280 :height 720}
-       :user-agent \"custom-ua\"
-       :locale \"en-US\"
-       :timezone \"America/New_York\"
-       :geolocation {:latitude 0 :longitude 0}
-       :permissions [\"geolocation\" \"notifications\"]
-     Returns context identifier.")
+  (active? [_] false))
 
-  (close-context! [this context-id]
-    "Close a browser context and all its pages.
-     context-id - identifier from new-context!
-     Returns true on success."))
+(defn ->noop-session
+  "Create a NoopAutomationSession.
 
-;;; =============================================================================
+   Arguments:
+     id - String session identifier (default: auto-generated)"
+  ([] (->noop-session (str "noop-session-" (System/currentTimeMillis))))
+  ([id] (->NoopAutomationSession id (java.time.Instant/now))))
+
+;;; ============================================================================
+;;; NoopBrowserAutomation (No-Op Fallback)
+;;; ============================================================================
+
+(def ^:private noop-msg "NoopBrowserAutomation: No automation backend configured. Set one via set-automation!")
+
+(defrecord NoopBrowserAutomation []
+  IBrowserAutomation
+
+  (launch! [_ _opts]
+    {:success? false
+     :session nil
+     :errors [noop-msg]
+     :metadata {:engine :noop}})
+
+  (close! [_]
+    {:success? true
+     :errors []})
+
+  (navigate! [_ _url _opts]
+    {:success? false
+     :url nil
+     :status-code nil
+     :errors [noop-msg]
+     :duration-ms 0})
+
+  (click! [_ selector _opts]
+    {:success? false
+     :selector selector
+     :errors [noop-msg]})
+
+  (type-text! [_ selector text _opts]
+    {:success? false
+     :selector selector
+     :text text
+     :errors [noop-msg]})
+
+  (screenshot! [_ _opts]
+    {:success? false
+     :path nil
+     :bytes nil
+     :format :png
+     :errors [noop-msg]})
+
+  (get-page-source [_]
+    {:success? false
+     :html nil
+     :url nil
+     :errors [noop-msg]})
+
+  (wait-for-selector [_ selector _opts]
+    {:success? false
+     :selector selector
+     :found? false
+     :duration-ms 0
+     :errors [noop-msg]})
+
+  (evaluate-js [_ _expression _opts]
+    {:success? false
+     :result nil
+     :errors [noop-msg]}))
+
+;;; ============================================================================
+;;; Automation Registry
+;;; ============================================================================
+
+(defonce ^:private automation-registry (atom {}))
+
+(defn register-automation!
+  "Register a browser automation backend.
+
+   Arguments:
+     id         - Keyword identifier (:playwright, :puppeteer, etc.)
+     automation - Implementation of IBrowserAutomation protocol
+
+   Returns the automation.
+   Does NOT auto-launch - call launch! separately."
+  [id automation]
+  {:pre [(keyword? id)
+         (satisfies? IBrowserAutomation automation)]}
+  (swap! automation-registry assoc id automation)
+  automation)
+
+(defn get-automation
+  "Get automation backend by ID.
+
+   Arguments:
+     id - Automation keyword (:playwright, :puppeteer, etc.)
+
+   Returns automation or nil if not found."
+  [id]
+  (get @automation-registry id))
+
+(defn list-automations
+  "List all registered automation backend IDs.
+
+   Returns vector of keyword IDs."
+  []
+  (vec (keys @automation-registry)))
+
+(defn automation-registered?
+  "Check if an automation backend is registered."
+  [id]
+  (contains? @automation-registry id))
+
+(defn unregister-automation!
+  "Unregister an automation backend. Closes it first.
+
+   Arguments:
+     id - Automation keyword
+
+   Returns true if removed, false if not found."
+  [id]
+  (if-let [automation (get-automation id)]
+    (do
+      (close! automation)
+      (swap! automation-registry dissoc id)
+      true)
+    false))
+
+;;; ============================================================================
+;;; Active Implementation Management
+;;; ============================================================================
+
+;; Atom holding the currently active IBrowserAutomation implementation.
+;; Defaults to NoopBrowserAutomation (no-op fallback).
+(defonce ^:private active-automation (atom nil))
+
+(defn set-automation!
+  "Set the active browser automation implementation.
+
+   Arguments:
+     automation - Implementation of IBrowserAutomation protocol
+
+   Returns:
+     The automation.
+
+   Throws:
+     AssertionError if automation doesn't satisfy protocol."
+  [automation]
+  {:pre [(satisfies? IBrowserAutomation automation)]}
+  (reset! active-automation automation)
+  automation)
+
+(defn get-active-automation
+  "Get the active browser automation implementation.
+
+   Returns NoopBrowserAutomation if no automation is set.
+   This ensures hive-mcp always works, with or without a real backend."
+  []
+  (or @active-automation
+      (->NoopBrowserAutomation)))
+
+(defn automation-set?
+  "Check if an active automation backend is configured.
+
+   Returns:
+     true if set-automation! has been called."
+  []
+  (some? @active-automation))
+
+(defn clear-automation!
+  "Clear the active automation backend. Used for testing.
+
+   Returns nil."
+  []
+  (reset! active-automation nil)
+  nil)
+
+(defn clear-registry!
+  "Clear the automation registry. Used for testing.
+
+   Returns nil."
+  []
+  (reset! automation-registry {})
+  nil)
+
+;;; ============================================================================
 ;;; Utility Functions
-;;; =============================================================================
+;;; ============================================================================
 
-(defn automation?
+(defn browser-automation?
   "Check if object implements IBrowserAutomation protocol."
   [x]
   (satisfies? IBrowserAutomation x))
 
-(defn multi-page?
-  "Check if automation backend supports multi-page operations."
+(defn automation-session?
+  "Check if object implements IAutomationSession protocol."
   [x]
-  (satisfies? IBrowserPage x))
+  (satisfies? IAutomationSession x))
 
-(defn context-aware?
-  "Check if automation backend supports browser contexts."
-  [x]
-  (satisfies? IBrowserContext x))
+(defn enhanced?
+  "Check if enhanced automation capabilities are available.
+
+   Returns:
+     true if a non-noop IBrowserAutomation implementation is active."
+  []
+  (and (automation-set?)
+       (not (instance? NoopBrowserAutomation @active-automation))))
+
+(defn capabilities
+  "Get a summary of available automation capabilities.
+
+   Returns:
+     Map describing what features are available."
+  []
+  (let [automation (get-active-automation)]
+    {:engine-type (if (enhanced?)
+                    (-> automation class .getSimpleName)
+                    :noop)
+     :enhanced? (enhanced?)
+     :launch? true        ;; Always available (may be no-op)
+     :close? true
+     :navigate? true
+     :click? true
+     :type-text? true
+     :screenshot? true
+     :get-page-source? true
+     :wait-for-selector? true
+     :evaluate-js? true}))

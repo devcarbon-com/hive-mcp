@@ -11,9 +11,12 @@
    3. Emerge - detect patterns not explicitly taught
    4. Decay - apply entropy, prune what's no longer valid
    5. Cross-pollinate - transfer learning across boundaries
+   6. Self-modify - adapt own parameters based on performance
+   7. Track adaptation - maintain history and score of self-modifications
 
    IIntrospect: Companion protocol for explaining system behavior.
-   Enables transparency and debuggability of autopoietic processes.
+   Enables transparency, debuggability, and health monitoring of
+   autopoietic processes.
 
    SOLID-I: Interface segregation - autopoietic operations only.
    SOLID-D: Depend on abstraction, not specific implementations.
@@ -40,6 +43,8 @@
    - Emerge new patterns from existing knowledge
    - Decay stale knowledge via entropy
    - Cross-pollinate insights across boundaries
+   - Self-modify parameters based on observed performance
+   - Track and score adaptation effectiveness
 
    Implementations:
    - BasicAutopoiesis: No-op fallback (hive-mcp default)
@@ -156,7 +161,74 @@
        :demoted     - Count of entries demoted (low evidence)
 
      Decay is essential for autopoiesis - without entropy, the system
-     accumulates outdated knowledge and loses adaptability."))
+     accumulates outdated knowledge and loses adaptability.")
+
+  (self-modify! [this modification]
+    "Apply a self-modification to the system's own parameters.
+
+     Arguments:
+       modification - Map describing the change:
+                      :parameter  - Keyword identifying what to change
+                                    (e.g. :decay-threshold, :trust-baseline,
+                                     :emergence-sensitivity, :staleness-window)
+                      :old-value  - Current value (for verification)
+                      :new-value  - Proposed new value
+                      :reason     - Why this modification is needed
+                      :evidence   - Supporting observations/metrics
+
+     Returns:
+       Map with:
+       :applied?    - Boolean: was the modification accepted?
+       :parameter   - The parameter that was modified
+       :old-value   - Previous value
+       :new-value   - New value (may differ from proposed if bounded)
+       :timestamp   - When the modification was applied
+       :rollback-fn - Fn to undo this modification (or nil)
+
+     Self-modification is the reflexive capability - the system adapting
+     its own operating parameters based on observed performance.
+     Implementations should bound modifications to safe ranges.")
+
+  (adaptation-history [this opts]
+    "Retrieve the history of self-modifications.
+
+     Arguments:
+       opts - Map with optional keys:
+              :parameter - Filter by specific parameter keyword
+              :since     - java.time.Instant, only show modifications after this
+              :limit     - Max number of entries to return
+              :include-rollbacks? - Include rolled-back modifications (default false)
+
+     Returns:
+       Map with:
+       :modifications - Seq of modification records, each with:
+                        :id, :parameter, :old-value, :new-value,
+                        :reason, :timestamp, :rolled-back?
+       :count         - Total number of modifications matching filter
+       :active-params - Map of currently active parameter values
+
+     Adaptation history enables auditing and understanding how the system
+     has evolved its own parameters over time.")
+
+  (adaptation-score [this]
+    "Evaluate the effectiveness of recent self-modifications.
+
+     Arguments:
+       None (analyzes recent adaptation history)
+
+     Returns:
+       Map with:
+       :score          - Overall adaptation effectiveness (0.0-1.0)
+       :trend          - :improving, :stable, or :degrading
+       :recent-mods    - Count of modifications in scoring window
+       :effective-mods - Count that improved performance metrics
+       :ineffective-mods - Count that degraded or had no effect
+       :recommendations  - Seq of suggested parameter adjustments
+       :confidence     - Confidence in the score (0.0-1.0)
+
+     The adaptation score measures whether the system's self-modifications
+     are actually improving its performance, enabling meta-adaptation
+     (adapting how it adapts)."))
 
 ;;; ============================================================================
 ;;; IIntrospect Protocol (System Transparency)
@@ -220,7 +292,75 @@
        :evolution-diff - How their histories diverged
        :semantic-diff  - Conceptual/meaning differences
        :relationship   - How they relate (:supersedes, :refines, :contradicts, :independent)
-       :narrative      - Human-readable comparison"))
+       :narrative      - Human-readable comparison")
+
+  (observe-state [this]
+    "Return a snapshot of the system's current operational state.
+
+     Arguments:
+       None
+
+     Returns:
+       Map with:
+       :memory-count    - Total memory entries tracked
+       :kg-node-count   - Knowledge graph node count
+       :kg-edge-count   - Knowledge graph edge count
+       :active-scopes   - Set of project scopes currently loaded
+       :uptime-ms       - Milliseconds since system initialization
+       :last-decay      - Timestamp of last decay cycle (or nil)
+       :last-emergence  - Timestamp of last emergence run (or nil)
+       :pending-ops     - Count of queued/in-flight operations
+       :enhanced?       - Whether enhanced implementation is active
+
+     Observe-state provides a non-intrusive health snapshot without
+     triggering any side effects. Useful for monitoring dashboards.")
+
+  (diagnose [this symptom]
+    "Diagnose a reported symptom or anomaly in the knowledge system.
+
+     Arguments:
+       symptom - Map describing the issue:
+                 :type     - Keyword: :slow-query, :stale-results,
+                             :missing-entries, :trust-failure,
+                             :emergence-stall, :decay-stuck,
+                             :inconsistency, :other
+                 :context  - Freeform context about when/where observed
+                 :severity - :low, :medium, :high, :critical
+
+     Returns:
+       Map with:
+       :diagnosis     - Keyword classification of root cause
+       :explanation   - Human-readable explanation
+       :contributing  - Seq of contributing factors
+       :recommended   - Seq of recommended actions, each with:
+                        :action, :priority, :estimated-impact
+       :related-entries - Entry IDs relevant to the diagnosis
+
+     Diagnose goes beyond explain/trace by actively investigating
+     a reported problem, correlating symptoms with system state.")
+
+  (health-report [this]
+    "Generate a comprehensive health report for the knowledge system.
+
+     Arguments:
+       None
+
+     Returns:
+       Map with:
+       :status         - Overall status: :healthy, :degraded, :unhealthy
+       :checks         - Seq of health check results, each with:
+                         :name, :status (:pass/:warn/:fail), :message, :metric
+       :memory-health  - Map with :total, :stale-count, :stale-pct,
+                         :avg-staleness, :gap-count
+       :kg-health      - Map with :nodes, :edges, :orphans,
+                         :avg-connectivity, :largest-component
+       :adaptation     - Map with :score, :trend, :recent-mods
+       :recommendations - Prioritized list of improvement actions
+       :generated-at   - Timestamp of report generation
+
+     Health-report aggregates observe-state, adaptation-score, and
+     diagnostic checks into a single comprehensive view. Intended
+     for periodic monitoring and operational awareness."))
 
 ;;; ============================================================================
 ;;; BasicAutopoiesis (No-Op Fallback Implementation)
@@ -229,7 +369,7 @@
 (defrecord BasicAutopoiesis []
   IAutopoiesis
 
-  (observe [_ query opts]
+  (observe [_ _query _opts]
     ;; No-op: Return empty results with indicator that enhanced search unavailable
     {:entries []
      :gaps []
@@ -238,7 +378,7 @@
      :enhanced? false
      :message "BasicAutopoiesis: Enhanced observe not available. Use memory search directly."})
 
-  (trust? [_ entry]
+  (trust? [_ _entry]
     ;; No-op: Trust everything by default (no staleness analysis)
     {:trustworthy? true
      :confidence 0.5
@@ -246,7 +386,7 @@
      :action :use
      :enhanced? false})
 
-  (emerge [_ scope]
+  (emerge [_ _scope]
     ;; No-op: No pattern emergence without enhanced implementation
     {:patterns []
      :clusters []
@@ -254,7 +394,7 @@
      :enhanced? false
      :message "BasicAutopoiesis: Pattern emergence requires hive-knowledge."})
 
-  (cross-pollinate [_ entry-id]
+  (cross-pollinate [_ _entry-id]
     ;; No-op: No cross-project analysis
     {:analogues []
      :transferable? false
@@ -262,7 +402,7 @@
      :enhanced? false
      :message "BasicAutopoiesis: Cross-pollination requires hive-knowledge."})
 
-  (learn [_ exploration-result]
+  (learn [_ _exploration-result]
     ;; No-op: No automatic learning extraction
     {:entries-created []
      :entries-updated []
@@ -278,7 +418,38 @@
      :promoted 0
      :demoted 0
      :enhanced? false
-     :message "BasicAutopoiesis: Automatic decay requires hive-knowledge."}))
+     :message "BasicAutopoiesis: Automatic decay requires hive-knowledge."})
+
+  (self-modify! [_ _modification]
+    ;; No-op: No self-modification without enhanced implementation
+    {:applied? false
+     :parameter nil
+     :old-value nil
+     :new-value nil
+     :timestamp (java.time.Instant/now)
+     :rollback-fn nil
+     :enhanced? false
+     :message "BasicAutopoiesis: Self-modification requires hive-knowledge."})
+
+  (adaptation-history [_ _opts]
+    ;; No-op: No adaptation tracking without enhanced implementation
+    {:modifications []
+     :count 0
+     :active-params {}
+     :enhanced? false
+     :message "BasicAutopoiesis: Adaptation history requires hive-knowledge."})
+
+  (adaptation-score [_]
+    ;; No-op: Return neutral score
+    {:score 0.0
+     :trend :stable
+     :recent-mods 0
+     :effective-mods 0
+     :ineffective-mods 0
+     :recommendations []
+     :confidence 0.0
+     :enhanced? false
+     :message "BasicAutopoiesis: Adaptation scoring requires hive-knowledge."}))
 
 ;;; ============================================================================
 ;;; BasicIntrospect (No-Op Fallback Implementation)
@@ -298,7 +469,7 @@
                      ". Enhanced introspection requires hive-knowledge.")
      :enhanced? false})
 
-  (trace [_ query result]
+  (trace [_ _query _result]
     ;; No-op: Return minimal trace
     {:steps []
      :filters []
@@ -316,7 +487,43 @@
      :relationship :unknown
      :narrative (str "BasicIntrospect: Comparison between " entry-id-a " and " entry-id-b
                      " requires hive-knowledge.")
-     :enhanced? false}))
+     :enhanced? false})
+
+  (observe-state [_]
+    ;; No-op: Return minimal state snapshot
+    {:memory-count 0
+     :kg-node-count 0
+     :kg-edge-count 0
+     :active-scopes #{}
+     :uptime-ms 0
+     :last-decay nil
+     :last-emergence nil
+     :pending-ops 0
+     :enhanced? false
+     :message "BasicIntrospect: State observation requires hive-knowledge."})
+
+  (diagnose [_ _symptom]
+    ;; No-op: Return empty diagnosis
+    {:diagnosis :unavailable
+     :explanation "BasicIntrospect: Diagnosis requires hive-knowledge."
+     :contributing []
+     :recommended []
+     :related-entries []
+     :enhanced? false})
+
+  (health-report [_]
+    ;; No-op: Return minimal health report
+    {:status :unknown
+     :checks []
+     :memory-health {:total 0 :stale-count 0 :stale-pct 0.0
+                     :avg-staleness 0.0 :gap-count 0}
+     :kg-health {:nodes 0 :edges 0 :orphans 0
+                 :avg-connectivity 0.0 :largest-component 0}
+     :adaptation {:score 0.0 :trend :stable :recent-mods 0}
+     :recommendations []
+     :generated-at (java.time.Instant/now)
+     :enhanced? false
+     :message "BasicIntrospect: Health reporting requires hive-knowledge."}))
 
 ;;; ============================================================================
 ;;; Active Implementation Management
@@ -419,15 +626,25 @@
    Returns:
      Map describing what features are available."
   []
-  {:autopoiesis-enhanced? (enhanced?)
-   :introspect-enhanced? (and (introspect-set?)
-                              (not (instance? BasicIntrospect @active-introspect)))
-   :observe? true  ;; Always available (may be no-op)
-   :trust? true
-   :emerge? (enhanced?)
-   :cross-pollinate? (enhanced?)
-   :learn? (enhanced?)
-   :decay? (enhanced?)
-   :explain? true  ;; Always available (may be no-op)
-   :trace? (introspect-set?)
-   :diff? (introspect-set?)})
+  (let [introspect-enhanced? (and (introspect-set?)
+                                  (not (instance? BasicIntrospect @active-introspect)))]
+    {:autopoiesis-enhanced? (enhanced?)
+     :introspect-enhanced? introspect-enhanced?
+     ;; IAutopoiesis methods
+     :observe? true  ;; Always available (may be no-op)
+     :trust? true
+     :emerge? (enhanced?)
+     :cross-pollinate? (enhanced?)
+     :learn? (enhanced?)
+     :decay? (enhanced?)
+     :self-modify? (enhanced?)
+     :adaptation-history? (enhanced?)
+     :adaptation-score? (enhanced?)
+     ;; IIntrospect methods
+     :explain? true  ;; Always available (may be no-op)
+     :trace? (introspect-set?)
+     :diff? (introspect-set?)
+     :observe-state? true  ;; Always available (may be no-op)
+     :diagnose? introspect-enhanced?
+     :health-report? true  ;; Always available (may be no-op)
+     }))

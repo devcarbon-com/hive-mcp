@@ -575,3 +575,572 @@
 
         ;; No match
         :else false))))
+
+;;; ============================================================================
+;;; NoopChannel (No-op Fallback)
+;;; ============================================================================
+
+(defrecord NoopChannel [id state]
+  IChannel
+  (channel-id [_] id)
+
+  (channel-info [_]
+    {:id id
+     :name "Noop Channel"
+     :description "No-operation channel for testing and development"
+     :type :noop
+     :created-at (java.time.Instant/now)
+     :capabilities #{}})
+
+  (send! [_ _topic _payload]
+    {:success? true
+     :message-id (generate-message-id)
+     :errors []})
+
+  (send! [_ _topic _payload _opts]
+    {:success? true
+     :message-id (generate-message-id)
+     :errors []})
+
+  (send-async! [_ _topic _payload _opts]
+    (future {:success? true
+             :message-id (generate-message-id)
+             :errors []}))
+
+  (broadcast! [_ _payload _opts]
+    {:success? true
+     :delivered-count 0
+     :errors []})
+
+  (receive! [_ _topic]
+    nil)
+
+  (receive! [_ _topic _opts]
+    nil)
+
+  (receive-batch! [_ _topic _opts]
+    {:messages []
+     :count 0
+     :complete? true})
+
+  (subscribe! [_ _topic _handler]
+    {:success? true
+     :subscription-id (generate-subscription-id)
+     :errors []})
+
+  (subscribe! [this topic handler _opts]
+    (subscribe! this topic handler))
+
+  (unsubscribe! [_ _subscription-id]
+    {:success? true
+     :errors []})
+
+  (subscriptions [_]
+    [])
+
+  (open? [_]
+    (boolean (:open? @state)))
+
+  (close! [_]
+    (swap! state assoc :open? false)
+    {:success? true
+     :pending-dropped 0
+     :subscriptions-removed 0})
+
+  (drain! [_ _opts]
+    {:success? true
+     :drained-count 0
+     :remaining 0})
+
+  (channel-status [_]
+    {:id id
+     :open? (boolean (:open? @state))
+     :type :noop
+     :subscription-count 0
+     :pending-count 0
+     :buffer-size 0
+     :buffer-used 0
+     :created-at (:created-at @state)
+     :last-activity nil
+     :metrics {}}))
+
+(defn ->noop-channel
+  "Create a NoopChannel for testing.
+
+   Arguments:
+     id - Keyword identifier for this channel (default: :noop-channel)"
+  ([] (->noop-channel :noop-channel))
+  ([id] (->NoopChannel id (atom {:open? true
+                                 :created-at (java.time.Instant/now)}))))
+
+;;; ============================================================================
+;;; IVoice Protocol (Voice/Call Extension)
+;;; ============================================================================
+
+(defprotocol IVoice
+  "Protocol for voice/call communication extending the channel concept.
+
+   Provides real-time voice call management for hive-mcp agents:
+   - Agent-to-agent voice calls
+   - Conference calls for multi-agent coordination
+   - Mute/unmute for flow control
+
+   Implementations:
+   - WebRTCVoice: Browser-based real-time voice
+   - SIPVoice: Traditional telephony integration
+   - NoopVoice: Testing fallback
+
+   Call shape:
+   {:id         \"call-uuid\"           ; Unique call ID
+    :initiator  \"agent-id\"            ; Who started the call
+    :participants [\"agent-1\" \"agent-2\"] ; All participants
+    :status     :ringing | :active | :on-hold | :ended
+    :started-at #inst \"...\"           ; Call start time
+    :muted?     false                  ; Local mute state
+    :metadata   {:codec \"opus\"        ; Implementation-specific
+                 :bitrate 48000}}
+
+   SOLID-I: Interface segregation - voice operations only.
+   SOLID-O: Open for extension via new voice implementations.
+   CLARITY-Y: Yield safe failure - graceful degradation on call errors."
+
+  (voice-id [this]
+    "Return unique identifier for this voice instance.
+
+     Returns:
+       Keyword or string identifier.
+       Example: :webrtc-voice, :sip-voice-123")
+
+  (start-call [this participants opts]
+    "Initiate a voice call with the given participants.
+
+     Arguments:
+       participants - Vector of participant identifiers (agent IDs, user IDs)
+       opts         - Optional map with:
+                      :codec       - Audio codec (:opus, :g711, :g722)
+                      :bitrate     - Target bitrate in bps
+                      :timeout-ms  - Ring timeout (default: 30000)
+                      :metadata    - Additional call metadata
+
+     Returns map with:
+       :success?  - Boolean indicating call initiation success
+       :call-id   - Unique call ID for this call session
+       :status    - Initial call status (:ringing, :active, :failed)
+       :errors    - Vector of error messages (empty on success)
+
+     CLARITY-Y: Must not throw - return :success? false on failure.")
+
+  (end-call [this call-id]
+    "End an active call.
+
+     Arguments:
+       call-id - ID of the call to end (from start-call)
+
+     Returns map with:
+       :success?    - Boolean indicating call was ended
+       :duration-ms - Call duration in milliseconds
+       :errors      - Vector of error messages
+
+     Idempotent - safe to call on already-ended calls.")
+
+  (mute [this call-id]
+    "Mute the local audio in a call.
+
+     Arguments:
+       call-id - ID of the active call
+
+     Returns map with:
+       :success? - Boolean indicating mute was applied
+       :muted?   - Current mute state (should be true)
+       :errors   - Vector of error messages
+
+     Idempotent - safe to call when already muted.")
+
+  (unmute [this call-id]
+    "Unmute the local audio in a call.
+
+     Arguments:
+       call-id - ID of the active call
+
+     Returns map with:
+       :success? - Boolean indicating unmute was applied
+       :muted?   - Current mute state (should be false)
+       :errors   - Vector of error messages
+
+     Idempotent - safe to call when already unmuted.")
+
+  (call-status [this call-id]
+    "Get the current status of a call.
+
+     Arguments:
+       call-id - ID of the call to query
+
+     Returns map with:
+       :call-id       - Call identifier
+       :status        - :ringing, :active, :on-hold, :ended, :unknown
+       :participants  - Vector of current participants
+       :initiator     - Who started the call
+       :started-at    - Call start timestamp
+       :duration-ms   - Duration so far (nil if not active)
+       :muted?        - Local mute state
+       :metadata      - Implementation-specific metadata
+
+     Returns nil if call-id is unknown."))
+
+;;; ============================================================================
+;;; NoopVoice (No-op Fallback)
+;;; ============================================================================
+
+(defrecord NoopVoice [id state]
+  IVoice
+  (voice-id [_] id)
+
+  (start-call [_ participants _opts]
+    (let [call-id (str "call-" (System/currentTimeMillis) "-"
+                       (format "%08x" (rand-int Integer/MAX_VALUE)))]
+      (swap! state assoc-in [:calls call-id]
+             {:call-id call-id
+              :status :active
+              :participants (vec participants)
+              :initiator (first participants)
+              :started-at (java.time.Instant/now)
+              :muted? false})
+      {:success? true
+       :call-id call-id
+       :status :active
+       :errors []}))
+
+  (end-call [_ call-id]
+    (if-let [call (get-in @state [:calls call-id])]
+      (let [duration-ms (when (:started-at call)
+                          (- (System/currentTimeMillis)
+                             (.toEpochMilli ^java.time.Instant (:started-at call))))]
+        (swap! state assoc-in [:calls call-id :status] :ended)
+        {:success? true
+         :duration-ms duration-ms
+         :errors []})
+      {:success? false
+       :duration-ms nil
+       :errors ["Unknown call-id"]}))
+
+  (mute [_ call-id]
+    (if (get-in @state [:calls call-id])
+      (do
+        (swap! state assoc-in [:calls call-id :muted?] true)
+        {:success? true :muted? true :errors []})
+      {:success? false :muted? false :errors ["Unknown call-id"]}))
+
+  (unmute [_ call-id]
+    (if (get-in @state [:calls call-id])
+      (do
+        (swap! state assoc-in [:calls call-id :muted?] false)
+        {:success? true :muted? false :errors []})
+      {:success? false :muted? true :errors ["Unknown call-id"]}))
+
+  (call-status [_ call-id]
+    (when-let [call (get-in @state [:calls call-id])]
+      (let [duration-ms (when (and (= :active (:status call)) (:started-at call))
+                          (- (System/currentTimeMillis)
+                             (.toEpochMilli ^java.time.Instant (:started-at call))))]
+        (assoc call :duration-ms duration-ms)))))
+
+(defn ->noop-voice
+  "Create a NoopVoice for testing.
+
+   Arguments:
+     id - Keyword identifier for this voice instance (default: :noop-voice)"
+  ([] (->noop-voice :noop-voice))
+  ([id] (->NoopVoice id (atom {:calls {}}))))
+
+;;; ============================================================================
+;;; Voice Registry
+;;; ============================================================================
+
+(defonce ^:private voice-registry (atom {}))
+
+(defn register-voice!
+  "Register a voice instance in the global registry.
+
+   Arguments:
+     voice - Implementation of IVoice protocol
+
+   Returns:
+     The voice instance."
+  [voice]
+  {:pre [(satisfies? IVoice voice)]}
+  (let [id (voice-id voice)]
+    (swap! voice-registry assoc id voice)
+    voice))
+
+(defn get-voice
+  "Get voice instance by ID from the registry.
+
+   Arguments:
+     id - Voice identifier (keyword or string)
+
+   Returns:
+     Voice instance or nil if not found."
+  [id]
+  (get @voice-registry id))
+
+(defn list-voices
+  "List all registered voice instances.
+
+   Returns:
+     Vector of voice IDs."
+  []
+  (vec (keys @voice-registry)))
+
+(defn voice-registered?
+  "Check if a voice instance is registered.
+
+   Arguments:
+     id - Voice identifier
+
+   Returns:
+     Boolean."
+  [id]
+  (contains? @voice-registry id))
+
+(defn unregister-voice!
+  "Unregister a voice instance.
+
+   Arguments:
+     id - Voice identifier
+
+   Returns:
+     true if voice was removed, false if not found."
+  [id]
+  (if (voice-registered? id)
+    (do (swap! voice-registry dissoc id) true)
+    false))
+
+;;; ============================================================================
+;;; IRouter Protocol (Message Routing)
+;;; ============================================================================
+
+(defprotocol IRouter
+  "Protocol for routing messages to the appropriate channel.
+
+   Provides a dispatch layer that sits above individual channels,
+   enabling message routing based on topic patterns, channel capabilities,
+   or custom routing logic.
+
+   Architecture:
+   ```
+   Sender -> IRouter -> route-message -> IChannel (selected)
+                  |
+            Channel Registry (internal)
+   ```
+
+   Implementations:
+   - TopicRouter: Route by topic prefix mapping
+   - RoundRobinRouter: Load-balance across channels
+   - PriorityRouter: Route by message priority
+   - NoopRouter: Testing fallback
+
+   SOLID-S: Single responsibility - message routing only.
+   SOLID-O: Open for extension via new routing strategies.
+   CLARITY-Y: Yield safe failure - graceful degradation on routing errors."
+
+  (router-id [this]
+    "Return unique identifier for this router instance.
+
+     Returns:
+       Keyword or string identifier.
+       Example: :topic-router, :round-robin-1")
+
+  (router-info [this]
+    "Return metadata about this router.
+
+     Returns map with:
+       :id           - Router identifier (same as router-id)
+       :name         - Human-readable name
+       :description  - Router purpose description
+       :strategy     - Routing strategy (:topic, :round-robin, :priority, :custom)
+       :channel-count - Number of registered channels")
+
+  (route-message [this topic payload opts]
+    "Route a message to the appropriate channel(s) based on routing rules.
+
+     Arguments:
+       topic   - Message topic for routing decision
+       payload - Message content
+       opts    - Optional map with:
+                 :sender    - Sender identifier
+                 :priority  - Message priority (:low, :normal, :high)
+                 :headers   - Additional message headers
+                 :broadcast? - Send to all matching channels (default: false)
+
+     Returns map with:
+       :success?     - Boolean indicating routing success
+       :routed-to    - Vector of channel IDs that received the message
+       :message-id   - Generated message ID
+       :errors       - Vector of error messages (empty on success)
+
+     CLARITY-Y: Must not throw - return :success? false on failure.")
+
+  (register-route! [this channel-id channel opts]
+    "Register a channel with this router.
+
+     Arguments:
+       channel-id - Keyword identifier for the channel
+       channel    - IChannel implementation
+       opts       - Optional map with:
+                    :topics  - Set of topic patterns this channel handles
+                    :priority - Channel priority for tie-breaking
+                    :filter   - Predicate fn for custom routing
+
+     Returns map with:
+       :success? - Boolean indicating registration success
+       :errors   - Vector of error messages")
+
+  (unregister-route! [this channel-id]
+    "Remove a channel from the router.
+
+     Arguments:
+       channel-id - ID of channel to remove
+
+     Returns map with:
+       :success? - Boolean indicating removal success
+       :errors   - Vector of error messages
+
+     Idempotent - safe to call on already-removed channels.")
+
+  (router-channels [this]
+    "List all channels registered with this router.
+
+     Returns:
+       Vector of maps with:
+       :channel-id - Channel identifier
+       :topics     - Set of topic patterns
+       :priority   - Channel priority
+       :open?      - Whether channel is currently open")
+
+  (resolve-route [this topic]
+    "Resolve which channel(s) a topic would be routed to without sending.
+
+     Arguments:
+       topic - Topic to resolve
+
+     Returns:
+       Vector of channel IDs that would receive the message.
+       Empty vector if no matching channels."))
+
+;;; ============================================================================
+;;; NoopRouter (No-op Fallback)
+;;; ============================================================================
+
+(defrecord NoopRouter [id state]
+  IRouter
+  (router-id [_] id)
+
+  (router-info [_]
+    {:id id
+     :name "Noop Router"
+     :description "No-operation router for testing and development"
+     :strategy :noop
+     :channel-count (count (:channels @state))})
+
+  (route-message [_ _topic _payload _opts]
+    {:success? true
+     :routed-to []
+     :message-id (generate-message-id)
+     :errors []})
+
+  (register-route! [_ channel-id channel opts]
+    (swap! state assoc-in [:channels channel-id]
+           {:channel channel
+            :topics (or (:topics opts) #{})
+            :priority (or (:priority opts) 0)})
+    {:success? true
+     :errors []})
+
+  (unregister-route! [_ channel-id]
+    (swap! state update :channels dissoc channel-id)
+    {:success? true :errors []})
+
+  (router-channels [_]
+    (->> (:channels @state)
+         (mapv (fn [[ch-id {:keys [topics priority channel]}]]
+                 {:channel-id ch-id
+                  :topics topics
+                  :priority priority
+                  :open? (when (satisfies? IChannel channel)
+                           (open? channel))}))))
+
+  (resolve-route [_ _topic]
+    []))
+
+(defn ->noop-router
+  "Create a NoopRouter for testing.
+
+   Arguments:
+     id - Keyword identifier for this router (default: :noop-router)"
+  ([] (->noop-router :noop-router))
+  ([id] (->NoopRouter id (atom {:channels {}}))))
+
+;;; ============================================================================
+;;; Router Registry
+;;; ============================================================================
+
+(defonce ^:private router-registry (atom {}))
+
+(defn register-router!
+  "Register a router instance in the global registry.
+
+   Arguments:
+     router - Implementation of IRouter protocol
+
+   Returns:
+     The router instance."
+  [router]
+  {:pre [(satisfies? IRouter router)]}
+  (let [id (router-id router)]
+    (swap! router-registry assoc id router)
+    router))
+
+(defn get-router
+  "Get router instance by ID from the registry.
+
+   Arguments:
+     id - Router identifier (keyword or string)
+
+   Returns:
+     Router instance or nil if not found."
+  [id]
+  (get @router-registry id))
+
+(defn list-routers
+  "List all registered routers with their info.
+
+   Returns:
+     Vector of router info maps."
+  []
+  (->> @router-registry
+       vals
+       (mapv router-info)))
+
+(defn router-registered?
+  "Check if a router is registered.
+
+   Arguments:
+     id - Router identifier
+
+   Returns:
+     Boolean."
+  [id]
+  (contains? @router-registry id))
+
+(defn unregister-router!
+  "Unregister a router.
+
+   Arguments:
+     id - Router identifier
+
+   Returns:
+     true if router was removed, false if not found."
+  [id]
+  (if (router-registered? id)
+    (do (swap! router-registry dissoc id) true)
+    false))

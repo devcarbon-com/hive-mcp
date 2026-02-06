@@ -11,7 +11,8 @@
    SOLID-D: Depend on abstraction, not Chroma directly.
    CLARITY-L: Layers stay pure - protocol is the boundary between
               memory domain logic and storage implementation.
-   DDD: Repository pattern for memory entity lifecycle management.")
+   DDD: Repository pattern for memory entity lifecycle management."
+  (:require [clojure.string]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -62,6 +63,69 @@
     :staleness-beta   1
     :staleness-source :hash-mismatch | :git-commit | :time-decay | :transitive
     :staleness-depth  0}"
+
+  ;;; =========================================================================
+  ;;; Connection Lifecycle
+  ;;; =========================================================================
+
+  (connect! [this config]
+    "Initialize connection to the storage backend.
+
+     Data-oriented: returns a result map, never throws.
+     Idempotent: safe to call when already connected (returns current state).
+
+     Arguments:
+       config - Backend-specific configuration map:
+                Chroma:     {:host \"localhost\" :port 8000
+                             :collection-name \"hive-mcp-memory\"}
+                DataScript: {:schema <datascript-schema>}  ; or {} for defaults
+                Atom:       {}  ; no config needed
+
+     Returns map:
+       {:success?   true/false
+        :backend    \"chroma\" | \"datascript\" | \"atom\"
+        :errors     []          ; vector of error strings (empty on success)
+        :metadata   {...}}      ; backend-specific connection metadata
+                                ; e.g. Chroma: {:host \"...\" :port N :collection \"...\"}
+                                ;      DataScript: {:schema-attrs N}
+
+     CLARITY-Y: Yield safe failure - returns :success? false, never throws.")
+
+  (disconnect! [this]
+    "Close connection and release backend resources.
+
+     Flushes pending writes, closes connections, clears caches.
+     No-op for in-memory backends (Atom, DataScript).
+     Idempotent: safe to call when already disconnected.
+
+     Returns map:
+       {:success?  true/false
+        :errors    []}")
+
+  (connected? [this]
+    "Check if this store has an active connection.
+
+     Lightweight state check - does NOT verify backend reachability.
+     Use health-check for active verification.
+
+     Returns boolean.")
+
+  (health-check [this]
+    "Actively verify backend health and reachability.
+
+     For Chroma: pings server, verifies collection exists.
+     For DataScript: checks connection atom is non-nil.
+     For Atom: always healthy.
+
+     Returns map:
+       {:healthy?    true/false
+        :latency-ms  <integer>  ; round-trip time in ms (nil if unhealthy)
+        :backend     \"chroma\" | \"datascript\" | \"atom\"
+        :entry-count <integer>  ; approximate count (nil if unhealthy)
+        :errors      []         ; vector of error strings
+        :checked-at  \"ISO-8601-timestamp\"}
+
+     CLARITY-Y: Yield safe failure - returns :healthy? false, never throws.")
 
   ;;; =========================================================================
   ;;; CRUD Operations
@@ -160,7 +224,7 @@
        Non-vector backends (DataScript, Atom) return false.")
 
   ;;; =========================================================================
-  ;;; Lifecycle Operations
+  ;;; Expiration Management
   ;;; =========================================================================
 
   (cleanup-expired! [this]
@@ -228,14 +292,23 @@
   "Set the active memory store implementation.
    Called during system initialization.
 
+   Does NOT call connect! - caller is responsible for lifecycle:
+     (def store (->ChromaStore ...))
+     (connect! store {:host \"localhost\" :port 8000})
+     (set-store! store)
+
    Arguments:
      store - Implementation of IMemoryStore protocol
+
+   Returns:
+     The store.
 
    Throws:
      AssertionError if store doesn't satisfy protocol."
   [store]
   {:pre [(satisfies? IMemoryStore store)]}
-  (reset! active-store store))
+  (reset! active-store store)
+  store)
 
 (defn get-store
   "Get the active memory store.
@@ -260,9 +333,57 @@
 
 (defn reset-active-store!
   "Reset the active store atom to nil.
+   Calls disconnect! on the current store if one is set.
    Used for testing and reinitialization."
   []
+  (when-let [store @active-store]
+    (try
+      (disconnect! store)
+      (catch Exception _)))
   (reset! active-store nil))
+
+;;; ============================================================================
+;;; Lifecycle Convenience Functions
+;;; ============================================================================
+
+(defn connect-active-store!
+  "Connect the active store with the given config.
+   Convenience wrapper around (connect! (get-store) config).
+
+   Arguments:
+     config - Backend-specific configuration map
+
+   Returns:
+     connect! result map {:success? ... :backend ... :errors ... :metadata ...}
+
+   Throws:
+     ex-info if no store has been set."
+  [config]
+  (connect! (get-store) config))
+
+(defn active-store-healthy?
+  "Check if the active store is connected and healthy.
+   Returns false if no store is set.
+
+   Returns boolean."
+  []
+  (when (store-set?)
+    (try
+      (:healthy? (health-check @active-store))
+      (catch Exception _ false))))
+
+(defn active-store-status
+  "Get comprehensive status of the active store.
+   Combines store-status with health-check for full picture.
+
+   Returns map or nil if no store is set."
+  []
+  (when (store-set?)
+    (let [store @active-store]
+      (merge (store-status store)
+             (try (health-check store)
+                  (catch Exception e
+                    {:healthy? false :errors [(.getMessage e)]}))))))
 
 ;;; ============================================================================
 ;;; IMemoryStoreWithAnalytics Protocol (Optional Extension)

@@ -123,9 +123,14 @@
   (some? @active-store))
 
 (defn clear-store!
-  "Clear the active store. Used for testing.
+  "Clear the active store. Calls close! on the current store first.
+   Used for testing and reinitialization.
    Returns nil."
   []
+  (when-let [store @active-store]
+    (try
+      (close! store)
+      (catch Exception _)))
   (reset! active-store nil))
 
 ;;; ============================================================================
@@ -180,3 +185,36 @@
   []
   (and (store-set?)
        (temporal-store? @active-store)))
+
+(defn kg-store?
+  "Check if the given object implements IKGStore.
+   Returns true if it satisfies the protocol."
+  [x]
+  (satisfies? IKGStore x))
+
+;;; ============================================================================
+;;; NoopKGStore (No-op Fallback)
+;;; ============================================================================
+
+(defrecord NoopKGStore []
+  IKGStore
+  (ensure-conn! [_this] nil)
+  (transact! [_this _tx-data] nil)
+  (query [_this _q] #{})
+  (query [_this _q _inputs] #{})
+  (entity [_this _eid] nil)
+  (entid [_this _lookup-ref] nil)
+  (pull-entity [_this _pattern _eid] nil)
+  (db-snapshot [_this] nil)
+  (reset-conn! [_this] nil)
+  (close! [_this] nil))
+
+(defn noop-store
+  "Create a no-op KG store that silently ignores all operations.
+   Useful as a fallback when no real backend is configured.
+   Returns an IKGStore implementation where:
+   - Writes are silently dropped
+   - Queries return empty sets
+   - Lookups return nil"
+  []
+  (->NoopKGStore))
