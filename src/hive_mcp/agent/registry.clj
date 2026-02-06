@@ -4,7 +4,7 @@
    Manages:
    - Tool registration with :name, :description, :inputSchema, and :handler
    - Agent registration implementing IAgentRegistry protocol"
-  (:require [hive-mcp.agent.protocol :refer [IAgentRegistry IAgent agent-type]]
+  (:require [hive-mcp.agent.protocol :refer [IAgentRegistry agent-type]]
             [hive-mcp.swarm.datascript.queries :as ds-queries]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
