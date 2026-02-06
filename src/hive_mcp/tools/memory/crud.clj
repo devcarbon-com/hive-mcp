@@ -22,6 +22,7 @@
             [hive-mcp.chroma :as chroma]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-mcp.knowledge-graph.schema :as kg-schema]
+            [hive-mcp.knowledge-graph.scope :as kg-scope]
             [hive-mcp.agent.context :as ctx]
             [clojure.data.json :as json]
             [taoensso.timbre :as log]))
@@ -170,6 +171,16 @@
                     created (chroma/get-entry-by-id entry-id)]
                 (log/info "Created memory entry:" entry-id
                           (when (seq edge-ids) (str " with " (count edge-ids) " KG edges")))
+                ;; Notify Olympus Web UI of new memory entry
+                ;; Uses channel/publish! so olympus.clj subscription picks it up
+                (try
+                  (when-let [publish-fn (requiring-resolve 'hive-mcp.channel/publish!)]
+                    (publish-fn {:type :memory-added
+                                 :id entry-id
+                                 :memory-type type
+                                 :tags tags-with-scope
+                                 :project-id project-id}))
+                  (catch Exception _ nil))
                 (mcp-json (cond-> (fmt/entry->json-alist created)
                             (seq edge-ids) (assoc :kg_edges_created edge-ids)))))))))
     (catch clojure.lang.ExceptionInfo e
@@ -212,6 +223,48 @@
         (catch Exception e
           (log/debug "Co-access recording failed (non-fatal):" (.getMessage e)))))))
 
+(defn- apply-auto-scope-filter
+  "Filter entries for auto-scope mode (nil scope).
+   Uses hierarchical scope resolution - includes entries from:
+   - Current project scope
+   - All ancestor scopes (via :parent-id chain in .hive-project.edn)
+
+   SCOPE LEAK FIX: Global-scoped entries are NO LONGER included when in
+   project context. Previously scope:global was always in the match set,
+   causing global memories to leak into project queries.
+   Global entries are only included when project-id IS 'global'.
+
+   HCR Wave 1: Now walks the parent-id hierarchy for full ancestry visibility.
+   HCR Wave 4: When include-descendants? is true, also includes entries from
+   child projects (downward hierarchy traversal via full-hierarchy-scope-tags)."
+  ([entries project-id]
+   (apply-auto-scope-filter entries project-id false))
+  ([entries project-id include-descendants?]
+   (let [in-project? (and project-id (not= project-id "global"))
+         ;; HCR Wave 4: Get scope tags based on direction
+         ;; FIX: Exclude scope:global when in project context
+         scope-tags (cond-> (if include-descendants?
+                              ;; Full bidirectional: ancestors + self + descendants
+                              (kg-scope/full-hierarchy-scope-tags project-id)
+                              ;; Default: ancestors + self (upward only)
+                              (kg-scope/visible-scope-tags project-id))
+                      in-project? (disj "scope:global"))
+         ;; Also include project-id metadata matches for backward compat
+         ;; FIX: Exclude "global" from visible IDs when in project context
+         visible-ids (cond-> (set (if include-descendants?
+                                    (into (vec (kg-scope/visible-scopes project-id))
+                                          (kg-scope/descendant-scopes project-id))
+                                    (kg-scope/visible-scopes project-id)))
+                       in-project? (disj "global"))]
+     (filter (fn [entry]
+               (let [tags (set (or (:tags entry) []))]
+                 (or
+                   ;; Match any visible scope tag
+                  (some tags scope-tags)
+                   ;; Also match entries with matching project-id metadata
+                  (contains? visible-ids (:project-id entry)))))
+             entries))))
+
 (defn handle-query
   "Query project memory by type with scope filtering (Chroma-only).
    SCOPE controls which memories are returned:
@@ -220,29 +273,58 @@
      - \"global\": return only scope:global entries
      - specific scope tag: filter by that scope
 
+   HCR Wave 4: include_descendants parameter.
+   When true, auto-scope mode also includes entries from child projects
+   (downward hierarchy traversal). Useful for coordinators that need
+   visibility into sub-project memories. Default: false (backward compat).
+
    When directory is provided, uses that path to determine project scope
    instead of relying on Emacs's current buffer (fixes /wrap scoping issue).
 
    Co-access tracking: When multiple entries are returned, records co-access
-   edges between them in the Knowledge Graph (async, non-blocking)."
-  [{:keys [type tags limit duration scope directory]}]
-  (let [directory (or directory (ctx/current-directory))]
-    (log/info "mcp-memory-query:" type "scope:" scope "directory:" directory)
+   edges between them in the Knowledge Graph (async, non-blocking).
+
+   SCOPE ISOLATION: Global-scoped memories are only returned when in global
+   context or when scope is explicitly set to 'global'. Project queries
+   only see project + ancestor + (optionally) descendant entries."
+  [{:keys [type tags limit duration scope directory include_descendants]}]
+  (let [directory (or directory (ctx/current-directory))
+        include-descendants? (boolean include_descendants)]
+    (log/info "mcp-memory-query:" type "scope:" scope "directory:" directory
+              "include_descendants:" include-descendants?)
     (try
       (let [limit-val (coerce-int! limit :limit 20)]
         (with-chroma
           (let [project-id (scope/get-current-project-id directory)
-                ;; Query from Chroma
+                ;; HCR Wave 4: Over-fetch more when including descendants
+                over-fetch-factor (if include-descendants? 8 5)
+                ;; Query from Chroma - DON'T filter by project-id at DB level when scope is nil
+                ;; This allows global entries to be retrieved (they have project-id: "global")
+                ;; Filtering happens in memory to include BOTH project AND global entries
                 entries (chroma/query-entries :type type
-                                              :project-id (when (nil? scope) project-id)
-                                              :limit (* limit-val 5)) ; Over-fetch for filtering
-                ;; Apply hierarchical scope filter
-                scope-filter (scope/derive-hierarchy-scope-filter scope)
-                filtered (if scope-filter
-                           (filter #(scope/matches-hierarchy-scopes? % scope-filter) entries)
-                           entries)
+                                              :limit (* limit-val over-fetch-factor))
+                ;; Apply scope filtering based on mode
+                scope-filtered (cond
+                                 ;; Auto mode (nil scope): include project + global
+                                 ;; HCR Wave 4: pass include-descendants? flag
+                                 (nil? scope)
+                                 (apply-auto-scope-filter entries project-id include-descendants?)
+
+                                 ;; "all" mode: no filtering
+                                 (= scope "all")
+                                 entries
+
+                                 ;; Specific scope: use hierarchical filter
+                                 ;; HCR Wave 4: when include_descendants, use full hierarchy
+                                 :else
+                                 (let [scope-filter (if include-descendants?
+                                                      (kg-scope/full-hierarchy-scope-tags scope)
+                                                      (scope/derive-hierarchy-scope-filter scope))]
+                                   (if scope-filter
+                                     (filter #(scope/matches-hierarchy-scopes? % scope-filter) entries)
+                                     entries)))
                 ;; Apply tag filter
-                tag-filtered (apply-tag-filter filtered tags)
+                tag-filtered (apply-tag-filter scope-filtered tags)
                 ;; Apply duration filter
                 dur-filtered (apply-duration-filter tag-filtered duration)
                 ;; Apply limit

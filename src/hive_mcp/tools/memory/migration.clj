@@ -65,29 +65,47 @@
 ;; ============================================================
 
 (defn- import-entry!
-  "Import a single entry to Chroma. Returns true if imported, false if skipped."
+  "Import a single entry to Chroma. Returns :imported, :skipped-id, or :skipped-hash.
+
+   Deduplication strategy (content-hash preferred):
+   1. Compute content-hash for the entry
+   2. Check if entry with same content-hash already exists (semantic dedup)
+   3. Fall back to ID check for backward compatibility
+
+   This prevents duplicate content even when imported with different IDs."
   [entry project-id]
-  (if (chroma/get-entry-by-id (:id entry))
-    false ; Already exists
-    (do
-      (chroma/index-memory-entry!
-       {:id (:id entry)
-        :type (:type entry)
-        :content (:content entry)
-        :tags (if (vector? (:tags entry))
-                (vec (:tags entry))
-                (:tags entry))
-        :content-hash (or (:content-hash entry)
-                          (chroma/content-hash (:content entry)))
-        :created (:created entry)
-        :updated (:updated entry)
-        :duration (or (:duration entry) "long")
-        :expires (or (:expires entry) "")
-        :access-count (or (:access-count entry) 0)
-        :helpful-count (or (:helpful-count entry) 0)
-        :unhelpful-count (or (:unhelpful-count entry) 0)
-        :project-id project-id})
-      true)))
+  (let [entry-hash (or (:content-hash entry)
+                       (chroma/content-hash (:content entry)))
+        entry-type (or (:type entry) "note")]
+    (cond
+      ;; Primary dedup: content-hash (prevents duplicate content)
+      (chroma/find-duplicate entry-type entry-hash :project-id project-id)
+      :skipped-hash
+
+      ;; Secondary dedup: ID (backward compatibility)
+      (chroma/get-entry-by-id (:id entry))
+      :skipped-id
+
+      ;; No duplicate found, import
+      :else
+      (do
+        (chroma/index-memory-entry!
+         {:id (:id entry)
+          :type entry-type
+          :content (:content entry)
+          :tags (if (vector? (:tags entry))
+                  (vec (:tags entry))
+                  (:tags entry))
+          :content-hash entry-hash
+          :created (:created entry)
+          :updated (:updated entry)
+          :duration (or (:duration entry) "long")
+          :expires (or (:expires entry) "")
+          :access-count (or (:access-count entry) 0)
+          :helpful-count (or (:helpful-count entry) 0)
+          :unhelpful-count (or (:unhelpful-count entry) 0)
+          :project-id project-id})
+        :imported))))
 
 (defn handle-import-json
   "Import memory entries from JSON (for migrating from elisp JSON storage to Chroma).
@@ -115,11 +133,14 @@
                                  :snippets (count (:snippets data))
                                  :conventions (count (:conventions data))
                                  :decisions (count (:decisions data))}})
-            (let [results (map #(import-entry! % pid) all-entries)
-                  imported (count (filter identity results))
-                  skipped (count (remove identity results))]
+            (let [results (mapv #(import-entry! % pid) all-entries)
+                  imported (count (filter #(= :imported %) results))
+                  skipped-hash (count (filter #(= :skipped-hash %) results))
+                  skipped-id (count (filter #(= :skipped-id %) results))]
               (mcp-json {:imported imported
-                         :skipped skipped
+                         :skipped {:by-hash skipped-hash
+                                   :by-id skipped-id
+                                   :total (+ skipped-hash skipped-id)}
                          :project-id pid}))))))))
 
 ;; ============================================================

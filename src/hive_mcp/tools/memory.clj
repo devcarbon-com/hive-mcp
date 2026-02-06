@@ -50,6 +50,8 @@
 (def handle-mcp-memory-cleanup-expired lifecycle/handle-cleanup-expired)
 (def handle-mcp-memory-expiring-soon lifecycle/handle-expiring-soon)
 (def handle-mcp-memory-expire lifecycle/handle-expire)
+(def handle-mcp-memory-decay lifecycle/handle-decay)
+(def handle-mcp-memory-cross-pollination-promote lifecycle/handle-cross-pollination-promote)
 
 ;; Analytics Operations
 (def handle-mcp-memory-log-access analytics/handle-log-access)
@@ -103,7 +105,7 @@
     :handler handle-mcp-memory-add}
 
    {:name "mcp_memory_query"
-    :description "Query project memory by type with scope filtering (Chroma storage). Returns stored notes, snippets, conventions, decisions, or axioms filtered by scope (auto-filters by current project + global unless specified)."
+    :description "Query project memory by type with scope filtering (Chroma storage). Returns stored notes, snippets, conventions, decisions, or axioms filtered by scope (auto-filters by current project + global unless specified). HCR Wave 4: Use include_descendants=true to also see child project memories."
     :inputSchema {:type "object"
                   :properties {"type" {:type "string"
                                        :enum ["note" "snippet" "convention" "decision" "conversation" "axiom"]
@@ -119,7 +121,9 @@
                                "scope" {:type "string"
                                         :description "Scope filter: nil=auto (project+global), 'all'=no filter, 'global'=only global, or specific scope tag"}
                                "directory" {:type "string"
-                                            :description "Working directory to determine project scope (pass your cwd to ensure correct scoping)"}}
+                                            :description "Working directory to determine project scope (pass your cwd to ensure correct scoping)"}
+                               "include_descendants" {:type "boolean"
+                                                      :description "HCR Wave 4: Include child project memories in results (default: false). Use for coordinator-level queries that need visibility into sub-project memories."}}
                   :required ["type"]}
     :handler handle-mcp-memory-query}
 

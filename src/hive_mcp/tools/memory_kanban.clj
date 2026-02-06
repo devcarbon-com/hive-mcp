@@ -8,9 +8,7 @@
    - content: {:task-type 'kanban' :title ... :status ...}
 
    Moving to 'done' DELETES from memory (after creating progress note)."
-  (:require [hive-mcp.emacsclient :as ec]
-            [hive-mcp.validation :as v]
-            [hive-mcp.crystal.hooks :as crystal-hooks]
+  (:require [hive-mcp.crystal.hooks :as crystal-hooks]
             [hive-mcp.tools.memory.crud :as mem-crud]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.memory.core :refer [with-chroma]]

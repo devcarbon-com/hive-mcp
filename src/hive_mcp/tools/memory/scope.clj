@@ -14,10 +14,21 @@
    - Project ID detection from directory path (explicit context)
    - Scope tag injection for memory entries
    - Scope matching for filtering queries
+   - Hierarchical scope resolution (SAA strategy)
 
-   NOTE: For hierarchical scope resolution (visible-scopes, get-parent-scope),
-   see hive-mcp.knowledge-graph.scope which provides full Knowledge Graph
-   scope hierarchy support."
+   Hierarchical Resolution (SAA - Scope Ancestry Algorithm):
+   Delegates to hive-mcp.knowledge-graph.scope for hierarchy resolution.
+   kg-scope provides the canonical hierarchy walk via:
+   - get-parent-scope: single parent lookup (config or string inference)
+   - visible-scopes: walk parent chain to global
+   - visible-scope-tags: scope tags for Chroma filtering
+   - descendant-scope-tags / full-hierarchy-scope-tags: downward traversal
+
+   This namespace wraps kg-scope with memory-specific semantics:
+   - resolve-scope-chain: ordered ancestry for a project-id
+   - expand-scope-tags: all scope tags a project should see
+   - make-scope-tag: hierarchical scope tag creation
+   - matches-scope?: hierarchical scope matching"
   (:require [hive-mcp.knowledge-graph.scope :as kg-scope]
             [clojure.string :as str]
             [taoensso.timbre :as log]))
@@ -75,12 +86,17 @@
 
 (defn make-scope-tag
   "Create a scope tag for a project-id.
-   Returns 'scope:global' for 'global' project-id,
-   otherwise 'scope:project:<project-id>'."
+   Delegates to kg-scope/scope->tag for consistent tag generation.
+
+   Returns 'scope:global' for 'global' or nil project-id,
+   otherwise 'scope:project:<project-id>'.
+
+   Supports hierarchical project-ids:
+     (make-scope-tag 'global')           => 'scope:global'
+     (make-scope-tag 'hive-mcp')         => 'scope:project:hive-mcp'
+     (make-scope-tag 'hive-mcp:agora')   => 'scope:project:hive-mcp:agora'"
   [project-id]
-  (if (= project-id "global")
-    "scope:global"
-    (str "scope:project:" project-id)))
+  (kg-scope/scope->tag project-id))
 
 ;; ============================================================
 ;; Scope Filtering
@@ -89,12 +105,22 @@
 (defn matches-scope?
   "Check if entry matches the given scope filter.
 
-   Filter behavior:
+   Supports hierarchical matching via kg-scope delegation:
    - nil or 'all': match everything
    - 'global': only match scope:global entries
-   - specific scope tag: match that scope OR global entries"
+   - scope tag string: match entry against hierarchical scope set
+   - scope tag set: match entry against any tag in set (for pre-computed sets)
+
+   Hierarchical behavior (SAA):
+   When scope-filter is a specific scope tag (e.g., 'scope:project:hive-mcp:agora'),
+   entries match if they have that scope OR any ancestor scope tag.
+   This means an entry tagged 'scope:project:hive-mcp' is visible from
+   'scope:project:hive-mcp:agora' because hive-mcp is an ancestor.
+
+   For flat backward compatibility, entries tagged 'scope:global' match any
+   non-nil, non-'all' filter (global is always an ancestor)."
   [entry scope-filter]
-  (let [tags (or (:tags entry) [])]
+  (let [tags (set (or (:tags entry) []))]
     (cond
       ;; No filter or "all" - match everything
       (or (nil? scope-filter) (= scope-filter "all"))
@@ -102,12 +128,22 @@
 
       ;; "global" - only global scope
       (= scope-filter "global")
-      (some #(= % "scope:global") tags)
+      (contains? tags "scope:global")
 
-      ;; Specific scope tag - match scope or global
+      ;; Pre-computed set of scope tags (from expand-scope-tags or similar)
+      (set? scope-filter)
+      (some tags scope-filter)
+
+      ;; Specific scope tag - use hierarchical matching via kg-scope
+      ;; Expand the filter into the full ancestor set, then match
       :else
-      (or (some #(= % scope-filter) tags)
-          (some #(= % "scope:global") tags)))))
+      (let [;; Extract project-id from scope tag for hierarchy resolution
+            visible-tags (if (str/starts-with? (str scope-filter) "scope:")
+                           ;; It's a scope tag - resolve hierarchy from it
+                           (kg-scope/visible-scope-tags scope-filter)
+                           ;; It's a bare project-id - resolve and convert to tags
+                           (kg-scope/visible-scope-tags scope-filter))]
+        (some tags visible-tags)))))
 
 (defn derive-scope-filter
   "Derive scope filter from scope parameter and project-id.
@@ -123,46 +159,76 @@
     :else (make-scope-tag project-id)))
 
 ;; ============================================================
-;; Hierarchical Scope Support
+;; Hierarchical Scope Support (SAA Strategy)
 ;; ============================================================
+;; SAA = Scope Ancestry Algorithm
+;; Delegates hierarchy resolution to kg-scope which supports:
+;; 1. Explicit parent-id from .hive-project.edn
+;; 2. String-inferred hierarchy (colon-delimited)
+;; 3. Global as root ancestor
 
-(defn- _extract-project-hierarchy
-  "Extract project hierarchy from a scope tag.
-   'scope:project:funeraria:sisf-sync:sisf-caixa-fe' -> ['funeraria' 'sisf-sync' 'sisf-caixa-fe']"
-  [scope-tag]
-  (when (and scope-tag (str/starts-with? scope-tag "scope:project:"))
-    (-> scope-tag
-        (str/replace #"^scope:project:" "")
-        (str/split #":"))))
+(defn resolve-scope-chain
+  "Walk the parent chain for a project-id via kg-scope.
 
-(defn- _build-ancestor-scopes
-  "Build all ancestor scope tags from a project hierarchy.
-   ['funeraria' 'sisf-sync' 'sisf-caixa-fe'] ->
-   ['scope:project:funeraria'
-    'scope:project:funeraria:sisf-sync'
-    'scope:project:funeraria:sisf-sync:sisf-caixa-fe']"
-  [hierarchy]
-  (when (seq hierarchy)
-    (loop [parts hierarchy
-           acc []
-           path []]
-      (if (empty? parts)
-        acc
-        (let [new-path (conj path (first parts))
-              scope-tag (str "scope:project:" (str/join ":" new-path))]
-          (recur (rest parts) (conj acc scope-tag) new-path))))))
+   Returns an ordered vector of project-ids from self to root (global).
+   Uses kg-scope/visible-scopes which resolves via:
+   1. Explicit :parent-id in registered .hive-project.edn config
+   2. Inferred from colon-delimited scope string
+   3. Global scope as root
+
+   Examples:
+     (resolve-scope-chain 'hive-mcp:agora')
+     => ['hive-mcp:agora' 'hive-mcp' 'global']
+
+     (resolve-scope-chain 'hive-mcp')
+     => ['hive-mcp' 'global']
+
+     (resolve-scope-chain 'global')
+     => ['global']
+
+     (resolve-scope-chain nil)
+     => ['global']"
+  [project-id]
+  (kg-scope/visible-scopes project-id))
+
+(defn expand-scope-tags
+  "Expand a project-id into all scope tags it should be able to see.
+
+   Returns a set of scope tags including:
+   - Self: scope:project:<project-id>
+   - All ancestors: scope:project:<parent>, scope:project:<grandparent>, ...
+   - Root: scope:global
+
+   Delegates to kg-scope/visible-scope-tags for the actual resolution.
+
+   When include-descendants? is true, also includes child project scope tags
+   via kg-scope/full-hierarchy-scope-tags (bidirectional traversal).
+
+   Examples:
+     (expand-scope-tags 'hive-mcp:agora')
+     => #{'scope:project:hive-mcp:agora' 'scope:project:hive-mcp' 'scope:global'}
+
+     (expand-scope-tags 'hive-mcp:agora' true)
+     => #{'scope:project:hive-mcp:agora' 'scope:project:hive-mcp'
+          'scope:global' 'scope:project:hive-mcp:agora:feature' ...}"
+  ([project-id]
+   (expand-scope-tags project-id false))
+  ([project-id include-descendants?]
+   (if include-descendants?
+     (kg-scope/full-hierarchy-scope-tags project-id)
+     (kg-scope/visible-scope-tags project-id))))
 
 (defn derive-hierarchy-scope-filter
   "Derive hierarchical scope filter that includes ancestors.
 
    Returns a set of valid scope tags:
    - nil if scope is 'all' (no filtering)
+   - nil if scope is nil (let caller handle auto mode)
    - set including scope + ancestors + global if hierarchical
-   - single scope set if not hierarchical
+   - #{\"scope:global\"} for 'global' scope
 
-   NOTE: This now delegates to hive-mcp.knowledge-graph.scope for full
-   hierarchical support including explicit parent-id from .hive-project.edn.
-   Falls back to string-based inference for backward compatibility."
+   Delegates to kg-scope/visible-scope-tags for full hierarchical support
+   including explicit parent-id from .hive-project.edn."
   [scope]
   (cond
     (= scope "all") nil
@@ -176,10 +242,12 @@
 (defn matches-hierarchy-scopes?
   "Check if entry matches any of the hierarchical scope filters.
 
-   Entry matches if it has:
-   - scope:global tag (always matches)
-   - Any scope tag in the valid-scopes set
-   - An ancestor scope (entries at parent level are visible to children)"
+   Entry matches if it has any scope tag in the valid-scopes set.
+   The valid-scopes set should be pre-computed via expand-scope-tags
+   or derive-hierarchy-scope-filter, which already includes ancestors
+   and optionally descendants.
+
+   nil valid-scopes means no filtering (match all)."
   [entry valid-scopes]
   (if (nil? valid-scopes)
     true  ;; No filter = match all

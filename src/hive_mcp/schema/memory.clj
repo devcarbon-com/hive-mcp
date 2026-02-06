@@ -19,8 +19,7 @@
 
    SOLID: SRP - Schema definitions only, no behavior.
    CLARITY: R - Represented intent through explicit types."
-  (:require [malli.core :as m]
-            [malli.util :as mu]))
+  (:require [malli.core :as m]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
