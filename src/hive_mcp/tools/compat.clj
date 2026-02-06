@@ -121,7 +121,7 @@
       ;; depending on iteration order. Fix: remove target keys before renaming.
       (let [normalized (into {} (map (fn [[k v]] [(keyword k) v]) params))
             ;; Get the set of target keys that will be created by renames
-            rename-targets (set (vals param-rename))
+            _rename-targets (set (vals param-rename))
             ;; Remove any existing params that are rename targets BUT also have
             ;; a source key present. This prevents bb-mcp's agent_id from
             ;; overwriting the renamed slave_id value.

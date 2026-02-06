@@ -8,11 +8,10 @@
    SOLID: Facade pattern - single tool entry point for agent lifecycle.
    CLARITY: L - Thin adapter delegating to domain handlers."
   (:require [hive-mcp.tools.cli :refer [make-cli-handler]]
-            [hive-mcp.tools.core :refer [mcp-success mcp-error mcp-json]]
+            [hive-mcp.tools.core :refer [mcp-error mcp-json]]
             [hive-mcp.agent.protocol :as proto]
             [hive-mcp.agent.ling :as ling]
             [hive-mcp.agent.drone :as drone]
-            [hive-mcp.agent.context :as ctx]
             [hive-mcp.swarm.datascript.queries :as queries]
             [hive-mcp.swarm.registry :as registry]
             [hive-mcp.swarm.logic :as logic]
@@ -20,9 +19,11 @@
             [hive-mcp.tools.swarm.status :as swarm-status]
             [hive-mcp.tools.swarm.core :as swarm-core]
             [hive-mcp.tools.memory.scope :as scope]
+            [hive-mcp.knowledge-graph.scope :as kg-scope]
             [hive-mcp.emacsclient :as ec]
             [taoensso.timbre :as log]
-            [clojure.data.json :as json]))
+            [clojure.data.json :as json]
+            [clojure.string :as str]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -132,29 +133,60 @@
 ;; Spawn Handler
 ;; =============================================================================
 
+(defn- resolve-project-scope
+  "Resolve effective project-id for a spawned agent.
+   HCR Wave 4: Inherits project scope from parent agent's hierarchy.
+
+   Resolution order:
+   1. Explicit project_id parameter
+   2. Inferred from cwd via kg-scope/infer-scope-from-path
+   3. Parent agent's project-id (if parent specified)
+   4. Fallback: last segment of cwd
+
+   Also registers the resolved scope in kg-scope for hierarchy lookups."
+  [project_id cwd parent]
+  (or project_id
+      ;; Try to infer from cwd using hierarchy-aware scope resolution
+      (when cwd
+        (let [inferred (kg-scope/infer-scope-from-path cwd)]
+          (when (and inferred (not= inferred "global"))
+            inferred)))
+      ;; Inherit from parent agent's project scope
+      (when parent
+        (when-let [parent-data (queries/get-slave parent)]
+          (:slave/project-id parent-data)))
+      ;; Fallback to last path segment
+      (when cwd
+        (last (str/split cwd #"/")))))
+
 (defn handle-spawn
   "Spawn a new agent (ling or drone).
 
    Parameters:
-     type    - Agent type: 'ling' or 'drone' (required)
-     name    - Optional agent name (auto-generated if not provided)
-     cwd     - Working directory (required)
-     presets - Preset names for ling (optional, ling only)
-     model   - Model override for drone (optional, drone only)
-     task    - Initial task to dispatch (optional)
-     files   - Files for drone to work on (optional, drone only)
-     parent  - Parent agent ID (optional)
+     type       - Agent type: 'ling' or 'drone' (required)
+     name       - Optional agent name (auto-generated if not provided)
+     cwd        - Working directory (required)
+     presets    - Preset names for ling (optional, ling only)
+     model      - Model override. For drones: OpenRouter model ID.
+                  For lings: 'claude' (default, uses Claude Code CLI) or
+                  OpenRouter model ID (auto-forces headless spawn mode).
+     task       - Initial task to dispatch (optional)
+     files      - Files for drone to work on (optional, drone only)
+     parent     - Parent agent ID (optional)
+     spawn_mode - Spawn mode for lings: 'vterm' (default) or 'headless' (optional)
+                  Headless mode spawns Claude CLI as a subprocess without Emacs.
+                  Non-claude models automatically force 'headless' mode.
 
+   HCR Wave 4: Inherits project scope from parent hierarchy.
    CLARITY: I - Validates type before dispatch."
-  [{:keys [type name cwd presets model task files parent project_id kanban_task_id]}]
+  [{:keys [type name cwd presets model task files parent project_id kanban_task_id spawn_mode]}]
   (let [agent-type (keyword type)]
     (if-not (#{:ling :drone} agent-type)
       (mcp-error "type must be 'ling' or 'drone'")
       (try
         (let [agent-id (or name (generate-agent-id agent-type))
-              effective-project-id (or project_id
-                                       (when cwd
-                                         (last (clojure.string/split cwd #"/"))))]
+              ;; HCR Wave 4: Use hierarchy-aware project scope resolution
+              effective-project-id (resolve-project-scope project_id cwd parent)]
           (case agent-type
             :ling
             ;; FIX: Ensure presets is always a vector, not a string
@@ -164,21 +196,40 @@
                                 (string? presets) [presets]
                                 (sequential? presets) (vec presets)
                                 :else [presets])
+                  ;; Resolve spawn mode (default :vterm for backward compat)
+                  ;; Non-claude models automatically force headless
+                  effective-spawn-mode (keyword (or spawn_mode "vterm"))
+                  _ (when-not (#{:vterm :headless} effective-spawn-mode)
+                      (throw (ex-info "spawn_mode must be 'vterm' or 'headless'"
+                                      {:spawn-mode spawn_mode})))
+                  ;; ->ling handles auto-forcing headless for non-claude models
                   ling-agent (ling/->ling agent-id {:cwd cwd
                                                     :presets presets-vec
-                                                    :project-id effective-project-id})
-                  ;; spawn! returns the actual elisp slave-id (may differ from agent-id)
-                  elisp-slave-id (proto/spawn! ling-agent {:task task
-                                                           :parent parent
-                                                           :kanban-task-id kanban_task_id})]
+                                                    :project-id effective-project-id
+                                                    :spawn-mode effective-spawn-mode
+                                                    :model model})
+                  ;; spawn! returns the actual slave-id
+                  ;; For vterm: may differ from agent-id (elisp assigns)
+                  ;; For headless: same as agent-id (we control it)
+                  slave-id (proto/spawn! ling-agent {:task task
+                                                     :parent parent
+                                                     :kanban-task-id kanban_task_id
+                                                     :spawn-mode (:spawn-mode ling-agent)
+                                                     :model model})]
               (log/info "Spawned ling" {:requested-id agent-id
-                                        :elisp-slave-id elisp-slave-id
-                                        :cwd cwd :presets presets-vec})
+                                        :slave-id slave-id
+                                        :spawn-mode (:spawn-mode ling-agent)
+                                        :model (or model "claude")
+                                        :cwd cwd :presets presets-vec
+                                        :project-id effective-project-id})
               (mcp-json {:success true
-                         :agent-id elisp-slave-id
+                         :agent-id slave-id
                          :type :ling
+                         :spawn-mode (:spawn-mode ling-agent)
+                         :model (or model "claude")
                          :cwd cwd
-                         :presets presets-vec}))
+                         :presets presets-vec
+                         :project-id effective-project-id}))
 
             :drone
             (let [drone-agent (drone/->drone agent-id {:cwd cwd
@@ -279,7 +330,7 @@
    System/getProperty user.dir in wrap-handler-context), which caused
    false cross-project detection. Coordinators typically don't pass
    directory, so they should have unrestricted kill access."
-  [{:keys [agent_id directory force force_cross_project]}]
+  [{:keys [agent_id directory force_cross_project]}]
   (if (empty? agent_id)
     (mcp-error "agent_id is required")
     (try
@@ -306,7 +357,8 @@
                   agent (case agent-type
                           :ling (ling/->ling agent_id {:cwd (:slave/cwd agent-data)
                                                        :presets (:slave/presets agent-data)
-                                                       :project-id (:slave/project-id agent-data)})
+                                                       :project-id (:slave/project-id agent-data)
+                                                       :spawn-mode (or (:ling/spawn-mode agent-data) :vterm)})
                           :drone (drone/->drone agent_id {:cwd (:slave/cwd agent-data)
                                                           :parent-id (:slave/parent agent-data)
                                                           :project-id (:slave/project-id agent-data)}))
@@ -350,11 +402,12 @@
               agent (case agent-type
                       :ling (ling/->ling agent_id {:cwd (:slave/cwd agent-data)
                                                    :presets (:slave/presets agent-data)
-                                                   :project-id (:slave/project-id agent-data)})
+                                                   :project-id (:slave/project-id agent-data)
+                                                   :spawn-mode (or (:ling/spawn-mode agent-data) :vterm)})
                       :drone (drone/->drone agent_id {:cwd (:slave/cwd agent-data)
                                                       :parent-id (:slave/parent agent-data)
                                                       :project-id (:slave/project-id agent-data)}))
-              ;; Drones need delegate-fn for execution; lings use elisp dispatch
+              ;; Drones need delegate-fn for execution; lings use elisp or stdin dispatch
               task-opts (cond-> {:task prompt
                                  :files files
                                  :priority (keyword (or priority "normal"))}
@@ -436,7 +489,7 @@
 
    CLARITY: L - Thin adapter delegating to swarm collect handler.
    DEPRECATED: Direct swarm_collect usage is preferred."
-  [{:keys [task_id timeout_ms] :as params}]
+  [{:keys [task_id] :as params}]
   (if (empty? task_id)
     (mcp-error "task_id is required")
     (swarm-collect/handle-swarm-collect params)))
@@ -563,9 +616,12 @@
                                          :items {:type "string"}
                                          :description "Preset names for ling (ling only)"}
                               "model" {:type "string"
-                                       :description "Model override for drone (drone only)"}
+                                       :description "Model override for drone or ling. For drones: OpenRouter model ID. For lings: 'claude' (default, Claude Code CLI) or OpenRouter model ID (auto-forces headless spawn mode, e.g., 'deepseek/deepseek-v3.2')"}
                               "task" {:type "string"
                                       :description "Initial task to dispatch on spawn"}
+                              "spawn_mode" {:type "string"
+                                            :enum ["vterm" "headless"]
+                                            :description "Spawn mode for lings: 'vterm' (default, Emacs buffer) or 'headless' (OS subprocess, no Emacs required). Headless mode captures stdout to ring buffer and supports stdin dispatch."}
                               ;; common params
                               "agent_id" {:type "string"
                                           :description "Agent ID for status/kill/dispatch/claims"}

@@ -10,7 +10,10 @@
 
    KG Context (Phase 2):
    - Decisions/conventions enriched with Knowledge Graph relationships
-   - Surfaces superseded entries, dependencies, and contradictions"
+   - Surfaces superseded entries, dependencies, and contradictions
+
+   HCR Wave 2:
+   - Project tree staleness check - rescans hierarchy if stale"
   (:require [hive-mcp.emacsclient :as ec]
             [hive-mcp.chroma :as chroma]
             [hive-mcp.crystal.hooks :as crystal-hooks]
@@ -19,6 +22,8 @@
             [hive-mcp.knowledge-graph.queries :as kg-queries]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-mcp.knowledge-graph.disc :as kg-disc]
+            [hive-mcp.knowledge-graph.scope :as kg-scope]
+            [hive-mcp.project.tree :as project-tree]
             [clojure.data.json :as json]
             [clojure.string :as str]
             [clojure.set :as set]
@@ -102,21 +107,40 @@
 (defn- query-scoped-entries
   "Query Chroma entries filtered by project scope.
    Uses project-id metadata filtering AND hierarchical scope matching.
-   Aligned with crud.clj approach for consistent behavior."
+   Aligned with crud.clj approach for consistent behavior.
+
+   HCR Wave 4: Catchup uses full-hierarchy-scope-tags by default, so
+   coordinator gets visibility into child project memories too. This is
+   the key integration point - catchup surfaces the full project tree.
+
+   SCOPE LEAK FIX: When in project context, excludes scope:global from
+   matching to prevent global memories from leaking into project catchup.
+   Global entries are only included when project-id IS 'global'."
   [entry-type tags project-id limit]
   (when (chroma/embedding-configured?)
     (let [limit-val (or limit 20)
-          ;; Pass project-id to Chroma for metadata filtering (like crud.clj)
+          in-project? (and project-id (not= project-id "global"))
+          ;; HCR Wave 4: Don't filter by project-id at DB level - we want entries
+          ;; from child projects too. Over-fetch more for hierarchy filtering.
           entries (chroma/query-entries :type entry-type
-                                        :project-id project-id
-                                        :limit (* limit-val 5))
-          ;; Apply hierarchical scope filter for entries with scope tags
-          ;; nil = auto mode, derives scope from project-id
-          scope-tag (scope/make-scope-tag project-id)
-          scope-filter (scope/derive-hierarchy-scope-filter scope-tag)
-          scoped (if scope-filter
-                   (filter #(scope/matches-hierarchy-scopes? % scope-filter) entries)
-                   entries)
+                                        :limit (min (* limit-val 8) 500))
+          ;; HCR Wave 4: Use full hierarchy scope (ancestors + self + descendants)
+          ;; FIX: Exclude scope:global when in project context to prevent leak
+          full-scope-tags (cond-> (kg-scope/full-hierarchy-scope-tags project-id)
+                            in-project? (disj "scope:global"))
+          ;; Build set of all visible project IDs (self + ancestors + descendants)
+          ;; FIX: Exclude "global" from visible IDs when in project context
+          all-visible-ids (cond-> (set (into (vec (kg-scope/visible-scopes project-id))
+                                             (kg-scope/descendant-scopes project-id)))
+                            in-project? (disj "global"))
+          scoped (filter (fn [entry]
+                           (let [entry-tags (set (or (:tags entry) []))]
+                             (or
+                              ;; Match any full hierarchy scope tag
+                              (some entry-tags full-scope-tags)
+                              ;; Also match by project-id metadata for backward compat
+                              (contains? all-visible-ids (:project-id entry)))))
+                         entries)
           ;; NOTE: filter-by-tags has signature [entries tags], so we can't use ->>
           filtered (filter-by-tags scoped tags)]
       (take limit-val filtered))))
@@ -137,17 +161,24 @@
       (catch Exception _ false))))
 
 (defn- query-expiring-entries
-  "Query entries expiring within 7 days, scoped to project."
+  "Query entries expiring within 7 days, scoped to project.
+   HCR Wave 4: Uses full hierarchy scope to surface expiring entries from
+   child projects too."
   [project-id limit]
-  (let [entries (chroma/query-entries :project-id project-id :limit 50)
-        scope-tag (scope/make-scope-tag project-id)
-        scope-filter (scope/derive-hierarchy-scope-filter scope-tag)
-        scoped (if scope-filter
-                 (filter #(scope/matches-hierarchy-scopes? % scope-filter) entries)
-                 entries)]
+  (let [;; HCR Wave 4: Don't filter by project-id at DB level
+        entries (chroma/query-entries :limit 100)
+        ;; Use full hierarchy scope (ancestors + self + descendants)
+        full-scope-tags (kg-scope/full-hierarchy-scope-tags project-id)
+        all-visible-ids (set (into (vec (kg-scope/visible-scopes project-id))
+                                   (kg-scope/descendant-scopes project-id)))
+        scoped (filter (fn [entry]
+                         (let [entry-tags (set (or (:tags entry) []))]
+                           (or (some entry-tags full-scope-tags)
+                               (contains? all-visible-ids (:project-id entry)))))
+                       entries)]
     (->> scoped
          (filter entry-expiring-soon?)
-         (take (or limit 5)))))
+         (take (or limit 20)))))
 
 ;; =============================================================================
 ;; Git Context
@@ -202,14 +233,14 @@
 (defn- query-axioms
   "Query axiom entries (both formal type and legacy tagged conventions)."
   [project-id]
-  (let [formal (query-scoped-entries "axiom" nil project-id 10)
-        legacy (query-scoped-entries "convention" ["axiom"] project-id 10)]
+  (let [formal (query-scoped-entries "axiom" nil project-id 100)
+        legacy (query-scoped-entries "convention" ["axiom"] project-id 100)]
     (distinct-by :id (concat formal legacy))))
 
 (defn- query-regular-conventions
   "Query conventions excluding axioms and priority ones."
   [project-id axiom-ids priority-ids]
-  (let [all-conventions (query-scoped-entries "convention" nil project-id 15)
+  (let [all-conventions (query-scoped-entries "convention" nil project-id 50)
         excluded-ids (set/union axiom-ids priority-ids)]
     (remove #(contains? excluded-ids (:id %)) all-conventions)))
 
@@ -473,18 +504,29 @@
 ;; =============================================================================
 
 (defn- build-scopes
-  "Build scope list for display."
+  "Build scope list for display.
+   HCR Wave 4: Includes descendant scope info for visibility.
+   FIX: Only includes scope:global when actually in global context,
+   not when in a project context (prevents misleading scope display)."
   [project-name project-id]
-  (cond-> ["scope:global"]
-    project-name (conj (str "scope:project:" project-name))
-    (and project-id (not= project-id project-name))
-    (conj (str "scope:project:" project-id))))
+  (let [in-project? (and project-id (not= project-id "global"))
+        base (cond-> (if in-project? [] ["scope:global"])
+               project-name (conj (str "scope:project:" project-name))
+               (and project-id (not= project-id project-name) (not= project-id "global"))
+               (conj (str "scope:project:" project-id)))
+        ;; HCR Wave 4: Show descendant scopes in display
+        descendants (when (and project-id in-project?)
+                      (kg-scope/descendant-scopes project-id))]
+    (if (seq descendants)
+      (into base (map #(str "scope:project:" %) descendants))
+      base)))
 
 (defn- build-catchup-response
   "Build the final catchup response structure."
   [{:keys [project-name project-id scopes git-info permeation
            axioms-meta priority-meta sessions-meta decisions-meta
-           conventions-meta snippets-meta expiring-meta kg-insights]}]
+           conventions-meta snippets-meta expiring-meta kg-insights
+           project-tree-scan]}]
   {:type "text"
    :text (json/write-str
           {:success true
@@ -508,6 +550,8 @@
                      :expiring expiring-meta}
            ;; KG insights surface contradictions and superseded entries
            :kg-insights kg-insights
+           ;; HCR Wave 2: Project tree staleness scan result
+           :project-tree project-tree-scan
            :hint "AXIOMS are INVIOLABLE - follow them word-for-word. Priority conventions and axioms loaded with full content. Entries with :kg key have Knowledge Graph relationships. Use mcp_memory_get_full for other entries."})})
 
 (defn- chroma-not-configured-error
@@ -657,18 +701,20 @@
    - Any error occurs (graceful degradation)
 
    CLARITY-C: Composes from existing catchup query helpers.
-   CLARITY-I: Validates payload size (< 3K tokens / ~12K chars)."
+   CLARITY-I: Validates payload size (< 3K tokens / ~12K chars).
+   HCR Wave 4: Uses full hierarchy scope, inherits project context from parent."
   [directory]
   (when (chroma/embedding-configured?)
     (try
       (let [project-id (scope/get-current-project-id directory)
             project-name (get-current-project-name directory)
 
-            ;; Query core context (reuses existing private helpers)
+            ;; HCR Wave 4: query-scoped-entries now uses full hierarchy scope
+            ;; so spawned lings get context from parent + child projects
             axioms (query-axioms project-id)
             priority-conventions (query-scoped-entries "convention" ["catchup-priority"]
-                                                       project-id 5)
-            decisions (query-scoped-entries "decision" nil project-id 5)
+                                                       project-id 50)
+            decisions (query-scoped-entries "decision" nil project-id 50)
             git-info (gather-git-info directory)
 
             ;; L1 Disc: Surface top-N most stale files needing re-grounding
@@ -733,14 +779,14 @@
               ;; Query entries (use project-id for scoping, aligned with crud.clj)
               axioms (query-axioms project-id)
               priority-conventions (query-scoped-entries "convention" ["catchup-priority"]
-                                                         project-id 5)
-              sessions (query-scoped-entries "note" ["session-summary"] project-id 3)
-              decisions (query-scoped-entries "decision" nil project-id 10)
+                                                         project-id 50)
+              sessions (query-scoped-entries "note" ["session-summary"] project-id 10)
+              decisions (query-scoped-entries "decision" nil project-id 50)
               conventions (query-regular-conventions project-id
                                                      (set (map :id axioms))
                                                      (set (map :id priority-conventions)))
-              snippets (query-scoped-entries "snippet" nil project-id 5)
-              expiring (query-expiring-entries project-id 5)
+              snippets (query-scoped-entries "snippet" nil project-id 20)
+              expiring (query-expiring-entries project-id 20)
               git-info (gather-git-info directory)
 
               ;; Convert to metadata
@@ -775,7 +821,15 @@
 
               ;; Auto-permeate pending ling wraps (Architecture > LLM behavior)
               ;; This ensures coordinator always gets ling learnings without explicit call
-              permeation (auto-permeate-wraps directory)]
+              permeation (auto-permeate-wraps directory)
+
+              ;; HCR Wave 2: Check project tree staleness and rescan if needed
+              ;; This ensures hierarchy is fresh for hierarchical memory scoping
+              project-tree-scan (try
+                                  (project-tree/maybe-scan-project-tree! (or directory "."))
+                                  (catch Exception e
+                                    (log/debug "Project tree scan failed (non-fatal):" (.getMessage e))
+                                    {:scanned false :error (.getMessage e)}))]
 
           (build-catchup-response
            {:project-name project-name :project-id project-id
@@ -783,7 +837,8 @@
             :axioms-meta axioms-meta :priority-meta priority-meta
             :sessions-meta sessions-meta :decisions-meta decisions-enriched
             :conventions-meta conventions-enriched :snippets-meta snippets-meta
-            :expiring-meta expiring-meta :kg-insights kg-insights}))
+            :expiring-meta expiring-meta :kg-insights kg-insights
+            :project-tree-scan project-tree-scan}))
         (catch Exception e
           (catchup-error e))))))
 

@@ -21,8 +21,7 @@
    [hive-mcp.tools.prompt :as prompt]
    [hive-mcp.tools.presets :as presets-tools]
    [hive-mcp.tools.diff :as diff]
-   [hive-mcp.tools.kondo :as kondo]
-   [hive-mcp.tools.scc :as scc]
+   ;; kondo and scc - now in consolidated/analysis, requires removed
    ;; kg/tools REMOVED - compat shims delegate to consolidated
    [hive-mcp.tools.crystal :as crystal]
    [hive-mcp.tools.hot :as hot]

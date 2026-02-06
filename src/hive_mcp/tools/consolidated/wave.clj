@@ -7,7 +7,7 @@
 
    SOLID: Facade pattern - single tool entry point for drone wave operations.
    CLARITY: L - Thin adapter delegating to domain handlers."
-  (:require [hive-mcp.tools.cli :refer [make-cli-handler format-help]]
+  (:require [hive-mcp.tools.cli :refer [make-cli-handler]]
             [hive-mcp.tools.swarm :as swarm-handlers]
             [hive-mcp.tools.diff :as diff-handlers]))
 

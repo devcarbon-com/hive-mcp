@@ -7,8 +7,9 @@
 
    SOLID: Facade pattern - single tool entry point for hivemind coordination.
    CLARITY: L - Thin adapter delegating to domain handlers."
-  (:require [hive-mcp.tools.cli :refer [make-cli-handler format-help]]
-            [hive-mcp.hivemind :as hm]))
+  (:require [hive-mcp.tools.cli :refer [make-cli-handler]]
+            [hive-mcp.hivemind :as hm]
+            [clojure.string :as str]))
 
 ;; =============================================================================
 ;; Handlers Map - Wire commands to existing handlers
@@ -16,7 +17,7 @@
 
 ;; Extract handlers from hivemind tools definitions
 (def ^:private tools-by-name
-  (into {} (map (fn [t] [(keyword (clojure.string/replace (:name t) "hivemind_" "")) (:handler t)])
+  (into {} (map (fn [t] [(keyword (str/replace (:name t) "hivemind_" "")) (:handler t)])
                 hm/tools)))
 
 (def handlers

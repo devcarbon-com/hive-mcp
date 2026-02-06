@@ -7,7 +7,7 @@
 
    SOLID: Facade pattern - single tool entry point for preset operations.
    CLARITY: L - Thin adapter delegating to domain handlers."
-  (:require [hive-mcp.tools.cli :refer [make-cli-handler format-help]]
+  (:require [hive-mcp.tools.cli :refer [make-cli-handler]]
             [hive-mcp.tools.presets :as preset-handlers]))
 
 ;; =============================================================================

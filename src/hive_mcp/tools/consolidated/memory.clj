@@ -12,7 +12,9 @@
    - tags: Update entry tags
    - cleanup: Remove expired entries
    - expiring: List soon-to-expire entries
-   - expire: Force-expire (delete) entry by ID"
+   - expire: Force-expire (delete) entry by ID
+   - decay: Scheduled staleness decay for low-access entries (W2)
+   - cross_pollinate: Auto-promote entries with cross-project access (W5)"
   (:require [hive-mcp.tools.cli :refer [make-cli-handler]]
             [hive-mcp.tools.memory :as mem]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -41,7 +43,9 @@
    :expiring    mem/handle-mcp-memory-expiring-soon
    :expire      mem/handle-mcp-memory-expire
    :migrate     mem/handle-mcp-memory-migrate-project
-   :import      mem/handle-mcp-memory-import-json})
+   :import      mem/handle-mcp-memory-import-json
+   :decay             mem/handle-mcp-memory-decay
+   :cross_pollinate   mem/handle-mcp-memory-cross-pollination-promote})
 
 ;; ============================================================
 ;; CLI Handler
@@ -59,10 +63,10 @@
   "MCP tool definition for consolidated memory operations."
   {:name "memory"
    :consolidated true
-   :description "Consolidated memory operations. Commands: add, query, metadata, get, search, duration, promote, demote, log_access, feedback, helpfulness, tags, cleanup, expiring, expire, migrate, import. Use 'help' command to list all available commands."
+   :description "Consolidated memory operations. Commands: add, query, metadata, get, search, duration, promote, demote, log_access, feedback, helpfulness, tags, cleanup, expiring, expire, migrate, import, decay, cross_pollinate. Use 'help' command to list all available commands."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
-                                         :enum ["add" "query" "metadata" "get" "search" "duration" "promote" "demote" "log_access" "feedback" "helpfulness" "tags" "cleanup" "expiring" "expire" "migrate" "import" "help"]
+                                         :enum ["add" "query" "metadata" "get" "search" "duration" "promote" "demote" "log_access" "feedback" "helpfulness" "tags" "cleanup" "expiring" "expire" "migrate" "import" "decay" "cross_pollinate" "help"]
                                          :description "Command to execute"}
                               ;; add command params
                               "type" {:type "string"
@@ -98,7 +102,7 @@
                                                    :description "[add] Abstraction level 1-4"}
                               ;; query/get params
                               "limit" {:type "integer"
-                                       :description "[query/search] Maximum number of results"}
+                                       :description "[query/search/expiring] Maximum number of results"}
                               "scope" {:type "string"
                                        :description "[query] Scope filter: nil=auto, 'all', 'global', or specific"}
                               ;; get/promote/demote/feedback/tags params
@@ -113,7 +117,10 @@
                                           :description "[feedback] Helpfulness rating"}
                               ;; expiring params
                               "days" {:type "integer"
-                                      :description "[expiring] Days to look ahead (default: 7)"}}
+                                      :description "[expiring] Days to look ahead (default: 7). Use 1-2 for short-duration memories"}
+                              ;; HCR Wave 4: hierarchy params
+                              "include_descendants" {:type "boolean"
+                                                     :description "[query] Include child project memories in results (HCR Wave 4). Default false."}}
                  :required ["command"]}
    :handler handle-memory})
 

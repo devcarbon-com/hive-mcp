@@ -7,7 +7,7 @@
 
    SOLID: Facade pattern - single tool entry point for Kanban operations.
    CLARITY: L - Thin adapter delegating to memory-kanban (Chroma backend)."
-  (:require [hive-mcp.tools.cli :refer [make-cli-handler format-help]]
+  (:require [hive-mcp.tools.cli :refer [make-cli-handler]]
             [hive-mcp.tools.memory-kanban :as mem-kanban]
             [hive-mcp.plan.tool :as plan-tool]))
 
