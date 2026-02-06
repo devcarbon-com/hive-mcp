@@ -1,12 +1,12 @@
 (ns hive-mcp.knowledge-graph.store.datascript
-  "DataScript implementation of IGraphStore protocol.
+  "DataScript implementation of IKGStore protocol.
 
    In-memory Datalog store. Fast, no persistence, ideal for tests
    and the default backend.
 
    CLARITY-T: Logs backend selection on initialization."
   (:require [datascript.core :as d]
-            [hive-mcp.knowledge-graph.protocol :as proto]
+            [hive-mcp.protocols.kg :as kg]
             [hive-mcp.knowledge-graph.schema :as schema]
             [taoensso.timbre :as log]))
 
@@ -15,7 +15,7 @@
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 (defrecord DataScriptStore [conn-atom]
-  proto/IGraphStore
+  kg/IKGStore
 
   (ensure-conn! [_this]
     (when (nil? @conn-atom)
@@ -24,25 +24,25 @@
     @conn-atom)
 
   (transact! [this tx-data]
-    (d/transact! (proto/ensure-conn! this) tx-data))
+    (d/transact! (kg/ensure-conn! this) tx-data))
 
   (query [this q]
-    (d/q q @(proto/ensure-conn! this)))
+    (d/q q @(kg/ensure-conn! this)))
 
   (query [this q inputs]
-    (apply d/q q @(proto/ensure-conn! this) inputs))
+    (apply d/q q @(kg/ensure-conn! this) inputs))
 
   (entity [this eid]
-    (d/entity @(proto/ensure-conn! this) eid))
+    (d/entity @(kg/ensure-conn! this) eid))
 
   (entid [this lookup-ref]
-    (d/entid @(proto/ensure-conn! this) lookup-ref))
+    (d/entid @(kg/ensure-conn! this) lookup-ref))
 
   (pull-entity [this pattern eid]
-    (d/pull @(proto/ensure-conn! this) pattern eid))
+    (d/pull @(kg/ensure-conn! this) pattern eid))
 
   (db-snapshot [this]
-    @(proto/ensure-conn! this))
+    @(kg/ensure-conn! this))
 
   (reset-conn! [_this]
     (log/debug "Resetting DataScript KG store")
@@ -55,7 +55,7 @@
 
 (defn create-store
   "Create a new DataScript-backed graph store.
-   Returns an IGraphStore implementation."
+   Returns an IKGStore implementation."
   []
   (log/info "Creating DataScript graph store (in-memory)")
   (->DataScriptStore (atom nil)))

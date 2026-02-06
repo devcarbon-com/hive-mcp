@@ -1,135 +1,62 @@
 (ns hive-mcp.knowledge-graph.protocol
-  "Protocol definition for Knowledge Graph storage backends.
+  "DEPRECATED: Backward-compatible facade for Knowledge Graph storage protocol.
 
-   Abstracts the Datalog store interface so that both DataScript (in-memory)
-   and Datalevin (persistent) can be used interchangeably.
+   The canonical protocol definition has moved to hive-mcp.protocols.kg.
+   This namespace re-exports all public vars for backward compatibility.
+
+   New code should require hive-mcp.protocols.kg directly:
+     (:require [hive-mcp.protocols.kg :as kg])
+
+   Existing code using this namespace will continue to work:
+     (:require [hive-mcp.knowledge-graph.protocol :as proto])
+     (proto/set-store! store)  ;; delegates to protocols.kg/set-store!
+     (proto/ensure-conn! store) ;; delegates to protocols.kg/ensure-conn!
 
    CLARITY-L: Layers stay pure - protocol is the boundary between
    KG domain logic and storage implementation.
-   CLARITY-I: Inputs guarded at protocol boundary.")
+   CLARITY-I: Inputs guarded at protocol boundary."
+  (:require [hive-mcp.protocols.kg :as kg]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
-(defprotocol IGraphStore
-  "Storage backend protocol for Knowledge Graph.
-
-   All KG modules (edges, disc, queries) should use this protocol
-   instead of calling datascript.core or datalevin.core directly.
-
-   Implementations:
-   - DataScriptStore: In-memory, fast, used for tests and default
-   - DatalevinStore: Persistent to disk via LMDB, used for production"
-
-  (ensure-conn! [this]
-    "Ensure the connection is initialized. Creates if nil.
-     Returns the raw connection object (backend-specific).")
-
-  (transact! [this tx-data]
-    "Transact data into the store.
-     tx-data is a vector of maps or transaction commands.
-     Returns the transaction report.")
-
-  (query [this q] [this q inputs]
-    "Execute a Datalog query against the current DB snapshot.
-     q - query form (vector or map)
-     inputs - additional query inputs after the DB
-     Returns query results.")
-
-  (entity [this eid]
-    "Get an entity by its entity ID.
-     Returns the entity map or nil.")
-
-  (entid [this lookup-ref]
-    "Resolve a lookup ref to an entity ID.
-     lookup-ref - e.g. [:kg-edge/id \"some-id\"]
-     Returns entity ID (integer) or nil.")
-
-  (pull-entity [this pattern eid]
-    "Pull an entity with a pull pattern.
-     pattern - pull pattern e.g. '[*]'
-     eid - entity ID (integer)
-     Returns pulled entity map.")
-
-  (db-snapshot [this]
-    "Get the current database snapshot value.
-     Returns the immutable DB value.")
-
-  (reset-conn! [this]
-    "Reset the connection to a fresh/empty database.
-     Used for testing and state clearing.
-     Returns the new connection.")
-
-  (close! [this]
-    "Close the connection and release resources.
-     No-op for in-memory backends.
-     Required for Datalevin to flush LMDB."))
-
 ;; =============================================================================
-;; Active Store Management
+;; Protocol Re-exports (backward compatibility)
 ;; =============================================================================
 
-;; Atom holding the currently active IGraphStore implementation.
-(defonce ^:private active-store (atom nil))
+;; The canonical protocol names are IKGStore and ITemporalKGStore
+;; in hive-mcp.protocols.kg. These aliases preserve the old names.
 
-(defn set-store!
-  "Set the active graph store implementation.
-   Called during system initialization."
-  [store]
-  {:pre [(satisfies? IGraphStore store)]}
-  (reset! active-store store))
+;; Protocol method vars - these dispatch via IKGStore/ITemporalKGStore
+(def ensure-conn! kg/ensure-conn!)
+(def transact! kg/transact!)
+(def query kg/query)
+(def entity kg/entity)
+(def entid kg/entid)
+(def pull-entity kg/pull-entity)
+(def db-snapshot kg/db-snapshot)
+(def reset-conn! kg/reset-conn!)
+(def close! kg/close!)
 
-(defn get-store
-  "Get the active graph store.
-   Throws if no store has been set."
-  []
-  (or @active-store
-      (throw (ex-info "No graph store configured. Call set-store! first."
-                      {:hint "Initialize with datascript-store or datalevin-store"}))))
-
-(defn store-set?
-  "Check if a store has been configured."
-  []
-  (some? @active-store))
+;; Temporal protocol methods
+(def history-db kg/history-db)
+(def as-of-db kg/as-of-db)
+(def since-db kg/since-db)
 
 ;; =============================================================================
-;; Temporal Store Protocol (Optional Extension)
+;; Active Store Management (delegates to protocols.kg)
 ;; =============================================================================
 
-(defprotocol ITemporalGraphStore
-  "Extended protocol for stores that support temporal queries.
+(def set-store! kg/set-store!)
+(def get-store kg/get-store)
+(def store-set? kg/store-set?)
+(def clear-store! kg/clear-store!)
 
-   Datahike implements this protocol for time-travel capabilities.
-   DataScript and Datalevin do not support this and should return nil.
+;; =============================================================================
+;; Helper Functions
+;; =============================================================================
 
-   Temporal queries enable:
-   - Auditing: See what was known at a point in time
-   - Debugging: Understand how knowledge evolved
-   - Rollback: Query past states without data loss"
-
-  (history-db [this]
-    "Get a database containing all historical facts.
-     Returns a DB value that includes retracted datoms, enabling
-     queries over the complete history of the store.
-     Returns nil if not supported.")
-
-  (as-of-db [this tx-or-time]
-    "Get the database as of a specific point in time.
-     tx-or-time can be:
-       - A transaction ID (integer)
-       - A java.util.Date timestamp
-     Returns nil if not supported.")
-
-  (since-db [this tx-or-time]
-    "Get a database containing only facts added since a point in time.
-     tx-or-time can be:
-       - A transaction ID (integer)
-       - A java.util.Date timestamp
-     Returns nil if not supported."))
-
-(defn temporal-store?
-  "Check if the current store supports temporal queries.
-   Returns true if the store implements ITemporalGraphStore."
-  [store]
-  (satisfies? ITemporalGraphStore store))
+(def temporal-store? kg/temporal-store?)
+(def active-temporal? kg/active-temporal?)
+(def kg-store? kg/kg-store?)

@@ -274,3 +274,50 @@
     (let [scope-name "my-project_v2.0"]
       (is (= ["my-project_v2.0" "global"]
              (scope/visible-scopes scope-name))))))
+
+;; =============================================================================
+;; HCR Wave 3: Descendant Scope Tags
+;; =============================================================================
+
+(deftest test-descendant-scope-tags-nil-scope
+  (testing "nil scope returns nil (no descendants)"
+    (is (nil? (scope/descendant-scope-tags nil)))))
+
+(deftest test-descendant-scope-tags-global-scope
+  (testing "global scope returns nil (global has no descendant concept)"
+    (is (nil? (scope/descendant-scope-tags "global")))))
+
+(deftest test-descendant-scope-tags-empty-tree
+  (testing "Project with no scanned tree returns empty set"
+    ;; With no tree scanned, descendants should be empty set
+    (is (= #{} (scope/descendant-scope-tags "unknown-project")))))
+
+(deftest test-descendant-scopes-nil-scope
+  (testing "nil scope returns nil"
+    (is (nil? (scope/descendant-scopes nil)))))
+
+(deftest test-descendant-scopes-global-scope
+  (testing "global scope returns nil"
+    (is (nil? (scope/descendant-scopes "global")))))
+
+(deftest test-descendant-scopes-empty-tree
+  (testing "Project with no scanned tree returns empty vector"
+    (is (= [] (scope/descendant-scopes "unknown-project")))))
+
+(deftest test-full-hierarchy-scope-tags-nil
+  (testing "nil scope returns just global"
+    (is (= #{"scope:global"} (scope/full-hierarchy-scope-tags nil)))))
+
+(deftest test-full-hierarchy-scope-tags-global
+  (testing "global scope returns just global"
+    (is (= #{"scope:global"} (scope/full-hierarchy-scope-tags "global")))))
+
+(deftest test-full-hierarchy-scope-tags-includes-ancestors
+  (testing "full-hierarchy includes ancestors (visible-scope-tags behavior)"
+    (let [tags (scope/full-hierarchy-scope-tags "hive-mcp:agora")]
+      ;; Should include self
+      (is (contains? tags "scope:project:hive-mcp:agora"))
+      ;; Should include parent
+      (is (contains? tags "scope:project:hive-mcp"))
+      ;; Should include global
+      (is (contains? tags "scope:global")))))

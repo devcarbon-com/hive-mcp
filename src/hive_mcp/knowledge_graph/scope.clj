@@ -20,6 +20,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.edn :as edn]
+            [clojure.set]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -286,6 +287,83 @@
    => #{'scope:project:hive-mcp:agora' 'scope:project:hive-mcp' 'scope:global'}"
   [scope]
   (set (map scope->tag (visible-scopes scope))))
+
+;; ============================================================
+;; HCR Wave 3: Descendant Scope Tags
+;; ============================================================
+
+(defn descendant-scope-tags
+  "Return all scope tags for descendant projects (children, grandchildren, etc).
+   HCR Wave 3: Enables memory queries to include child project memories.
+
+   This is the inverse of visible-scope-tags:
+   - visible-scope-tags: goes UP to ancestors (child sees parent)
+   - descendant-scope-tags: goes DOWN to children (parent queries child)
+
+   Uses project tree from hive-mcp.project.tree (loaded lazily to avoid
+   circular dependency).
+
+   Args:
+     scope - Project ID or scope string
+
+   Returns:
+     Set of scope tags like #{\"scope:project:child1\" \"scope:project:child2\"}
+     Returns empty set if project has no children or tree not scanned.
+
+   Example:
+     (descendant-scope-tags \"hive-mcp\")
+     => #{\"scope:project:hive-mcp:agora\" \"scope:project:hive-mcp:memory\"}"
+  [scope]
+  (let [scope (normalize-scope scope)]
+    (when (and scope (not= scope "global"))
+      (try
+        ;; Lazy require to avoid circular dependency (tree.clj requires scope.clj)
+        (require 'hive-mcp.project.tree)
+        (let [get-tags (resolve 'hive-mcp.project.tree/get-descendant-scope-tags)]
+          (or (get-tags scope) #{}))
+        (catch Exception e
+          (log/debug "Failed to get descendant scope tags:" (.getMessage e))
+          #{})))))
+
+(defn descendant-scopes
+  "Return all descendant project IDs (children, grandchildren, etc).
+   Lower-level function - use descendant-scope-tags for memory filtering.
+
+   Example:
+     (descendant-scopes \"hive-mcp\")
+     => [\"hive-mcp:agora\" \"hive-mcp:memory\"]"
+  [scope]
+  (let [scope (normalize-scope scope)]
+    (when (and scope (not= scope "global"))
+      (try
+        (require 'hive-mcp.project.tree)
+        (let [get-descendants (resolve 'hive-mcp.project.tree/get-descendant-scopes)]
+          (or (get-descendants scope) []))
+        (catch Exception e
+          (log/debug "Failed to get descendant scopes:" (.getMessage e))
+          [])))))
+
+(defn full-hierarchy-scope-tags
+  "Return scope tags for full hierarchy: self + ancestors + descendants.
+   HCR Wave 3: Use this for bidirectional memory queries.
+
+   Combines:
+   - visible-scope-tags (upward: ancestors + global)
+   - descendant-scope-tags (downward: children)
+
+   Example:
+     (full-hierarchy-scope-tags \"hive-mcp\")
+     => #{\"scope:project:hive-mcp\"      ; self
+          \"scope:global\"                 ; ancestor
+          \"scope:project:hive-mcp:agora\" ; child
+          \"scope:project:hive-mcp:memory\"}"
+  [scope]
+  (let [scope (normalize-scope scope)]
+    (if (or (nil? scope) (= scope "global"))
+      #{"scope:global"}
+      (clojure.set/union
+       (visible-scope-tags scope)
+       (descendant-scope-tags scope)))))
 
 ;; ============================================================
 ;; Backward Compatibility

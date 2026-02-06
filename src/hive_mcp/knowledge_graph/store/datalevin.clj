@@ -1,5 +1,5 @@
 (ns hive-mcp.knowledge-graph.store.datalevin
-  "Datalevin implementation of IGraphStore protocol.
+  "Datalevin implementation of IKGStore protocol.
 
    Persistent Datalog store backed by LMDB. Data survives restarts.
    Schema translation from DataScript format (no :db/valueType)
@@ -9,7 +9,7 @@
    CLARITY-T: Logs backend selection, path, schema translation.
    CLARITY-Y: Falls back to DataScript with warning if Datalevin fails."
   (:require [datalevin.core :as dtlv]
-            [hive-mcp.knowledge-graph.protocol :as proto]
+            [hive-mcp.protocols.kg :as kg]
             [hive-mcp.knowledge-graph.schema :as schema]
             [clojure.java.io :as io]
             [taoensso.timbre :as log]))
@@ -110,7 +110,7 @@
 ;; =============================================================================
 
 (defrecord DatalevinStore [conn-atom db-path]
-  proto/IGraphStore
+  kg/IKGStore
 
   (ensure-conn! [_this]
     (when (nil? @conn-atom)
@@ -123,25 +123,25 @@
     @conn-atom)
 
   (transact! [this tx-data]
-    (dtlv/transact! (proto/ensure-conn! this) tx-data))
+    (dtlv/transact! (kg/ensure-conn! this) tx-data))
 
   (query [this q]
-    (dtlv/q q (dtlv/db (proto/ensure-conn! this))))
+    (dtlv/q q (dtlv/db (kg/ensure-conn! this))))
 
   (query [this q inputs]
-    (apply dtlv/q q (dtlv/db (proto/ensure-conn! this)) inputs))
+    (apply dtlv/q q (dtlv/db (kg/ensure-conn! this)) inputs))
 
   (entity [this eid]
-    (dtlv/entity (dtlv/db (proto/ensure-conn! this)) eid))
+    (dtlv/entity (dtlv/db (kg/ensure-conn! this)) eid))
 
   (entid [this lookup-ref]
-    (dtlv/entid (dtlv/db (proto/ensure-conn! this)) lookup-ref))
+    (dtlv/entid (dtlv/db (kg/ensure-conn! this)) lookup-ref))
 
   (pull-entity [this pattern eid]
-    (dtlv/pull (dtlv/db (proto/ensure-conn! this)) pattern eid))
+    (dtlv/pull (dtlv/db (kg/ensure-conn! this)) pattern eid))
 
   (db-snapshot [this]
-    (dtlv/db (proto/ensure-conn! this)))
+    (dtlv/db (kg/ensure-conn! this)))
 
   (reset-conn! [this]
     (log/info "Resetting Datalevin KG store" {:path db-path})
@@ -159,7 +159,7 @@
           (.delete f))))
     ;; Reconnect with fresh schema
     (reset! conn-atom nil)
-    (proto/ensure-conn! this))
+    (kg/ensure-conn! this))
 
   (close! [_this]
     (when-let [c @conn-atom]
@@ -180,7 +180,7 @@
      opts - Optional map with:
        :db-path - Path for LMDB storage (default: data/kg/datalevin)
 
-   Returns an IGraphStore implementation.
+   Returns an IKGStore implementation.
 
    CLARITY-Y: If Datalevin fails to initialize, logs warning
    and returns nil (caller should fall back to DataScript)."
