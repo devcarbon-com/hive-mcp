@@ -9,6 +9,7 @@
    5. handle-claims - Lists claims, shows ownership info"
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.data.json :as json]
+            [clojure.string :as str]
             [hive-mcp.tools.consolidated.agent :as agent]
             [hive-mcp.tools.cli :as cli]
             [hive-mcp.agent.protocol :as proto]
@@ -21,7 +22,8 @@
             [hive-mcp.swarm.logic :as logic]
             [hive-mcp.emacsclient :as ec]
             [hive-mcp.tools.swarm.core :as swarm-core]
-            [hive-mcp.events.core :as events]))
+            [hive-mcp.events.core :as events]
+            [hive-mcp.scheduler.dag-waves :as dag-waves]))
 
 ;; =============================================================================
 ;; Test Fixtures
@@ -564,9 +566,17 @@
     (is (contains? agent/handlers :list))))
 
 (deftest test-handlers-are-functions
-  (testing "all handlers are functions"
+  (testing "all top-level handlers are functions or nested handler maps"
     (doseq [[k v] agent/handlers]
-      (is (fn? v) (str "Handler " k " should be a function")))))
+      (is (or (fn? v) (map? v))
+          (str "Handler " k " should be a function or nested handler map"))))
+
+  (testing "nested handler maps contain only functions and :_handler"
+    (doseq [[k v] agent/handlers
+            :when (map? v)]
+      (doseq [[sub-k sub-v] v]
+        (is (fn? sub-v)
+            (str "Nested handler " k " " sub-k " should be a function"))))))
 
 ;; =============================================================================
 ;; Integration Tests (handler routing)
@@ -735,3 +745,165 @@
       ;; Check descriptions mention HIL/cross-project
       (is (re-find #"cross-project" (get-in props ["force_cross_project" :description]))
           "force_cross_project description should mention cross-project"))))
+
+;; =============================================================================
+;; DAG Scheduler n-depth Subcommand Tests
+;; =============================================================================
+
+(deftest test-dag-status-via-cli
+  (testing "'dag status' routes to dag-status handler via n-depth dispatch"
+    (with-redefs [dag-waves/dag-status (fn []
+                                         {:active false
+                                          :plan-id nil
+                                          :max-slots 5
+                                          :completed 0
+                                          :failed 0
+                                          :dispatched 0
+                                          :ready 0
+                                          :completed-ids #{}
+                                          :failed-ids #{}
+                                          :dispatched-map {}
+                                          :wave-log []})]
+      (let [result (agent/handle-agent {:command "dag status"})
+            parsed (parse-response result)]
+        (is (not (:isError result))
+            (str "dag status should succeed, got: " (:text result)))
+        (is (= false (:active parsed)))
+        (is (= 5 (:max-slots parsed)))
+        (is (= 0 (:completed parsed)))))))
+
+(deftest test-dag-bare-defaults-to-status
+  (testing "'dag' alone defaults to status via _handler fallback"
+    (with-redefs [dag-waves/dag-status (fn []
+                                         {:active true
+                                          :plan-id "test-plan-123"
+                                          :max-slots 3
+                                          :completed 2
+                                          :failed 0
+                                          :dispatched 1
+                                          :ready 0
+                                          :completed-ids #{}
+                                          :failed-ids #{}
+                                          :dispatched-map {}
+                                          :wave-log []})]
+      (let [result (agent/handle-agent {:command "dag"})
+            parsed (parse-response result)]
+        (is (not (:isError result))
+            (str "bare 'dag' should default to status, got: " (:text result)))
+        (is (= true (:active parsed)))
+        (is (= "test-plan-123" (:plan-id parsed)))
+        (is (= 3 (:max-slots parsed)))))))
+
+(deftest test-dag-start-via-cli
+  (testing "'dag start' routes to dag-start handler with params"
+    (with-redefs [dag-waves/start-dag! (fn [plan-id opts]
+                                         {:started true
+                                          :plan-id plan-id
+                                          :max-slots (:max-slots opts 5)
+                                          :ready-count 3
+                                          :initial-dispatch nil})]
+      (let [result (agent/handle-agent {:command "dag start"
+                                        :plan_id "plan-abc-123"
+                                        :cwd "/tmp/test-project"
+                                        :max_slots 4})
+            parsed (parse-response result)]
+        (is (not (:isError result))
+            (str "dag start should succeed, got: " (:text result)))
+        (is (= true (:started parsed)))
+        (is (= "plan-abc-123" (:plan-id parsed)))
+        (is (= 4 (:max-slots parsed)))))))
+
+(deftest test-dag-start-validation-missing-plan-id
+  (testing "'dag start' requires plan_id"
+    (let [result (agent/handle-agent {:command "dag start"
+                                      :cwd "/tmp/test"})]
+      (is (:isError result))
+      (is (re-find #"plan_id is required" (:text result))))))
+
+(deftest test-dag-start-validation-missing-cwd
+  (testing "'dag start' requires cwd"
+    (let [result (agent/handle-agent {:command "dag start"
+                                      :plan_id "some-plan"})]
+      (is (:isError result))
+      (is (re-find #"cwd is required" (:text result))))))
+
+(deftest test-dag-stop-via-cli
+  (testing "'dag stop' routes to dag-stop handler"
+    (with-redefs [dag-waves/stop-dag! (fn []
+                                        {:stopped true
+                                         :plan-id "plan-xyz"
+                                         :completed-count 5
+                                         :failed-count 1
+                                         :dispatched-count 0
+                                         :wave-log []})]
+      (let [result (agent/handle-agent {:command "dag stop"})
+            parsed (parse-response result)]
+        (is (not (:isError result))
+            (str "dag stop should succeed, got: " (:text result)))
+        (is (= true (:stopped parsed)))
+        (is (= "plan-xyz" (:plan-id parsed)))
+        (is (= 5 (:completed-count parsed)))
+        (is (= 1 (:failed-count parsed)))))))
+
+(deftest test-dag-start-exception-handling
+  (testing "'dag start' handles scheduler exceptions gracefully"
+    (with-redefs [dag-waves/start-dag! (fn [_ _]
+                                         (throw (ex-info "DAG already active" {})))]
+      (let [result (agent/handle-agent {:command "dag start"
+                                        :plan_id "plan-123"
+                                        :cwd "/tmp/test"})]
+        (is (:isError result))
+        (is (re-find #"Failed to start DAG" (:text result)))))))
+
+(deftest test-dag-stop-exception-handling
+  (testing "'dag stop' handles scheduler exceptions gracefully"
+    (with-redefs [dag-waves/stop-dag! (fn []
+                                        (throw (ex-info "No DAG active" {})))]
+      (let [result (agent/handle-agent {:command "dag stop"})]
+        (is (:isError result))
+        (is (re-find #"Failed to stop DAG" (:text result)))))))
+
+(deftest test-dag-handlers-in-handlers-map
+  (testing "handlers map contains :dag subtree with nested handlers"
+    (is (map? (:dag agent/handlers))
+        "handlers should have :dag as a map (subtree)")
+    (is (fn? (get-in agent/handlers [:dag :start]))
+        ":dag :start should be a function")
+    (is (fn? (get-in agent/handlers [:dag :stop]))
+        ":dag :stop should be a function")
+    (is (fn? (get-in agent/handlers [:dag :status]))
+        ":dag :status should be a function")
+    (is (fn? (get-in agent/handlers [:dag :_handler]))
+        ":dag :_handler should be a function (defaults to status)")))
+
+(deftest test-help-includes-dag-subcommands
+  (testing "help output includes dag subcommands"
+    (let [result (agent/handle-agent {:command "help"})]
+      (is (not (:isError result)))
+      (is (str/includes? (:text result) "dag start")
+          "help should list 'dag start'")
+      (is (str/includes? (:text result) "dag stop")
+          "help should list 'dag stop'")
+      (is (str/includes? (:text result) "dag status")
+          "help should list 'dag status'"))))
+
+(deftest test-tool-schema-includes-dag-params
+  (testing "tool inputSchema includes dag-specific params"
+    (let [props (get-in agent/tool-def [:inputSchema :properties])]
+      (is (contains? props "plan_id")
+          "Schema should include plan_id param")
+      (is (contains? props "max_slots")
+          "Schema should include max_slots param")))
+
+  (testing "tool inputSchema enum includes dag subcommands"
+    (let [enum (get-in agent/tool-def [:inputSchema :properties "command" :enum])]
+      (is (some #(= "dag start" %) enum)
+          "command enum should include 'dag start'")
+      (is (some #(= "dag stop" %) enum)
+          "command enum should include 'dag stop'")
+      (is (some #(= "dag status" %) enum)
+          "command enum should include 'dag status'")))
+
+  (testing "tool description mentions dag"
+    (is (str/includes? (:description agent/tool-def) "dag")
+        "tool description should mention dag")))

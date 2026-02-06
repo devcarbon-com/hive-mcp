@@ -247,6 +247,53 @@
       (mcp-json summary))))
 
 ;; ============================================================
+;; Bounded Decay Cycle for Hooks (P0.3)
+;; ============================================================
+
+(defn run-decay-cycle!
+  "Bounded, idempotent decay cycle for crystallize-session hooks.
+   Returns plain Clojure map (NOT MCP response).
+
+   Steps:
+   1. Cleanup expired entries
+   2. Query + scope-filter entries
+   3. Apply staleness decay to candidates
+
+   Parameters:
+   - :directory - working directory for project scope
+   - :limit - max entries to scan (default: 50)"
+  [{:keys [directory limit]}]
+  (try
+    (let [directory (or directory (ctx/current-directory))
+          limit-val (or (some-> limit int) 50)
+          ;; Phase 1: cleanup expired
+          cleanup-result (try
+                           (chroma/cleanup-expired!)
+                           (catch Exception e
+                             {:count 0 :deleted-ids []
+                              :error (.getMessage e)}))
+          expired-count (or (:count cleanup-result) 0)
+          cleanup-error (:error cleanup-result)
+          ;; Phase 2: query + scope filter
+          all-entries (chroma/query-entries :limit limit-val
+                                            :include-expired? false)
+          project-id (scope/get-current-project-id directory)
+          scope-filter (scope/make-scope-tag project-id)
+          scoped-entries (filter #(scope/matches-scope? % scope-filter) all-entries)
+          ;; Phase 3: decay candidates
+          opts {:access-threshold 3 :recency-days 7}
+          applied (vec (keep #(apply-decay! % opts) scoped-entries))
+          result (cond-> {:decayed (count applied)
+                          :expired expired-count
+                          :total-scanned (count scoped-entries)
+                          :error nil}
+                   cleanup-error (assoc :cleanup-error cleanup-error))]
+      result)
+    (catch Exception e
+      {:decayed 0 :expired 0 :total-scanned 0
+       :error (.getMessage e)})))
+
+;; ============================================================
 ;; Cross-Pollination Auto-Promote Handler (W5)
 ;; ============================================================
 
@@ -358,3 +405,55 @@
                 "candidates from" (:total_scanned summary) "entries"
                 (when dry_run "(dry run)"))
       (mcp-json summary))))
+
+;; ============================================================
+;; Bounded Cross-Pollination Cycle (for crystallize-session)
+;; ============================================================
+
+(defn run-cross-pollination-cycle!
+  "Run bounded cross-pollination auto-promotion cycle.
+
+   Designed for wiring into crystallize-session (wrap/session-complete hooks).
+   Scans entries with xpoll:project: tags, promotes candidates by tier count.
+
+   Unlike handle-cross-pollination-promote (MCP tool), this:
+   - Returns plain Clojure map (not MCP response)
+   - Has lower default limit (100 vs 500 — wrap should be fast)
+   - Catches all errors (non-blocking)
+   - Is idempotent (already-promoted entries won't re-promote)
+
+   Takes: {:directory string :limit int (default 100)}
+   Returns: {:promoted N :candidates N :total-scanned N}
+            or {:error msg :promoted 0 :candidates 0 :total-scanned 0}"
+  [{:keys [directory limit]}]
+  (try
+    (if-not (chroma/embedding-configured?)
+      {:promoted 0 :candidates 0 :total-scanned 0 :error "chroma-not-configured"}
+      (let [limit-val (or (some-> limit int) 100)
+            ;; Query all non-expired entries
+            all-entries (chroma/query-entries :limit limit-val
+                                              :include-expired? false)
+            ;; Find cross-pollination candidates (2+ projects, not permanent, not axiom)
+            candidates (filter #(crystal/cross-pollination-candidate? %) all-entries)
+            ;; Apply promotions
+            results (vec (for [entry candidates
+                               :let [tiers (crystal/cross-pollination-promotion-tiers entry)]
+                               :when (pos? tiers)]
+                           (try
+                             (promote-entry-by-tiers! entry tiers)
+                             (catch Exception e
+                               (log/warn "run-cross-pollination-cycle!: failed to promote" (:id entry)
+                                         ":" (.getMessage e))
+                               {:id (:id entry) :promoted false :error (.getMessage e)}))))
+            promoted-count (count (filter :promoted results))]
+        (when (pos? promoted-count)
+          (log/info "Cross-pollination auto-promote:" promoted-count
+                    "of" (count candidates) "candidates promoted"))
+        {:promoted promoted-count
+         :candidates (count candidates)
+         :total-scanned (count all-entries)
+         :entries (mapv #(select-keys % [:id :promoted :old_duration :new_duration :tiers_promoted])
+                        results)}))
+    (catch Exception e
+      (log/warn "run-cross-pollination-cycle! failed (non-blocking):" (.getMessage e))
+      {:error (.getMessage e) :promoted 0 :candidates 0 :total-scanned 0})))

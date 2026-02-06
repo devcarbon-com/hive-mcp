@@ -63,10 +63,8 @@
         (swap! config-cache assoc dir-path {:config config :timestamp now})
         config))))
 
-(defn clear-config-cache!
-  "Clear the config cache. Useful for testing."
-  []
-  (reset! config-cache {}))
+;; NOTE: clear-config-cache! is defined after the Project Config Registry section
+;; to avoid forward references to project-configs and reverse-alias-index atoms.
 
 ;; ============================================================
 ;; Scope Parsing Utilities
@@ -109,17 +107,77 @@
    Built up as configs are discovered."
   (atom {}))
 
+(def ^:private reverse-alias-index
+  "Reverse index from alias -> canonical project-id.
+   Enables O(1) lookup when a query uses an old/aliased project name.
+   Built up by register-project-config! when configs have :aliases."
+  (atom {}))
+
+(defn resolve-project-id
+  "Resolve a project-id that may be an alias to its canonical project-id.
+   Returns the canonical project-id if the input is a known alias,
+   otherwise returns the input unchanged.
+
+   Examples:
+     (resolve-project-id \"emacs-mcp\")   => \"hive-mcp\"  (if aliased)
+     (resolve-project-id \"hive-mcp\")    => \"hive-mcp\"  (canonical, unchanged)
+     (resolve-project-id \"unknown\")     => \"unknown\"   (not found, pass-through)
+     (resolve-project-id nil)            => nil"
+  [project-id]
+  (when project-id
+    (or (get @reverse-alias-index project-id)
+        project-id)))
+
 (defn register-project-config!
   "Register a project config for later parent-id lookups.
-   Called when loading .hive-project.edn files."
+   Called when loading .hive-project.edn files.
+
+   Also registers alias mappings from the config's :aliases vector
+   into the reverse-alias-index for O(1) alias resolution."
   [project-id config]
   (when project-id
-    (swap! project-configs assoc project-id config)))
+    (swap! project-configs assoc project-id config)
+    ;; Register alias mappings: each alias -> canonical project-id
+    (when-let [aliases (seq (:aliases config))]
+      (doseq [alias-id aliases]
+        (when (and alias-id (string? alias-id) (not= alias-id project-id))
+          (swap! reverse-alias-index assoc alias-id project-id))))))
+
+(defn deregister-project-config!
+  "Remove a project config and its alias mappings.
+   Useful for testing and project cleanup."
+  [project-id]
+  (when project-id
+    (let [config (get @project-configs project-id)
+          aliases (:aliases config)]
+      ;; Remove alias mappings
+      (when (seq aliases)
+        (doseq [alias-id aliases]
+          (swap! reverse-alias-index dissoc alias-id)))
+      ;; Remove config
+      (swap! project-configs dissoc project-id))))
 
 (defn get-project-config
-  "Get a registered project config by project-id."
+  "Get a registered project config by project-id.
+   Also resolves aliases: if project-id is a known alias,
+   returns the config for the canonical project."
   [project-id]
-  (get @project-configs project-id))
+  (or (get @project-configs project-id)
+      (when-let [canonical (get @reverse-alias-index project-id)]
+        (get @project-configs canonical))))
+
+(defn get-alias-index
+  "Return the current reverse alias index (alias -> canonical-id).
+   Read-only snapshot for inspection/debugging."
+  []
+  @reverse-alias-index)
+
+(defn clear-config-cache!
+  "Clear the config cache, project configs, and alias index. Useful for testing."
+  []
+  (reset! config-cache {})
+  (reset! project-configs {})
+  (reset! reverse-alias-index {}))
 
 ;; ============================================================
 ;; Core Scope Functions
@@ -129,6 +187,7 @@
   "Get parent scope from project config or infer from scope string.
 
    Resolution order:
+   0. Resolve aliases first (e.g., 'emacs-mcp' -> 'hive-mcp')
    1. Explicit :parent-id in registered project config
    2. Explicit :parent in registered project config (legacy)
    3. Inferred from colon-delimited scope string
@@ -137,9 +196,12 @@
    Examples:
      (get-parent-scope 'hive-mcp:agora') -> 'hive-mcp' (inferred)
      (get-parent-scope 'hive-mcp') -> 'global' (if no explicit parent)
+     (get-parent-scope 'emacs-mcp') -> 'global' (alias resolved to hive-mcp)
      (get-parent-scope 'global') -> nil"
   [scope]
-  (let [scope (normalize-scope scope)]
+  (let [scope (normalize-scope scope)
+        ;; Resolve alias to canonical project-id
+        scope (when scope (resolve-project-id scope))]
     (cond
       ;; nil or global has no parent
       (or (nil? scope) (= scope "global"))
@@ -162,7 +224,7 @@
 
 (defn visible-scopes
   "Return all scopes visible from given scope (inclusive).
-   Walks up hierarchy to global.
+   Walks up hierarchy to global. Resolves aliases first.
 
    Examples:
      (visible-scopes 'hive-mcp:agora')
@@ -171,13 +233,18 @@
      (visible-scopes 'hive-mcp')
      => ['hive-mcp' 'global']
 
+     (visible-scopes 'emacs-mcp')
+     => ['hive-mcp' 'global']  ;; alias resolved
+
      (visible-scopes 'global')
      => ['global']
 
      (visible-scopes nil)
      => ['global']"
   [scope]
-  (let [scope (normalize-scope scope)]
+  (let [scope (normalize-scope scope)
+        ;; Resolve alias to canonical project-id
+        scope (when scope (resolve-project-id scope))]
     (if (or (nil? scope) (= scope "global"))
       ["global"]
       (loop [s scope
@@ -191,18 +258,22 @@
 
 (defn scope-contains?
   "Check if child-scope is within or equal to parent-scope.
-   Used for inheritance checks.
+   Used for inheritance checks. Resolves aliases first.
 
    Examples:
      (scope-contains? 'hive-mcp' 'hive-mcp:agora') -> true
      (scope-contains? 'hive-mcp:agora' 'hive-mcp') -> false
      (scope-contains? 'global' 'hive-mcp') -> true (global contains all)
-     (scope-contains? 'hive-mcp' 'hive-mcp') -> true (equal scopes)"
+     (scope-contains? 'hive-mcp' 'hive-mcp') -> true (equal scopes)
+     (scope-contains? 'hive-mcp' 'emacs-mcp') -> true (alias resolved)"
   [parent-scope child-scope]
   (let [parent-scope (normalize-scope parent-scope)
-        child-scope (normalize-scope child-scope)]
+        child-scope (normalize-scope child-scope)
+        ;; Resolve aliases
+        parent-scope (when parent-scope (resolve-project-id parent-scope))
+        child-scope (when child-scope (resolve-project-id child-scope))]
     (cond
-      ;; Same scope
+      ;; Same scope (after alias resolution)
       (= parent-scope child-scope)
       true
 

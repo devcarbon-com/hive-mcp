@@ -7,7 +7,9 @@
    Handlers:
    - search-semantic: Vector similarity search using Chroma embeddings"
   (:require [hive-mcp.chroma :as chroma]
+            [hive-mcp.plans :as plans]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
+            [hive-mcp.knowledge-graph.scope :as kg-scope]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.core :refer [mcp-error coerce-int!]]
             [hive-mcp.agent.context :as ctx]
@@ -53,10 +55,14 @@
 (defn handle-search-semantic
   "Search project memory using semantic similarity (vector search).
    Requires Chroma to be configured with an embedding provider.
-   When directory is provided, filters results to that project scope."
+   When directory is provided, filters results to that project scope.
+
+   Plan routing: When type='plan', searches the plans collection
+   (OpenRouter embeddings, 4096 dims) instead of the memory collection."
   [{:keys [query limit type directory]}]
-  (let [directory (or directory (ctx/current-directory))]
-    (log/info "mcp-memory-search-semantic:" query "directory:" directory)
+  (let [directory (or directory (ctx/current-directory))
+        plan? (= type "plan")]
+    (log/info "mcp-memory-search-semantic:" query "type:" type "directory:" directory)
     (try
       (let [limit-val (coerce-int! limit :limit 10)
             status (chroma/status)]
@@ -69,33 +75,66 @@
            :isError true}
           (try
             (let [project-id (scope/get-current-project-id directory)
-                  ;; Over-fetch to allow for scope filtering
-                  results (chroma/search-similar query
-                                                 :limit (* limit-val 3)
-                                                 :type type)
-                  ;; Apply scope filter
-                  scope-filter (when (and project-id (not= project-id "global"))
-                                 (scope/make-scope-tag project-id))
-                  filtered (if scope-filter
-                             (filter #(matches-scope-filter? % scope-filter) results)
-                             results)
-                  ;; Take requested limit after filtering
-                  limited (take limit-val filtered)
-                  formatted (mapv format-search-result limited)]
-              ;; Record co-access pattern for semantic search results (async, non-blocking)
-              (when (>= (count formatted) 2)
-                (future
-                  (try
-                    (kg-edges/record-co-access!
-                     (mapv :id formatted)
-                     {:scope project-id :created-by "system:semantic-search"})
-                    (catch Exception e
-                      (log/debug "Co-access recording failed (non-fatal):" (.getMessage e))))))
-              {:type "text"
-               :text (json/write-str {:results formatted
-                                      :count (count formatted)
-                                      :query query
-                                      :scope project-id})})
+                  in-project? (and project-id (not= project-id "global"))]
+              (if plan?
+                ;; Route to plans collection (OpenRouter, 4096 dims)
+                (let [results (plans/search-plans query
+                                                  :limit limit-val
+                                                  :project-id (when in-project? project-id))
+                      formatted (mapv (fn [{:keys [id type tags project-id plan-status distance preview]}]
+                                        {:id id
+                                         :type (or type "plan")
+                                         :tags tags
+                                         :distance distance
+                                         :preview preview})
+                                      results)]
+                  ;; Record co-access for plan search results
+                  (when (>= (count formatted) 2)
+                    (future
+                      (try
+                        (kg-edges/record-co-access!
+                         (mapv :id formatted)
+                         {:scope project-id :created-by "system:plan-search"})
+                        (catch Exception e
+                          (log/debug "Co-access recording failed (non-fatal):" (.getMessage e))))))
+                  {:type "text"
+                   :text (json/write-str {:results formatted
+                                          :count (count formatted)
+                                          :query query
+                                          :scope project-id})})
+                ;; Default: search memory collection (Ollama, 768 dims)
+                (let [;; Compute visible project-ids for DB-level $in filtering
+                      visible-ids (when in-project?
+                                    (let [visible (kg-scope/visible-scopes project-id)]
+                                      (vec (remove #(= "global" %) visible))))
+                      ;; Reduced over-fetch with DB-level filtering
+                      results (chroma/search-similar query
+                                                     :limit (* limit-val 2)
+                                                     :type type
+                                                     :project-ids visible-ids)
+                      ;; Safety net: apply scope filter (belt-and-suspenders)
+                      scope-filter (when in-project?
+                                     (scope/make-scope-tag project-id))
+                      filtered (if scope-filter
+                                 (filter #(matches-scope-filter? % scope-filter) results)
+                                 results)
+                      ;; Take requested limit after filtering
+                      limited (take limit-val filtered)
+                      formatted (mapv format-search-result limited)]
+                  ;; Record co-access pattern for semantic search results (async, non-blocking)
+                  (when (>= (count formatted) 2)
+                    (future
+                      (try
+                        (kg-edges/record-co-access!
+                         (mapv :id formatted)
+                         {:scope project-id :created-by "system:semantic-search"})
+                        (catch Exception e
+                          (log/debug "Co-access recording failed (non-fatal):" (.getMessage e))))))
+                  {:type "text"
+                   :text (json/write-str {:results formatted
+                                          :count (count formatted)
+                                          :query query
+                                          :scope project-id})})))
             (catch Exception e
               {:type "text"
                :text (json/write-str {:error (str "Semantic search failed: " (.getMessage e))

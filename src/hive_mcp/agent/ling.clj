@@ -8,34 +8,74 @@
    - Coordinate via hivemind
    - Delegate to drones for file mutations
 
-   Supports two spawn modes:
-   - :vterm   (default) - Spawned inside Emacs vterm buffer (visual, interactive)
-   - :headless          - Spawned as OS process without Emacs (stdout ring buffer)
+   Supports three spawn modes via Strategy Protocol:
+   - :vterm      (default) - Spawned inside Emacs vterm buffer (visual, interactive)
+   - :headless              - Spawned as OS process without Emacs (stdout ring buffer)
+   - :openrouter            - Direct OpenRouter API calls (multi-model, no CLI needed)
+
+   Architecture (SOLID Open-Closed via Strategy Pattern):
+   - ILingStrategy protocol defines mode-specific ops (spawn/dispatch/status/kill)
+   - VtermStrategy implements via emacsclient/elisp
+   - HeadlessStrategy implements via ProcessBuilder
+   - OpenRouterStrategy implements via OpenRouter HTTP API streaming
+   - This file is the thin facade — delegates mode ops to strategy
 
    Implements IAgent protocol for unified lifecycle management."
   (:require [hive-mcp.agent.protocol :refer [IAgent]]
+            [hive-mcp.agent.ling.strategy :as strategy]
+            [hive-mcp.agent.ling.vterm :as vterm]
+            [hive-mcp.agent.ling.headless-strategy :as headless-strat]
+            [hive-mcp.agent.ling.openrouter-strategy :as openrouter-strat]
             [hive-mcp.agent.headless :as headless]
+            [hive-mcp.agent.hints :as hints]
             [hive-mcp.swarm.datascript.lings :as ds-lings]
             [hive-mcp.swarm.datascript.queries :as ds-queries]
             [hive-mcp.swarm.datascript.claims :as ds-claims]
             [hive-mcp.swarm.datascript.schema :as schema]
-            [hive-mcp.tools.swarm.core :as swarm-core]
-            [hive-mcp.emacsclient :as ec]
-            [clojure.string :as str]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 ;;; =============================================================================
-;;; Ling Record - IAgent Implementation
+;;; Strategy Resolution
 ;;; =============================================================================
 
-;; Forward declare for use in spawn! method (creates new ling for task dispatch)
+(defn- resolve-strategy
+  "Get the ILingStrategy implementation for a spawn mode.
+
+   Arguments:
+     mode - :vterm, :headless, or :openrouter
+
+   Returns:
+     ILingStrategy instance"
+  [mode]
+  (case mode
+    :headless (headless-strat/->headless-strategy)
+    :openrouter (openrouter-strat/->openrouter-strategy)
+    ;; default: vterm
+    (vterm/->vterm-strategy)))
+
+(defn- ling-ctx
+  "Build a context map from a Ling record for strategy calls.
+
+   Extracts fields strategies need without coupling them to the Ling record."
+  [ling]
+  {:id (:id ling)
+   :cwd (:cwd ling)
+   :presets (:presets ling)
+   :project-id (:project-id ling)
+   :spawn-mode (:spawn-mode ling)
+   :model (:model ling)})
+
+;;; =============================================================================
+;;; Forward Declarations
+;;; =============================================================================
+
 (declare ->ling)
 
 ;;; =============================================================================
-;;; Ling Record - IAgent Implementation (Dual-Mode: vterm + headless)
+;;; Ling Record - IAgent Implementation (Strategy-Delegating Facade)
 ;;; =============================================================================
 
 (defrecord Ling [id cwd presets project-id spawn-mode model]
@@ -44,128 +84,111 @@
   (spawn! [this opts]
     "Spawn a ling in the configured spawn-mode.
 
-     :vterm mode (default):
-       Uses emacsclient to invoke Emacs-side spawn function.
-       Creates a new Claude Code process inside a vterm buffer.
-       Only available for claude model (default).
+     Delegates mode-specific spawn to ILingStrategy.
+     Handles common concerns: model resolution, DataScript registration, initial task.
 
-     :headless mode:
-       Uses ProcessBuilder to spawn `claude` CLI as a child process.
-       Stdout/stderr captured to ring buffers. No Emacs required.
-       When model is non-claude (e.g., OpenRouter model), automatically
-       forces headless mode since vterm requires Claude Code CLI.
-
-     Options:
-       :task      - Initial task to dispatch (optional)
-       :presets   - Override presets (optional)
-       :depth     - Hierarchy depth (default: 1)
-       :parent    - Parent slave-id (optional)
-       :spawn-mode - Override spawn mode (optional)
-       :model     - Override model (optional)"
-    (let [;; Non-claude models must spawn headless (no vterm support)
+     Hint injection flow (Tier 1 activation):
+     When kanban-task-id is provided, generates KG-driven memory hints
+     and prepends them to the task BEFORE passing to strategy-spawn!.
+     This ensures hints are embedded in the initial CLI arg (headless)
+     or elisp dispatch (vterm) — not sent as a separate stdin dispatch
+     which would fail for claude -p mode."
+    (let [;; Non-claude models spawn via OpenRouter API (no CLI needed)
           effective-model (or (:model opts) model)
           non-claude? (and effective-model
                            (not (schema/claude-model? effective-model)))
           mode (if non-claude?
-                 :headless
-                 (or (:spawn-mode opts) spawn-mode :vterm))]
-      (case mode
-        ;; === HEADLESS MODE: ProcessBuilder-based spawn ===
-        :headless
-        (let [{:keys [task depth parent kanban-task-id]
-               :or {depth 1}} opts
-              result (headless/spawn-headless! id {:cwd cwd
-                                                   :task task
-                                                   :presets (or (:presets opts) presets)
-                                                   :model effective-model
-                                                   :buffer-capacity (or (:buffer-capacity opts) 5000)})]
-          (log/info "Ling spawned headless" {:id id :pid (:pid result) :cwd cwd
-                                             :model (or effective-model "claude")})
-          ;; Register in DataScript with headless metadata
-          (ds-lings/add-slave! id {:status :idle
-                                   :depth depth
-                                   :parent parent
-                                   :presets (or (:presets opts) presets)
-                                   :cwd cwd
-                                   :project-id project-id
-                                   :kanban-task-id kanban-task-id})
-          ;; Store headless-specific attributes + model
-          (ds-lings/update-slave! id (cond-> {:ling/spawn-mode :headless
-                                              :ling/process-pid (:pid result)
-                                              :ling/process-alive? true}
-                                       effective-model
-                                       (assoc :ling/model effective-model)))
-          ;; Dispatch initial task if provided
-          (when task
-            (let [headless-ling (->ling id {:cwd cwd
-                                            :presets (or (:presets opts) presets)
-                                            :project-id project-id
-                                            :spawn-mode :headless
-                                            :model effective-model})]
-              (.dispatch! headless-ling {:task task})))
-          id)
+                 :openrouter
+                 (or (:spawn-mode opts) spawn-mode :vterm))
+          strat (resolve-strategy mode)
+          ctx (assoc (ling-ctx this) :model effective-model)
+          {:keys [depth parent kanban-task-id]
+           :or {depth 1}} opts
 
-        ;; === VTERM MODE: Emacs-based spawn (existing behavior) ===
-        ;; Vterm only supports Claude Code CLI (model must be claude/nil)
-        ;; :vterm or default
-        (let [{:keys [task depth parent kanban-task-id terminal]
-               :or {depth 1}} opts
-              preset-list (or (:presets opts) presets)
-              preset-str (or (swarm-core/format-elisp-list preset-list pr-str) "nil")
-              elisp-code (format "(hive-mcp-swarm-api-spawn \"%s\" %s %s %s %s nil)"
-                                 id
-                                 preset-str
-                                 (if cwd (format "\"%s\"" cwd) "nil")
-                                 (if terminal (format "\"%s\"" terminal) "nil")
-                                 (if kanban-task-id (format "\"%s\"" kanban-task-id) "nil"))
-              result (ec/eval-elisp-with-timeout elisp-code 10000)]
-          (if (:success result)
-            (let [elisp-slave-id (str/trim (or (:result result) id))]
-              (log/info "Ling spawned via elisp" {:requested-id id
-                                                  :elisp-slave-id elisp-slave-id})
-              (ds-lings/add-slave! elisp-slave-id {:status :idle
-                                                   :depth depth
-                                                   :parent parent
-                                                   :presets (or (:presets opts) presets)
-                                                   :cwd cwd
-                                                   :project-id project-id
-                                                   :kanban-task-id kanban-task-id
-                                                   :requested-id id})
-              ;; Store vterm spawn mode + model (always claude for vterm)
-              (ds-lings/update-slave! elisp-slave-id {:ling/spawn-mode :vterm
-                                                      :ling/model (or effective-model "claude")})
-              ;; Dispatch initial task if provided
-              (when task
-                (let [elisp-ling (->ling elisp-slave-id {:cwd cwd
-                                                         :presets (or (:presets opts) presets)
-                                                         :project-id project-id
-                                                         :model effective-model})]
-                  (.dispatch! elisp-ling {:task task})))
-              elisp-slave-id)
-            (do
-              (log/error "Failed to spawn ling via elisp" {:id id :error (:error result)})
-              (throw (ex-info "Failed to spawn ling"
-                              {:id id :error (:error result)}))))))))
+          ;; Generate KG-driven hints BEFORE spawn when kanban-task-id is provided
+          ;; This must happen before strategy-spawn! so hints are embedded in the
+          ;; initial task (CLI arg for headless, elisp dispatch for vterm).
+          task-hints-str (when (and kanban-task-id (:task opts))
+                           (try
+                             (let [task-hints (hints/generate-task-hints {:task-id kanban-task-id :depth 2})
+                                   hint-data (hints/generate-hints (or project-id "global")
+                                                                   {:task (:task opts)
+                                                                    :extra-ids (:l1-ids task-hints)
+                                                                    :extra-queries (:l2-queries task-hints)})
+                                   kg-seeds (mapv :id (or (:l3-seeds task-hints) []))]
+                               (hints/serialize-hints
+                                (cond-> hint-data
+                                  (seq kg-seeds) (assoc-in [:memory-hints :kg-seeds] kg-seeds)
+                                  (seq kg-seeds) (assoc-in [:memory-hints :kg-depth] 2))
+                                :project-name (or project-id "global")))
+                             (catch Exception e
+                               (log/debug "Task hint generation in spawn failed (non-fatal):" (.getMessage e))
+                               nil)))
+
+          ;; Enrich task with hints (prepend hint block before task prompt)
+          enriched-task (when (:task opts)
+                          (if task-hints-str
+                            (str task-hints-str "\n\n---\n\n" (:task opts))
+                            (:task opts)))
+
+          ;; Pass enriched task to strategy-spawn! so hints are baked into
+          ;; the initial CLI arg (headless) or elisp dispatch (vterm)
+          spawn-opts (if enriched-task
+                       (assoc opts :task enriched-task)
+                       opts)
+
+          ;; Delegate spawn to strategy (with hints already in task)
+          slave-id (strategy/strategy-spawn! strat ctx spawn-opts)]
+
+      ;; Common: Register in DataScript
+      (ds-lings/add-slave! slave-id {:status :idle
+                                     :depth depth
+                                     :parent parent
+                                     :presets (or (:presets opts) presets)
+                                     :cwd cwd
+                                     :project-id project-id
+                                     :kanban-task-id kanban-task-id
+                                     :requested-id (when (not= slave-id id) id)})
+      ;; Store spawn mode + model
+      (ds-lings/update-slave! slave-id (cond-> {:ling/spawn-mode mode
+                                                :ling/model (or effective-model "claude")}
+                                         ;; Headless mode: track OS process PID
+                                         (and (= mode :headless)
+                                              (headless/headless-status slave-id))
+                                         (assoc :ling/process-pid
+                                                (:pid (headless/headless-status slave-id))
+                                                :ling/process-alive? true)
+                                         ;; OpenRouter mode: mark as alive (HTTP-based, no PID)
+                                         (= mode :openrouter)
+                                         (assoc :ling/process-alive? true)))
+
+      ;; For vterm mode, the task is NOT embedded in strategy-spawn! (spawn only
+      ;; creates the buffer). We need a separate dispatch to send the task.
+      ;; For headless mode, the task is already baked into the CLI arg by
+      ;; strategy-spawn!, so no separate dispatch needed.
+      ;; For openrouter mode, the task is dispatched in strategy-spawn! directly.
+      (when (and enriched-task (not (#{:headless :openrouter} mode)))
+        (let [task-ling (->ling slave-id {:cwd cwd
+                                          :presets (or (:presets opts) presets)
+                                          :project-id project-id
+                                          :spawn-mode mode
+                                          :model effective-model})]
+          (.dispatch! task-ling {:task enriched-task})))
+      slave-id))
 
   (dispatch! [this task-opts]
     "Dispatch a task to this ling.
 
-     Headless mode: writes to stdin pipe.
-     Vterm mode: sends via emacsclient elisp.
-
-     Options:
-       :task       - Task description (required)
-       :files      - Files to claim (optional)
-       :priority   - Task priority (default: :normal)
-       :timeout-ms - Dispatch timeout (default: 60000)"
+     Common: update status, register task, claim files.
+     Mode-specific: delegate to strategy."
     (let [{:keys [task files timeout-ms]
            :or {timeout-ms 60000}} task-opts
           task-id (str "task-" (System/currentTimeMillis) "-" (subs id 0 (min 8 (count id))))
           mode (or spawn-mode
-                   ;; Check DataScript for spawn mode if not on record
                    (when-let [slave (ds-queries/get-slave id)]
                      (:ling/spawn-mode slave))
-                   :vterm)]
+                   :vterm)
+          strat (resolve-strategy mode)]
       ;; Common: Update status and register task
       (ds-lings/update-slave! id {:slave/status :working})
       (ds-lings/add-task! task-id id {:status :dispatched
@@ -174,102 +197,37 @@
       (when (seq files)
         (.claim-files! this files task-id))
 
-      (case mode
-        ;; === HEADLESS: dispatch via stdin pipe ===
-        :headless
-        (try
-          (headless/dispatch-via-stdin! id task)
-          (log/info "Task dispatched to headless ling via stdin"
-                    {:ling-id id :task-id task-id :files files})
-          task-id
-          (catch Exception e
-            (log/error "Failed to dispatch to headless ling"
-                       {:ling-id id :task-id task-id :error (ex-message e)})
-            (ds-lings/update-task! task-id {:status :failed
-                                            :error (ex-message e)})
-            (throw (ex-info "Failed to dispatch to headless ling"
-                            {:ling-id id :task-id task-id :error (ex-message e)}
-                            e))))
-
-        ;; === VTERM: dispatch via elisp (existing behavior) ===
-        ;; :vterm or default
-        (let [escaped-prompt (-> task
-                                 (str/replace "\\" "\\\\")
-                                 (str/replace "\"" "\\\"")
-                                 (str/replace "\n" "\\n"))
-              elisp-code (format "(hive-mcp-swarm-api-dispatch \"%s\" \"%s\" %d)"
-                                 id
-                                 escaped-prompt
-                                 timeout-ms)
-              result (ec/eval-elisp-with-timeout elisp-code timeout-ms)]
-          (if (:success result)
-            (do
-              (log/info "Task dispatched to ling via elisp"
-                        {:ling-id id :task-id task-id :files files})
-              task-id)
-            (do
-              (log/error "Failed to dispatch to ling via elisp"
-                         {:ling-id id :task-id task-id :error (:error result)})
-              (ds-lings/update-task! task-id {:status :failed
-                                              :error (:error result)})
-              (throw (ex-info "Failed to dispatch to ling"
-                              {:ling-id id
-                               :task-id task-id
-                               :error (:error result)}))))))))
+      ;; Delegate to strategy
+      (try
+        (strategy/strategy-dispatch! strat (ling-ctx this) task-opts)
+        (log/info "Task dispatched to ling" {:ling-id id :task-id task-id
+                                             :mode mode :files files})
+        task-id
+        (catch Exception e
+          (log/error "Failed to dispatch to ling"
+                     {:ling-id id :task-id task-id :mode mode :error (ex-message e)})
+          (ds-lings/update-task! task-id {:status :failed
+                                          :error (ex-message e)})
+          (throw (ex-info "Failed to dispatch to ling"
+                          {:ling-id id :task-id task-id :error (ex-message e)}
+                          e))))))
 
   (status [this]
     "Get current ling status from DataScript with mode-appropriate liveness check.
 
-     Headless: checks process registry for liveness.
-     Vterm: checks elisp for liveness (existing behavior)."
+     Delegates mode-specific liveness to strategy."
     (let [ds-status (ds-queries/get-slave id)
           mode (or spawn-mode
                    (:ling/spawn-mode ds-status)
-                   :vterm)]
-      (case mode
-        ;; === HEADLESS: check process registry ===
-        :headless
-        (let [headless-info (headless/headless-status id)]
-          (if ds-status
-            (cond-> ds-status
-              headless-info (assoc :headless-alive? (:alive? headless-info)
-                                   :headless-pid (:pid headless-info)
-                                   :headless-uptime-ms (:uptime-ms headless-info)
-                                   :headless-stdout (:stdout headless-info)
-                                   :headless-stderr (:stderr headless-info)))
-            ;; Fallback to headless-only status
-            (when headless-info
-              {:slave/id id
-               :slave/status (if (:alive? headless-info) :idle :dead)
-               :ling/spawn-mode :headless
-               :headless-alive? (:alive? headless-info)
-               :headless-pid (:pid headless-info)})))
-
-        ;; === VTERM: elisp fallback (existing behavior) ===
-        (let [elisp-result (when (or (nil? ds-status)
-                                     (= :unknown (:slave/status ds-status)))
-                             (ec/eval-elisp-with-timeout
-                              (format "(hive-mcp-swarm-get-slave-status \"%s\")" id)
-                              3000))]
-          (if ds-status
-            (cond-> ds-status
-              (and (:success elisp-result)
-                   (not= (:result elisp-result) "nil"))
-              (assoc :elisp-alive? true))
-            (when (:success elisp-result)
-              {:slave/id id
-               :slave/status (if (= (:result elisp-result) "nil")
-                               :dead
-                               :unknown)
-               :elisp-raw (:result elisp-result)}))))))
+                   :vterm)
+          strat (resolve-strategy mode)]
+      (strategy/strategy-status strat (ling-ctx this) ds-status)))
 
   (kill! [this]
     "Terminate the ling and release resources.
 
-     Headless: kills OS process via Process.destroy.
-     Vterm: kills via emacsclient elisp.
-
-     Both modes check critical operations before killing."
+     Common: check critical ops, release claims, remove from DataScript.
+     Mode-specific: delegate kill to strategy."
     (let [{:keys [can-kill? blocking-ops]} (ds-lings/can-kill? id)
           mode (or spawn-mode
                    (when-let [slave (ds-queries/get-slave id)]
@@ -277,40 +235,15 @@
                    :vterm)]
       (if can-kill?
         (do
-          ;; Release claims first (common to both modes)
+          ;; Common: Release claims first
           (.release-claims! this)
-          (case mode
-            ;; === HEADLESS: kill OS process ===
-            :headless
-            (try
-              (let [result (headless/kill-headless! id)]
-                ;; Remove from DataScript
-                (ds-lings/remove-slave! id)
-                (log/info "Headless ling killed" {:id id :pid (:pid result)})
-                {:killed? true :id id :pid (:pid result)})
-              (catch Exception e
-                ;; Process might already be dead - still clean up DataScript
-                (log/warn "Headless kill exception, cleaning up DataScript"
-                          {:id id :error (ex-message e)})
-                (ds-lings/remove-slave! id)
-                {:killed? true :id id :reason :process-already-dead}))
-
-            ;; === VTERM: kill via elisp (existing behavior) ===
-            (let [elisp-result (ec/eval-elisp-with-timeout
-                                (format "(hive-mcp-swarm-slaves-kill \"%s\")" id)
-                                5000)
-                  kill-succeeded? (and (:success elisp-result)
-                                       (not (nil? (:result elisp-result)))
-                                       (not= "nil" (:result elisp-result)))]
-              (if kill-succeeded?
-                (do
-                  (ds-lings/remove-slave! id)
-                  (log/info "Ling killed" {:id id})
-                  {:killed? true :id id})
-                (do
-                  (log/warn "Elisp kill failed - NOT removing from DataScript"
-                            {:id id :elisp-result elisp-result})
-                  {:killed? false :id id :reason :elisp-kill-failed})))))
+          ;; Delegate kill to strategy
+          (let [strat (resolve-strategy mode)
+                result (strategy/strategy-kill! strat (ling-ctx this))]
+            ;; Common: Remove from DataScript if kill succeeded
+            (when (:killed? result)
+              (ds-lings/remove-slave! id))
+            result))
         (do
           (log/warn "Cannot kill ling - critical ops in progress"
                     {:id id :blocking-ops blocking-ops})
@@ -325,36 +258,28 @@
     "Lings can chain multiple tool calls in a single turn."
     true)
 
-  (claims [this]
-    "Get list of files currently claimed by this ling.
-
-     Queries DataScript for all claims where :claim/slave = this ling."
+  (claims [_this]
+    "Get list of files currently claimed by this ling."
     (let [all-claims (ds-queries/get-all-claims)]
       (->> all-claims
            (filter #(= id (:slave-id %)))
            (map :file)
            vec)))
 
-  (claim-files! [this files task-id]
-    "Claim files for exclusive access during task.
-
-     Claims prevent other agents from modifying the same files.
-     Uses DataScript claims with TTL for stale detection."
+  (claim-files! [_this files task-id]
+    "Claim files for exclusive access during task."
     (when (seq files)
       (doseq [f files]
-        ;; Check for conflicts first
         (let [{:keys [conflict? held-by]} (ds-queries/has-conflict? f id)]
           (if conflict?
             (do
               (log/warn "File already claimed by another agent"
                         {:file f :held-by held-by :requesting id})
-              ;; Add to wait queue instead of claiming
               (ds-claims/add-to-wait-queue! id f))
-            ;; No conflict - claim the file
             (ds-lings/claim-file! f id task-id))))
       (log/info "Files claimed" {:ling-id id :count (count files)})))
 
-  (release-claims! [this]
+  (release-claims! [_this]
     "Release all file claims held by this ling."
     (let [released-count (ds-lings/release-claims-for-slave! id)]
       (log/info "Released claims" {:ling-id id :count released-count})
@@ -377,31 +302,17 @@
             :cwd        - Working directory
             :presets    - Collection of preset names
             :project-id - Project ID for scoping
-            :spawn-mode - :vterm (default) or :headless
+            :spawn-mode - :vterm (default), :headless, or :openrouter
             :model      - Model identifier (default: 'claude' = Claude Code CLI)
-                          Non-claude models (e.g., 'deepseek/deepseek-v3.2')
-                          automatically force :headless spawn-mode.
+                          Non-claude models automatically use :openrouter spawn-mode.
 
    Returns:
-     Ling record implementing IAgent protocol
-
-   Example:
-     (->ling \"ling-123\" {:cwd \"/project\"
-                          :presets [\"coordinator\"]
-                          :project-id \"hive-mcp\"})
-
-     ;; Headless mode (no Emacs required):
-     (->ling \"ling-456\" {:cwd \"/project\"
-                          :spawn-mode :headless})
-
-     ;; OpenRouter model (automatically headless):
-     (->ling \"ling-789\" {:cwd \"/project\"
-                          :model \"deepseek/deepseek-v3.2\"})"
+     Ling record implementing IAgent protocol"
   [id opts]
   (let [model-val (:model opts)
-        ;; Non-claude models force headless mode
+        ;; Non-claude models use OpenRouter API directly
         effective-spawn-mode (if (and model-val (not (schema/claude-model? model-val)))
-                               :headless
+                               :openrouter
                                (:spawn-mode opts :vterm))]
     (map->Ling {:id id
                 :cwd (:cwd opts)
@@ -458,7 +369,6 @@
                  (ds-queries/get-slaves-by-project project-id)
                  (ds-queries/get-all-slaves))]
     (->> slaves
-         ;; Filter to depth 1 (lings, not drones)
          (filter #(= 1 (:slave/depth %)))
          (map (fn [s]
                 (->ling (:slave/id s)
@@ -486,7 +396,7 @@
              :model (:ling/model slave)})))
 
 ;;; =============================================================================
-;;; Critical Operations Guard (Delegating to ds-lings)
+;;; Critical Operations Guard
 ;;; =============================================================================
 
 (defn with-critical-op
@@ -510,42 +420,24 @@
                                    :presets ["coordinator"]
                                    :project-id "hive-mcp"}))
 
-  ;; Spawn it (requires Emacs running)
-  ;; (.spawn! my-ling {:task "Explore the codebase"})
-
   ;; === Headless mode (no Emacs required) ===
   (def headless-ling (->ling "ling-002" {:cwd "/home/user/project"
                                          :presets ["worker"]
                                          :project-id "hive-mcp"
                                          :spawn-mode :headless}))
 
-  ;; Spawn headless (just needs `claude` CLI on PATH)
-  ;; (.spawn! headless-ling {:task "Explore the codebase"})
-
-  ;; === Multi-model mode (OpenRouter via headless) ===
+  ;; === Multi-model mode (OpenRouter API direct) ===
   (def deepseek-ling (->ling "ling-003" {:cwd "/home/user/project"
                                          :presets ["worker"]
                                          :project-id "hive-mcp"
-                                         :model "deepseek/deepseek-v3.2"}))
-  ;; Non-claude models automatically use :headless spawn-mode
-  ;; (.spawn! deepseek-ling {:task "Analyze the architecture"})
+                                         :model "deepseek/deepseek-chat"}))
+  ;; spawn-mode will be :openrouter automatically
 
-  ;; Check status (works for both modes)
+  ;; Check status (works for both modes — strategy handles it)
   ;; (.status my-ling)
   ;; (.status headless-ling)
 
-  ;; Dispatch a task
-  ;; (.dispatch! my-ling {:task "Find all test files" :files ["test/"]})
-  ;; (.dispatch! headless-ling {:task "Find all test files"})
-
-  ;; Get claims (mode-independent)
-  ;; (.claims my-ling)
-
-  ;; Kill when done (mode-appropriate cleanup)
+  ;; Kill when done (mode-appropriate cleanup via strategy)
   ;; (.kill! my-ling)
   ;; (.kill! headless-ling)
-
-  ;; Query functions (spawn-mode preserved)
-  ;; (get-ling "ling-001")
-  ;; (list-lings "hive-mcp")
   )

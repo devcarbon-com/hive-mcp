@@ -250,6 +250,7 @@
    Sets up:
    - hive-mcp-memory: Ollama (fast, local, 768 dims)
    - hive-mcp-presets: OpenRouter (accurate, 4096 dims) if API key available
+   - hive-mcp-plans: OpenRouter (4096 dims) if API key available, Ollama fallback
 
    Call after init! for typical hive-mcp setup."
   []
@@ -264,6 +265,18 @@
         (log/warn "Could not configure OpenRouter for presets:" (.getMessage e))
         ;; Fall back to Ollama for presets too
         (configure-collection! "hive-mcp-presets" (config/ollama-config)))))
+
+  ;; Plans use OpenRouter if available (plans are 1000-5000+ chars, exceed Ollama limit)
+  (if (System/getenv "OPENROUTER_API_KEY")
+    (try
+      (configure-collection! "hive-mcp-plans" (config/openrouter-config))
+      (catch Exception e
+        (log/warn "Could not configure OpenRouter for plans:" (.getMessage e))
+        (configure-collection! "hive-mcp-plans" (config/ollama-config))))
+    ;; Fallback: Ollama with truncation risk warning
+    (do
+      (configure-collection! "hive-mcp-plans" (config/ollama-config))
+      (log/warn "Plans collection using Ollama (no OPENROUTER_API_KEY) - entries >1500 chars may be truncated")))
 
   (log/info "Default embedding configuration applied:"
             (list-configured-collections)))

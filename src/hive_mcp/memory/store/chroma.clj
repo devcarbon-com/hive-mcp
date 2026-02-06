@@ -93,20 +93,22 @@
     true)
 
   (query-entries [_this opts]
-    (let [{:keys [type project-id limit include-expired?]
+    (let [{:keys [type project-id project-ids limit include-expired?]
            :or {limit 100 include-expired? false}} opts]
       (chroma/query-entries :type type
                             :project-id project-id
+                            :project-ids project-ids
                             :limit limit
                             :include-expired? include-expired?)))
 
   ;; --- Semantic Search ---
 
   (search-similar [_this query-text opts]
-    (let [{:keys [limit type]} opts]
+    (let [{:keys [limit type project-ids]} opts]
       (chroma/search-similar query-text
                              :limit (or limit 10)
-                             :type type)))
+                             :type type
+                             :project-ids project-ids)))
 
   (supports-semantic-search? [_this]
     (chroma/embedding-configured?))

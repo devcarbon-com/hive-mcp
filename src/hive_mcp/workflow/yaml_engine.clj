@@ -47,6 +47,7 @@
    - transform: Applies a Clojure fn string to context
    - shell:     Executes a shell command (dry-run safe)
    - noop:      Does nothing (placeholder/debugging)
+   - mcp-call:  Invoke an MCP tool handler (workflow composition)
 
    SOLID-O: Open for extension via :action-registry.
    CLARITY-Y: Never throws - all errors returned in result maps.
@@ -183,16 +184,16 @@
           (if (visited node)
             (recur queue visited sorted deg)
             (let [dependents (filter (fn [id]
-                                      (contains? (get graph id #{}) node))
-                                    all-ids)
+                                       (contains? (get graph id #{}) node))
+                                     all-ids)
                   new-deg    (reduce (fn [d dep-id]
-                                      (update d dep-id dec))
-                                    deg
-                                    dependents)
+                                       (update d dep-id dec))
+                                     deg
+                                     dependents)
                   new-ready  (filter #(and (not (visited %))
-                                          (not= % node)
-                                          (zero? (get new-deg %)))
-                                    dependents)]
+                                           (not= % node)
+                                           (zero? (get new-deg %)))
+                                     dependents)]
               (recur (into queue new-ready)
                      (conj visited node)
                      (conj sorted node)
@@ -250,6 +251,52 @@
         {:success? false
          :result   nil
          :errors   [(str "Shell error: " (.getMessage e))]}))))
+
+;; Execute an MCP tool handler as a workflow step.
+;;
+;; Args map:
+;;   :tool    - Tool name string (e.g. "session", "memory", "agent")
+;;   :command - Subcommand for consolidated tools (e.g. "whoami", "query")
+;;   :params  - Additional params to pass to the tool handler
+;;
+;; Resolves tool handler via requiring-resolve to avoid circular deps.
+;; Merges :command and :params into a single args map for the handler.
+;; Variable substitution is applied to all string values before calling.
+;;
+;; CLARITY-Y: Returns error result if tool not found (never throws).
+(defmethod execute-action :mcp-call
+  [_ args ctx opts]
+  (try
+    (let [tool-name  (substitute-vars (or (:tool args) (get args "tool")) ctx)
+          command    (substitute-vars (or (:command args) (get args "command")) ctx)
+          extra-params (or (:params args) (get args "params") {})
+          ;; Substitute variables in extra params
+          resolved-params (substitute-in-map extra-params ctx)]
+      (if-not tool-name
+        {:success? false
+         :result   nil
+         :errors   ["mcp-call requires :tool in args"]}
+        ;; Resolve get-tool-by-name via requiring-resolve to avoid circular dep
+        (let [get-tool-fn (requiring-resolve 'hive-mcp.tools/get-tool-by-name)
+              tool-def    (get-tool-fn tool-name)]
+          (if-not tool-def
+            {:success? false
+             :result   nil
+             :errors   [(str "Tool not found: " tool-name)]}
+            ;; Build the handler args: merge command + extra params
+            (let [handler    (:handler tool-def)
+                  handler-args (cond-> resolved-params
+                                 command (assoc :command command)
+                                 ;; Pass through workflow context vars that tools expect
+                                 (:directory ctx) (assoc :directory (:directory ctx))
+                                 (:agent_id ctx)  (assoc :agent_id (:agent_id ctx)))
+                  result     (handler handler-args)]
+              {:success? true
+               :result   result})))))
+    (catch Exception e
+      {:success? false
+       :result   nil
+       :errors   [(str "mcp-call error: " (.getMessage e))]})))
 
 (defmethod execute-action :default
   [action _args _ctx _opts]

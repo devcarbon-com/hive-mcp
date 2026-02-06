@@ -1,12 +1,63 @@
 (ns hive-mcp.tools.cli
-  "CLI-style subcommand dispatcher for consolidated tools"
+  "CLI-style subcommand dispatcher for consolidated tools.
+
+   Supports n-depth nested handler trees via parse-command + resolve-handler.
+   Single-word commands remain backward compatible."
   (:require [clojure.string :as str]))
 
+;; =============================================================================
+;; Command Normalization
+;; =============================================================================
+
+(defn- normalize-command
+  "Normalize command to string. Handles keyword, string, or nil."
+  [command]
+  (cond
+    (keyword? command) (name command)
+    (string? command) command
+    :else nil))
+
+;; =============================================================================
+;; Help Formatting (supports nested trees)
+;; =============================================================================
+
+(defn- collect-command-paths
+  "Collect all command paths from a handler tree.
+   Returns a seq of keyword vectors like [[:status] [:status :list]].
+   Skips :_handler entries but includes parent path when :_handler exists."
+  [handlers prefix]
+  (reduce-kv
+   (fn [acc k v]
+     (if (= k :_handler)
+       acc
+       (cond
+         (fn? v)
+         (conj acc (conj prefix k))
+
+         (map? v)
+         (let [nested (collect-command-paths v (conj prefix k))
+               ;; If subtree has _handler, also list the parent path as valid
+               with-default (if (contains? v :_handler)
+                              (into [(conj prefix k)] nested)
+                              nested)]
+           (into acc with-default))
+
+         :else acc)))
+   [] handlers))
+
 (defn format-help
-  "Format help text listing all available commands."
+  "Format help text listing all available commands.
+   Supports nested handler trees - shows full command paths."
   [handlers]
-  (str "Available commands:\n"
-       (str/join "\n" (map #(str "  - " (name %)) (keys handlers)))))
+  (let [paths (collect-command-paths handlers [])
+        sorted (sort-by #(str/join " " (map name %)) paths)]
+    (str "Available commands:\n"
+         (str/join "\n" (map #(str "  - " (str/join " " (map name %)))
+                             sorted)))))
+
+;; =============================================================================
+;; Command Parsing
+;; =============================================================================
 
 (defn parse-command
   "Parse command string into keyword path.
@@ -17,10 +68,14 @@
     (->> (str/split (str/trim command) #"\s+")
          (mapv keyword))))
 
+;; =============================================================================
+;; Handler Resolution (n-depth tree walking)
+;; =============================================================================
+
 (defn resolve-handler
   "Resolve handler from nested tree given command path.
    Returns {:handler fn :path-used [...] :remaining [...]}
-   
+
    Supports:
    - Leaf handlers (fn)
    - Nested maps with :_handler for defaults
@@ -36,7 +91,7 @@
                      (get tree :_handler))]
         {:handler h :path-used used :remaining []}
         {:tree tree :path-used used})
-      
+
       ;; Try next segment
       :else
       (let [seg (first remaining)
@@ -45,28 +100,47 @@
           ;; Leaf handler found
           (fn? next-node)
           {:handler next-node :path-used (conj used seg) :remaining (vec (rest remaining))}
-          
+
           ;; Subtree found - recurse
           (map? next-node)
           (recur next-node (conj used seg) (rest remaining))
-          
+
           ;; Not found - check for _handler fallback
           :else
           (if-let [default (get tree :_handler)]
             {:handler default :path-used used :remaining (vec remaining)}
             {:error :not-found :path-used used :remaining (vec remaining)}))))))
 
+;; =============================================================================
+;; CLI Handler Factory (n-depth dispatch)
+;; =============================================================================
+
 (defn make-cli-handler
   "Create a CLI-style handler that dispatches on :command param.
 
-   handlers: map of keyword -> handler-fn
+   handlers: map of keyword -> handler-fn (flat) or nested handler tree.
+   Supports n-depth command dispatch: \"status list\" walks {:status {:list fn}}.
+   Single-word commands remain backward compatible.
+
    Returns: fn that dispatches to appropriate handler"
   [handlers]
   (fn [{:keys [command] :as params}]
-    (let [cmd (keyword command)]
-      (if-let [handler (get handlers cmd)]
-        (handler params)
-        (if (= cmd :help)
-          {:type "text" :text (format-help handlers)}
-          {:isError true :text (str "Unknown command: " command
-                                    ". Valid: " (keys handlers))})))))
+    (let [cmd-str (normalize-command command)
+          path (parse-command cmd-str)]
+      (cond
+        ;; No command or empty → error
+        (nil? path)
+        {:isError true :text (str "Unknown command: " command
+                                  ". Valid: " (keys handlers))}
+
+        ;; Help at root level
+        (= [:help] path)
+        {:type "text" :text (format-help handlers)}
+
+        ;; Normal dispatch via n-depth resolve-handler
+        :else
+        (let [result (resolve-handler handlers path)]
+          (if-let [handler (:handler result)]
+            (handler params)
+            {:isError true :text (str "Unknown command: " command
+                                      ". Valid: " (keys handlers))}))))))

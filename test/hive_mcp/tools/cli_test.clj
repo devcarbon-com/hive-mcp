@@ -4,7 +4,7 @@
             [hive-mcp.tools.cli :as cli]))
 
 ;; =============================================================================
-;; format-help tests
+;; format-help tests (flat handlers)
 ;; =============================================================================
 
 (deftest format-help-test
@@ -23,7 +23,128 @@
       (is (str/includes? help-text "Available commands:")))))
 
 ;; =============================================================================
-;; make-cli-handler dispatcher tests
+;; format-help tests (nested handler trees)
+;; =============================================================================
+
+(deftest format-help-nested-test
+  (testing "nested tree shows full paths"
+    (let [handlers {:spawn (fn [_] nil)
+                    :status {:list (fn [_] nil)
+                             :detail (fn [_] nil)}}
+          help-text (cli/format-help handlers)]
+      (is (str/includes? help-text "spawn"))
+      (is (str/includes? help-text "status list"))
+      (is (str/includes? help-text "status detail"))))
+
+  (testing "nested tree with _handler shows parent as valid"
+    (let [handlers {:status {:_handler (fn [_] "default status")
+                             :list (fn [_] nil)
+                             :detail (fn [_] nil)}}
+          help-text (cli/format-help handlers)]
+      ;; "status" alone should be listed (because of _handler)
+      (is (str/includes? help-text "  - status\n") "parent with _handler is listed")
+      (is (str/includes? help-text "status detail"))
+      (is (str/includes? help-text "status list"))))
+
+  (testing "deeply nested tree"
+    (let [handlers {:agent {:status {:list (fn [_] nil)
+                                     :detail (fn [_] nil)}
+                            :spawn (fn [_] nil)}}
+          help-text (cli/format-help handlers)]
+      (is (str/includes? help-text "agent spawn"))
+      (is (str/includes? help-text "agent status list"))
+      (is (str/includes? help-text "agent status detail"))))
+
+  (testing "_handler entries are not listed as command names"
+    (let [handlers {:foo {:_handler (fn [_] nil)
+                          :bar (fn [_] nil)}}
+          help-text (cli/format-help handlers)]
+      (is (not (str/includes? help-text "_handler"))))))
+
+;; =============================================================================
+;; parse-command tests
+;; =============================================================================
+
+(deftest parse-command-test
+  (testing "single word"
+    (is (= [:status] (cli/parse-command "status"))))
+
+  (testing "multi-word"
+    (is (= [:status :list] (cli/parse-command "status list"))))
+
+  (testing "trims whitespace"
+    (is (= [:status :list] (cli/parse-command "  status  list  "))))
+
+  (testing "nil returns nil"
+    (is (nil? (cli/parse-command nil))))
+
+  (testing "blank returns nil"
+    (is (nil? (cli/parse-command "")))
+    (is (nil? (cli/parse-command "   ")))))
+
+;; =============================================================================
+;; resolve-handler tests
+;; =============================================================================
+
+(deftest resolve-handler-flat-test
+  (let [handler-fn (fn [_] :found)
+        handlers {:status handler-fn :spawn handler-fn}]
+
+    (testing "resolves flat handler"
+      (let [result (cli/resolve-handler handlers [:status])]
+        (is (= handler-fn (:handler result)))
+        (is (= [:status] (:path-used result)))))
+
+    (testing "returns error for unknown"
+      (let [result (cli/resolve-handler handlers [:bogus])]
+        (is (= :not-found (:error result)))))))
+
+(deftest resolve-handler-nested-test
+  (let [list-fn (fn [_] :list)
+        detail-fn (fn [_] :detail)
+        default-fn (fn [_] :default)
+        handlers {:status {:list list-fn
+                           :detail detail-fn
+                           :_handler default-fn}
+                  :spawn (fn [_] :spawn)}]
+
+    (testing "resolves nested handler"
+      (let [result (cli/resolve-handler handlers [:status :list])]
+        (is (= list-fn (:handler result)))
+        (is (= [:status :list] (:path-used result)))))
+
+    (testing "resolves _handler fallback when no more path"
+      (let [result (cli/resolve-handler handlers [:status])]
+        (is (= default-fn (:handler result)))
+        (is (= [:status] (:path-used result)))))
+
+    (testing "_handler fallback for unknown subcommand"
+      (let [result (cli/resolve-handler handlers [:status :unknown])]
+        (is (= default-fn (:handler result)))
+        (is (= [:status] (:path-used result)))
+        (is (= [:unknown] (:remaining result)))))
+
+    (testing "flat handler still works"
+      (let [result (cli/resolve-handler handlers [:spawn])]
+        (is (fn? (:handler result)))
+        (is (= [:spawn] (:path-used result)))))))
+
+(deftest resolve-handler-deep-nested-test
+  (let [leaf-fn (fn [_] :leaf)
+        handlers {:a {:b {:c leaf-fn}}}]
+
+    (testing "3-depth resolution"
+      (let [result (cli/resolve-handler handlers [:a :b :c])]
+        (is (= leaf-fn (:handler result)))
+        (is (= [:a :b :c] (:path-used result)))))
+
+    (testing "partial path without _handler returns tree"
+      (let [result (cli/resolve-handler handlers [:a :b])]
+        (is (nil? (:handler result)))
+        (is (map? (:tree result)))))))
+
+;; =============================================================================
+;; make-cli-handler dispatcher tests (backward compat - flat handlers)
 ;; =============================================================================
 
 (deftest make-cli-handler-dispatches-correctly
@@ -57,6 +178,65 @@
     (let [handlers {:noop (fn [_] nil)}
           handler (cli/make-cli-handler handlers)]
       (is (nil? (handler {:command "noop"}))))))
+
+;; =============================================================================
+;; make-cli-handler n-depth dispatch tests
+;; =============================================================================
+
+(deftest make-cli-handler-ndepth-dispatch
+  (let [list-fn (fn [_] {:result :list})
+        detail-fn (fn [_] {:result :detail})
+        default-fn (fn [_] {:result :default-status})
+        spawn-fn (fn [{:keys [name]}] {:spawned name})
+        handlers {:status {:list list-fn
+                           :detail detail-fn
+                           :_handler default-fn}
+                  :spawn spawn-fn}
+        cli-handler (cli/make-cli-handler handlers)]
+
+    (testing "n-depth dispatch: 'status list'"
+      (is (= {:result :list} (cli-handler {:command "status list"}))))
+
+    (testing "n-depth dispatch: 'status detail'"
+      (is (= {:result :detail} (cli-handler {:command "status detail"}))))
+
+    (testing "_handler fallback: 'status' alone"
+      (is (= {:result :default-status} (cli-handler {:command "status"}))))
+
+    (testing "_handler fallback: 'status unknown'"
+      (is (= {:result :default-status} (cli-handler {:command "status unknown"}))))
+
+    (testing "flat handler still works alongside nested"
+      (is (= {:spawned "foo"} (cli-handler {:command "spawn" :name "foo"}))))
+
+    (testing "help shows nested commands"
+      (let [result (cli-handler {:command "help"})]
+        (is (= "text" (:type result)))
+        (is (str/includes? (:text result) "spawn"))
+        (is (str/includes? (:text result) "status"))
+        (is (str/includes? (:text result) "status list"))
+        (is (str/includes? (:text result) "status detail"))))))
+
+(deftest make-cli-handler-ndepth-deep
+  (let [leaf-fn (fn [_] {:depth 3})
+        b-default (fn [_] {:depth 2})
+        handlers {:a {:b {:c leaf-fn
+                          :_handler b-default}}}
+        cli-handler (cli/make-cli-handler handlers)]
+
+    (testing "3-depth dispatch: 'a b c'"
+      (is (= {:depth 3} (cli-handler {:command "a b c"}))))
+
+    (testing "2-depth with _handler fallback: 'a b'"
+      (is (= {:depth 2} (cli-handler {:command "a b"}))))
+
+    (testing "unknown at depth 2 falls back to _handler: 'a b xyz'"
+      (is (= {:depth 2} (cli-handler {:command "a b xyz"}))))
+
+    (testing "unknown at depth 1 without _handler: 'a' returns error"
+      ;; :a is a map without _handler, so no handler found
+      (let [result (cli-handler {:command "a"})]
+        (is (:isError result))))))
 
 ;; =============================================================================
 ;; Unknown command handling tests

@@ -17,6 +17,7 @@
             [hive-mcp.emacsclient :as ec]
             [hive-mcp.elisp :as el]
             [hive-mcp.agent.context :as ctx]
+            [hive-mcp.config :as config]
             [clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -200,6 +201,171 @@
            (str "\n\n ;; Previous project IDs for migration\n"
                 " :aliases " (format-edn-value aliases)))
          "}\n")))
+
+;; =============================================================================
+;; Native Project Type Detection (No Emacs/Projectile Required)
+;; =============================================================================
+
+(def ^:private marker-file->type
+  "Map of marker files to project type strings.
+   Checked in priority order (first match wins).
+   Only checked when .git directory exists (confirmed project root)."
+  [["deps.edn"       "clojure-cli"]
+   ["project.clj"    "lein"]
+   ["shadow-cljs.edn" "shadow-cljs"]
+   ["package.json"   "npm"]
+   ["Cargo.toml"     "cargo"]
+   ["go.mod"         "go-mod"]
+   ["pom.xml"        "maven"]
+   ["build.gradle"   "gradle"]
+   ["build.gradle.kts" "gradle"]
+   ["pyproject.toml" "python"]
+   ["setup.py"       "python"]
+   ["Pipfile"        "pipenv"]
+   ["mix.exs"        "mix"]
+   ["rebar.config"   "rebar3"]
+   ["CMakeLists.txt" "cmake"]
+   ["meson.build"    "meson"]
+   ["Makefile"       "make"]])
+
+(defn detect-project-type-native
+  "Detect project type by checking for marker files in directory.
+   No Emacs/Projectile dependency — pure filesystem checks.
+
+   Requires .git directory to confirm this is a project root.
+   Returns project type string (e.g. 'clojure-cli', 'npm', 'cargo')
+   or 'generic' if .git exists but no known marker files found.
+   Returns nil if directory doesn't exist or has no .git.
+
+   CLARITY-I: Inputs guarded — validates directory exists.
+   CLARITY-L: Layers pure — only reads filesystem, no side effects."
+  [directory]
+  (when directory
+    (let [dir (io/file directory)]
+      (when (and (.exists dir) (.isDirectory dir))
+        (let [git-dir (io/file dir ".git")]
+          (when (.exists git-dir)
+            (or (some (fn [[marker-file project-type]]
+                        (when (.exists (io/file dir marker-file))
+                          project-type))
+                      marker-file->type)
+                "generic")))))))
+
+(defn generate-hive-project-headless!
+  "Generate .hive-project.edn without Emacs dependency.
+   Uses native project type detection and config.clj for parent rules.
+
+   INVARIANT: NEVER overwrites existing .hive-project.edn.
+   project-id = directory basename (NOT hash) for Chroma backward-compat.
+   parent-id resolved via config.clj's get-parent-for-path.
+
+   CLARITY-Y: Yield safe failure — returns nil on any error, never throws.
+   CLARITY-I: Inputs guarded — validates directory and checks for existing file.
+
+   Returns:
+   - {:success true :path ... :config ...} on successful generation
+   - {:skipped true :reason ...} if file exists or detection fails
+   - nil on error"
+  [directory]
+  (try
+    (let [dir (io/file directory)
+          config-path (io/file dir ".hive-project.edn")]
+      ;; INVARIANT: Never overwrite existing
+      (if (.exists config-path)
+        {:skipped true
+         :reason "existing"
+         :path (.getAbsolutePath config-path)}
+
+        ;; Detect project type natively
+        (if-let [project-type (detect-project-type-native directory)]
+          (let [;; project-id = directory basename (for Chroma compat)
+                project-id (.getName dir)
+                ;; Resolve parent via config.clj parent-rules
+                parent-id (config/get-parent-for-path (.getAbsolutePath dir))
+                ;; Build config
+                watch-dirs (infer-watch-dirs project-type)
+                hot-reload (infer-hot-reload? project-type)
+                edn-config {:project-id project-id
+                            :parent parent-id
+                            :project-type (keyword project-type)
+                            :watch-dirs watch-dirs
+                            :hot-reload hot-reload
+                            :presets-path (when hot-reload ".hive/presets")}
+                edn-content (generate-edn-content edn-config)]
+            ;; Write file
+            (spit (.getAbsolutePath config-path) edn-content)
+            (log/info "Generated .hive-project.edn (headless):"
+                      (.getAbsolutePath config-path)
+                      {:project-id project-id
+                       :project-type project-type
+                       :parent-id parent-id})
+            {:success true
+             :path (.getAbsolutePath config-path)
+             :config edn-config})
+
+          ;; No .git found or not a valid project
+          {:skipped true
+           :reason "no-git"
+           :path (.getAbsolutePath dir)})))
+    (catch Exception e
+      (log/warn "generate-hive-project-headless! failed for" directory ":"
+                (.getMessage e))
+      nil)))
+
+;; =============================================================================
+;; Startup Scan: Find and Generate Missing .hive-project.edn
+;; =============================================================================
+
+(defn- find-git-dirs-without-edn
+  "Walk project-roots and find directories containing .git but no .hive-project.edn.
+   Only scans one level deep (direct children of project-roots).
+   Returns a sequence of directory File objects."
+  [project-roots]
+  (->> project-roots
+       (mapcat (fn [root]
+                 (let [root-file (io/file root)]
+                   (when (and (.exists root-file) (.isDirectory root-file))
+                     (->> (.listFiles root-file)
+                          (filter #(.isDirectory %))
+                          (filter #(.exists (io/file % ".git")))
+                          (remove #(.exists (io/file % ".hive-project.edn"))))))))
+       (distinct)))
+
+(defn scan-and-generate-missing!
+  "Scan project-roots from config.clj and generate .hive-project.edn
+   for any .git directory that lacks one.
+
+   Designed for server.clj Phase 5.5 (after services, before hot-reload).
+   Uses config/get-project-roots for root directories.
+
+   CLARITY-Y: Yield safe failure — logs errors per-project, never throws.
+   Returns {:scanned N :generated N :skipped N :errors N :details [...]}"
+  []
+  (let [roots (config/get-project-roots)]
+    (if (empty? roots)
+      (do
+        (log/info "scan-and-generate-missing!: no project-roots configured, skipping")
+        {:scanned 0 :generated 0 :skipped 0 :errors 0 :details []})
+
+      (let [dirs (find-git-dirs-without-edn roots)
+            results (doall
+                     (for [dir dirs]
+                       (let [path (.getAbsolutePath dir)
+                             result (generate-hive-project-headless! path)]
+                         (merge {:directory path} result))))]
+        (let [generated (count (filter :success results))
+              skipped (count (filter :skipped results))
+              errors (count (filter nil? results))]
+          (log/info "scan-and-generate-missing! complete:"
+                    {:scanned (count dirs)
+                     :generated generated
+                     :skipped skipped
+                     :errors errors})
+          {:scanned (count dirs)
+           :generated generated
+           :skipped skipped
+           :errors errors
+           :details results})))))
 
 ;; =============================================================================
 ;; Projectile Integration

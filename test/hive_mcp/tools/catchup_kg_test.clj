@@ -1,10 +1,11 @@
 (ns hive-mcp.tools.catchup-kg-test
-  "Tests for Knowledge Graph integration in catchup workflow."
+  "Tests for Knowledge Graph integration in catchup workflow.
+   Updated Sprint 2: functions moved from catchup.clj to catchup.enrichment."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [hive-mcp.knowledge-graph.connection :as kg-conn]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-mcp.knowledge-graph.queries :as kg-queries]
-            [hive-mcp.tools.catchup :as catchup]))
+            [hive-mcp.tools.catchup.enrichment :as enrichment]))
 
 ;; Reset KG before each test
 (use-fixtures :each
@@ -18,8 +19,7 @@
 
 (deftest gather-kg-insights-empty-kg-test
   (testing "returns edge-count=0 when KG is empty"
-    (let [gather-fn #'hive-mcp.tools.catchup/gather-kg-insights
-          result (gather-fn [] [] [] "test-project")]
+    (let [result (enrichment/gather-kg-insights [] [] [] "test-project")]
       (is (map? result))
       (is (= 0 (:edge-count result)))
       ;; Should not have by-relation when empty
@@ -33,11 +33,10 @@
     (kg-edges/add-edge! {:from "session-1" :to "decision-1"
                          :relation :derived-from})
 
-    (let [gather-fn #'hive-mcp.tools.catchup/gather-kg-insights
-          ;; Mock entry metadata
+    (let [;; Mock entry metadata
           decisions-meta [{:id "decision-1" :preview "Test decision"}]
           sessions-meta [{:id "session-1" :preview "Test session"}]
-          result (gather-fn decisions-meta [] sessions-meta nil)]
+          result (enrichment/gather-kg-insights decisions-meta [] sessions-meta nil)]
       (is (= 2 (:edge-count result)))
       (is (= {:implements 1 :derived-from 1} (:by-relation result))))))
 
@@ -47,9 +46,8 @@
     (kg-edges/add-edge! {:from "convention-1" :to "decision-1"
                          :relation :implements})
 
-    (let [gather-fn #'hive-mcp.tools.catchup/gather-kg-insights
-          decisions-meta [{:id "decision-1" :preview "Test decision"}]
-          result (gather-fn decisions-meta [] [] nil)]
+    (let [decisions-meta [{:id "decision-1" :preview "Test decision"}]
+          result (enrichment/gather-kg-insights decisions-meta [] [] nil)]
       ;; Should find convention-1 as related to decision-1
       (is (= 1 (:edge-count result)))
       ;; related-decisions should include the convention that implements
@@ -63,9 +61,8 @@
     (kg-edges/add-edge! {:from "decision-1" :to "session-1"
                          :relation :derived-from})
 
-    (let [gather-fn #'hive-mcp.tools.catchup/gather-kg-insights
-          sessions-meta [{:id "session-1" :preview "Test session"}]
-          result (gather-fn [] [] sessions-meta nil)]
+    (let [sessions-meta [{:id "session-1" :preview "Test session"}]
+          result (enrichment/gather-kg-insights [] [] sessions-meta nil)]
       ;; Should find decision-1 via incoming traversal
       (is (= 1 (:edge-count result)))
       ;; session-derived should include decision-1
@@ -81,15 +78,13 @@
     (kg-edges/add-edge! {:from "note-1" :to "session-1"
                          :relation :derived-from})
 
-    (let [find-fn #'hive-mcp.tools.catchup/find-related-via-session-summaries
-          result (find-fn ["session-1"] nil)]
+    (let [result (enrichment/find-related-via-session-summaries ["session-1"] nil)]
       ;; note-1 has outgoing derived-from to session-1
       ;; so when traversing incoming from session-1, we find note-1
       (is (some #{"note-1"} result))))
 
   (testing "returns empty for no session IDs"
-    (let [find-fn #'hive-mcp.tools.catchup/find-related-via-session-summaries
-          result (find-fn [] nil)]
+    (let [result (enrichment/find-related-via-session-summaries [] nil)]
       (is (nil? result)))))
 
 ;; ============================================================================
@@ -105,8 +100,7 @@
     (kg-edges/add-edge! {:from "decision-1" :to "axiom-1"
                          :relation :depends-on})
 
-    (let [find-fn #'hive-mcp.tools.catchup/find-related-decisions-via-kg
-          result (find-fn ["decision-1"] nil)]
+    (let [result (enrichment/find-related-decisions-via-kg ["decision-1"] nil)]
       ;; Should find snippet-1 (incoming implements) and axiom-1 (outgoing depends-on)
       (is (some #{"snippet-1"} result))
       (is (some #{"axiom-1"} result))
@@ -114,8 +108,7 @@
       (is (not (some #{"decision-1"} result)))))
 
   (testing "returns empty for no decision IDs"
-    (let [find-fn #'hive-mcp.tools.catchup/find-related-decisions-via-kg
-          result (find-fn [] nil)]
+    (let [result (enrichment/find-related-decisions-via-kg [] nil)]
       (is (nil? result)))))
 
 ;; ============================================================================
@@ -131,16 +124,14 @@
                          :relation :depends-on})
 
     ;; Get node context and extract
-    (let [context (hive-mcp.knowledge-graph.queries/get-node-context "decision-1")
-          extract-fn #'hive-mcp.tools.catchup/extract-kg-relations
-          result (extract-fn context)]
+    (let [context (kg-queries/get-node-context "decision-1")
+          result (enrichment/extract-kg-relations context)]
       (is (= ["old-decision"] (:supersedes result)))
       (is (= ["axiom-1"] (:depends-on result)))))
 
   (testing "handles empty context"
-    (let [extract-fn #'hive-mcp.tools.catchup/extract-kg-relations
-          result (extract-fn {:incoming {:count 0 :edges []}
-                              :outgoing {:count 0 :edges []}})]
+    (let [result (enrichment/extract-kg-relations {:incoming {:count 0 :edges []}
+                                                   :outgoing {:count 0 :edges []}})]
       (is (empty? result)))))
 
 ;; ============================================================================
@@ -154,11 +145,10 @@
     (kg-edges/add-edge! {:from "d2" :to "d1" :relation :supersedes})
     (kg-edges/add-edge! {:from "s1" :to "d1" :relation :derived-from})
 
-    (let [gather-fn #'hive-mcp.tools.catchup/gather-kg-insights
-          decisions-meta [{:id "d1" :preview "Decision 1"}
+    (let [decisions-meta [{:id "d1" :preview "Decision 1"}
                           {:id "d2" :preview "Decision 2"}]
           sessions-meta [{:id "s1" :preview "Session 1"}]
-          result (gather-fn decisions-meta [] sessions-meta "test-project")]
+          result (enrichment/gather-kg-insights decisions-meta [] sessions-meta "test-project")]
       ;; Always has edge-count
       (is (contains? result :edge-count))
       (is (= 3 (:edge-count result)))

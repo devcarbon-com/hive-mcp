@@ -1,10 +1,11 @@
 (ns hive-mcp.tools.consolidated.session
   "Consolidated Session CLI tool.
 
-   Subcommands: complete, wrap, whoami
+   Subcommands: complete, wrap, whoami, catchup
 
    Usage via MCP: session {\"command\": \"complete\", \"commit_msg\": \"feat: done\"}
                   session {\"command\": \"whoami\"}
+                  session {\"command\": \"catchup\", \"directory\": \"/path/to/project\"}
 
    SOLID: Facade pattern - single tool entry point for session lifecycle.
    CLARITY: L - Thin adapter delegating to domain handlers."
@@ -12,6 +13,7 @@
             [hive-mcp.tools.session-complete :as session-handlers]
             [hive-mcp.tools.core :refer [mcp-error mcp-json]]
             [hive-mcp.tools.crystal :as crystal]
+            [hive-mcp.tools.catchup :as catchup]
             [hive-mcp.agent.context :as ctx]
             [hive-mcp.tools.memory.scope :as scope]
             [taoensso.timbre :as log]))
@@ -69,6 +71,21 @@
       (mcp-error (str "Wrap failed: " (.getMessage e))))))
 
 ;; =============================================================================
+;; Catchup Handler - Delegates to catchup/handle-native-catchup
+;; =============================================================================
+
+(defn handle-catchup
+  "Run catchup to restore session context from Chroma memory.
+   Gathers axioms, conventions, decisions, sessions, git status.
+   Delegates to hive-mcp.tools.catchup/handle-native-catchup."
+  [{:keys [directory] :as params}]
+  (log/info "session-catchup" {:directory directory})
+  (try
+    (catchup/handle-native-catchup params)
+    (catch Exception e
+      (mcp-error (str "Catchup failed: " (.getMessage e))))))
+
+;; =============================================================================
 ;; Handlers Map - Wire commands to existing handlers
 ;; =============================================================================
 
@@ -76,7 +93,8 @@
   "Map of command keywords to handler functions."
   {:complete session-handlers/handle-session-complete
    :wrap     handle-wrap
-   :whoami   handle-whoami})
+   :whoami   handle-whoami
+   :catchup  handle-catchup})
 
 ;; =============================================================================
 ;; CLI Handler
@@ -94,10 +112,10 @@
   "MCP tool definition for consolidated session command."
   {:name "session"
    :consolidated true
-   :description "Session lifecycle: complete (commit + kanban + wrap + shout), wrap (crystallize only without commit), whoami (get agent identity context). Use 'complete' at end of work session. Use command='help' to list all."
+   :description "Session lifecycle: complete (commit + kanban + wrap + shout), wrap (crystallize only without commit), whoami (get agent identity context), catchup (restore session context from memory). Use 'complete' at end of work session. Use command='help' to list all."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
-                                         :enum ["complete" "wrap" "whoami" "help"]
+                                         :enum ["complete" "wrap" "whoami" "catchup" "help"]
                                          :description "Session operation to perform"}
                               ;; complete params
                               "commit_msg" {:type "string"

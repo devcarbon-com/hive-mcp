@@ -1,760 +1,52 @@
 (ns hive-mcp.tools.catchup
-  "Native Catchup workflow implementation.
+  "Native Catchup workflow — thin facade delegating to sub-namespaces.
 
    Gathers session context from Chroma memory with project scoping.
    Designed for the /catchup skill to restore context at session start.
 
-   Priority Loading:
-   - Swarm conventions tagged 'catchup-priority' are surfaced FIRST
-   - These help coordinator trust swarm patterns immediately
+   Sub-namespace delegation (Sprint 2):
+   - catchup.scope     — scope-filtered Chroma queries, project context
+   - catchup.format    — entry metadata transforms, response builders
+   - catchup.git       — git status via Emacs
+   - catchup.enrichment — KG enrichment, grounding, co-access
+   - catchup.spawn     — spawn-time context injection (dual-mode)
+   - catchup.permeation — auto-permeation of ling wraps
 
-   KG Context (Phase 2):
-   - Decisions/conventions enriched with Knowledge Graph relationships
-   - Surfaces superseded entries, dependencies, and contradictions
-
-   HCR Wave 2:
-   - Project tree staleness check - rescans hierarchy if stale"
-  (:require [hive-mcp.emacsclient :as ec]
-            [hive-mcp.chroma :as chroma]
+   Public API:
+   - handle-native-catchup  — main catchup handler
+   - handle-native-wrap     — wrap/crystallize handler
+   - spawn-context          — re-export from catchup.spawn"
+  (:require [hive-mcp.chroma :as chroma]
             [hive-mcp.crystal.hooks :as crystal-hooks]
-            [hive-mcp.swarm.datascript :as ds]
             [hive-mcp.tools.memory.scope :as scope]
-            [hive-mcp.knowledge-graph.queries :as kg-queries]
-            [hive-mcp.knowledge-graph.edges :as kg-edges]
-            [hive-mcp.knowledge-graph.disc :as kg-disc]
-            [hive-mcp.knowledge-graph.scope :as kg-scope]
+            [hive-mcp.tools.catchup.scope :as catchup-scope]
+            [hive-mcp.tools.catchup.format :as fmt]
+            [hive-mcp.tools.catchup.git :as catchup-git]
+            [hive-mcp.tools.catchup.enrichment :as enrichment]
+            [hive-mcp.tools.catchup.spawn :as catchup-spawn]
+            [hive-mcp.tools.catchup.permeation :as permeation]
             [hive-mcp.project.tree :as project-tree]
             [clojure.data.json :as json]
-            [clojure.string :as str]
-            [clojure.set :as set]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 ;; =============================================================================
-;; Utility Helpers
+;; Re-exports (backward compatibility)
 ;; =============================================================================
-
-(defn- distinct-by
-  "Return distinct elements from coll by the value of (f item).
-   Keeps the first occurrence of each unique (f item) value."
-  [f coll]
-  (let [seen (volatile! #{})]
-    (filterv (fn [item]
-               (let [key (f item)]
-                 (if (contains? @seen key)
-                   false
-                   (do (vswap! seen conj key) true))))
-             coll)))
-
-;; =============================================================================
-;; Project Context Helpers
-;; =============================================================================
-
-;; NOTE: get-current-project-id is provided by scope/get-current-project-id
-;; which implements the Go Context Pattern: context flows down explicitly,
-;; never derived from ambient Emacs state.
-
-(defn- get-current-project-name
-  "Get current project name from Emacs.
-   When directory is provided, uses that path to determine project context."
-  ([] (get-current-project-name nil))
-  ([directory]
-   (try
-     (let [elisp (if directory
-                   (format "(hive-mcp-memory--get-project-name %s)" (pr-str directory))
-                   "(hive-mcp-memory--get-project-name)")
-           {:keys [success result timed-out]} (ec/eval-elisp-with-timeout elisp 10000)]
-       (if (and success result (not= result "nil") (not timed-out))
-         (str/replace result #"\"" "")
-         nil))
-     (catch Exception _
-       nil))))
-
-;; =============================================================================
-;; Entry Transformation
-;; =============================================================================
-
-(defn- entry->catchup-meta
-  "Convert a Chroma entry to catchup metadata format.
-   Returns map with :id, :type, :preview, :tags."
-  [entry preview-len]
-  (let [content (:content entry)
-        content-str (if (string? content)
-                      content
-                      (str content))
-        preview (subs content-str 0 (min (count content-str) (or preview-len 80)))]
-    {:id (:id entry)
-     :type (name (or (:type entry) "note"))
-     :preview preview
-     :tags (vec (or (:tags entry) []))}))
-
-;; =============================================================================
-;; Scope Filtering
-;; =============================================================================
-
-(defn- filter-by-tags
-  "Filter entries to only those containing all specified tags."
-  [entries tags]
-  (if (seq tags)
-    (filter (fn [entry]
-              (let [entry-tags (set (:tags entry))]
-                (every? #(contains? entry-tags %) tags)))
-            entries)
-    entries))
-
-(defn- query-scoped-entries
-  "Query Chroma entries filtered by project scope.
-   Uses project-id metadata filtering AND hierarchical scope matching.
-   Aligned with crud.clj approach for consistent behavior.
-
-   HCR Wave 4: Catchup uses full-hierarchy-scope-tags by default, so
-   coordinator gets visibility into child project memories too. This is
-   the key integration point - catchup surfaces the full project tree.
-
-   SCOPE LEAK FIX: When in project context, excludes scope:global from
-   matching to prevent global memories from leaking into project catchup.
-   Global entries are only included when project-id IS 'global'."
-  [entry-type tags project-id limit]
-  (when (chroma/embedding-configured?)
-    (let [limit-val (or limit 20)
-          in-project? (and project-id (not= project-id "global"))
-          ;; HCR Wave 4: Don't filter by project-id at DB level - we want entries
-          ;; from child projects too. Over-fetch more for hierarchy filtering.
-          entries (chroma/query-entries :type entry-type
-                                        :limit (min (* limit-val 8) 500))
-          ;; HCR Wave 4: Use full hierarchy scope (ancestors + self + descendants)
-          ;; FIX: Exclude scope:global when in project context to prevent leak
-          full-scope-tags (cond-> (kg-scope/full-hierarchy-scope-tags project-id)
-                            in-project? (disj "scope:global"))
-          ;; Build set of all visible project IDs (self + ancestors + descendants)
-          ;; FIX: Exclude "global" from visible IDs when in project context
-          all-visible-ids (cond-> (set (into (vec (kg-scope/visible-scopes project-id))
-                                             (kg-scope/descendant-scopes project-id)))
-                            in-project? (disj "global"))
-          scoped (filter (fn [entry]
-                           (let [entry-tags (set (or (:tags entry) []))]
-                             (or
-                              ;; Match any full hierarchy scope tag
-                              (some entry-tags full-scope-tags)
-                              ;; Also match by project-id metadata for backward compat
-                              (contains? all-visible-ids (:project-id entry)))))
-                         entries)
-          ;; NOTE: filter-by-tags has signature [entries tags], so we can't use ->>
-          filtered (filter-by-tags scoped tags)]
-      (take limit-val filtered))))
-
-;; =============================================================================
-;; Expiring Entries
-;; =============================================================================
-
-(defn- entry-expiring-soon?
-  "Check if entry expires within 7 days."
-  [entry]
-  (when-let [exp (:expires entry)]
-    (try
-      (let [exp-time (java.time.ZonedDateTime/parse exp)
-            now (java.time.ZonedDateTime/now)
-            week-later (.plusDays now 7)]
-        (.isBefore exp-time week-later))
-      (catch Exception _ false))))
-
-(defn- query-expiring-entries
-  "Query entries expiring within 7 days, scoped to project.
-   HCR Wave 4: Uses full hierarchy scope to surface expiring entries from
-   child projects too."
-  [project-id limit]
-  (let [;; HCR Wave 4: Don't filter by project-id at DB level
-        entries (chroma/query-entries :limit 100)
-        ;; Use full hierarchy scope (ancestors + self + descendants)
-        full-scope-tags (kg-scope/full-hierarchy-scope-tags project-id)
-        all-visible-ids (set (into (vec (kg-scope/visible-scopes project-id))
-                                   (kg-scope/descendant-scopes project-id)))
-        scoped (filter (fn [entry]
-                         (let [entry-tags (set (or (:tags entry) []))]
-                           (or (some entry-tags full-scope-tags)
-                               (contains? all-visible-ids (:project-id entry)))))
-                       entries)]
-    (->> scoped
-         (filter entry-expiring-soon?)
-         (take (or limit 20)))))
-
-;; =============================================================================
-;; Git Context
-;; =============================================================================
-
-(defn- gather-git-info
-  "Gather git information from Emacs for the given directory."
-  [directory]
-  (try
-    (let [git-elisp (if directory
-                      (format "(let ((default-directory %s))
-                                 (json-encode
-                                  (list :branch (string-trim (shell-command-to-string \"git rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'none'\"))
-                                        :uncommitted (not (string-empty-p (shell-command-to-string \"git status --porcelain 2>/dev/null\")))
-                                        :last-commit (string-trim (shell-command-to-string \"git log -1 --format='%%h - %%s' 2>/dev/null || echo 'none'\")))))"
-                              (pr-str directory))
-                      "(json-encode
-                         (list :branch (string-trim (shell-command-to-string \"git rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'none'\"))
-                               :uncommitted (not (string-empty-p (shell-command-to-string \"git status --porcelain 2>/dev/null\")))
-                               :last-commit (string-trim (shell-command-to-string \"git log -1 --format='%h - %s' 2>/dev/null || echo 'none'\"))))")
-          {:keys [success result timed-out]} (ec/eval-elisp-with-timeout git-elisp 30000)]
-      (when (and success (not timed-out))
-        (json/read-str result :key-fn keyword)))
-    (catch Exception _
-      {:branch "unknown" :uncommitted false :last-commit "unknown"})))
-
-;; =============================================================================
-;; Metadata Conversion
-;; =============================================================================
-
-(defn- entry->axiom-meta
-  "Convert entry to axiom metadata with full content."
-  [entry]
-  {:id (:id entry)
-   :type "axiom"
-   :tags (vec (or (:tags entry) []))
-   :content (:content entry)
-   :severity "INVIOLABLE"})
-
-(defn- entry->priority-meta
-  "Convert entry to priority convention metadata with full content."
-  [entry]
-  {:id (:id entry)
-   :type "convention"
-   :tags (vec (or (:tags entry) []))
-   :content (:content entry)})
-
-;; =============================================================================
-;; Entry Queries
-;; =============================================================================
-
-(defn- query-axioms
-  "Query axiom entries (both formal type and legacy tagged conventions)."
-  [project-id]
-  (let [formal (query-scoped-entries "axiom" nil project-id 100)
-        legacy (query-scoped-entries "convention" ["axiom"] project-id 100)]
-    (distinct-by :id (concat formal legacy))))
-
-(defn- query-regular-conventions
-  "Query conventions excluding axioms and priority ones."
-  [project-id axiom-ids priority-ids]
-  (let [all-conventions (query-scoped-entries "convention" nil project-id 50)
-        excluded-ids (set/union axiom-ids priority-ids)]
-    (remove #(contains? excluded-ids (:id %)) all-conventions)))
-
-;; =============================================================================
-;; Knowledge Graph Context Enrichment
-;; =============================================================================
-
-(defn- find-related-via-session-summaries
-  "Find entries related to session summaries via :derived-from traversal.
-   Session summaries often derive from decisions/conventions made during session.
-
-   Returns vector of related entry IDs."
-  [session-ids _project-id]
-  (when (seq session-ids)
-    (try
-      (->> session-ids
-           (mapcat (fn [session-id]
-                     ;; Traverse incoming :derived-from edges to find source entries
-                     ;; Note: Don't pass scope - catchup should see all related entries
-                     (let [results (kg-queries/traverse
-                                    session-id
-                                    {:direction :incoming
-                                     :relations #{:derived-from}
-                                     :max-depth 2})]
-                       (map :node-id results))))
-           (distinct)
-           (vec))
-      (catch Exception e
-        (log/debug "Session traversal failed:" (.getMessage e))
-        []))))
-
-(defn- find-related-decisions-via-kg
-  "Find decisions connected via :implements, :refines, or :depends-on relationships.
-   These are decisions that have active dependencies in the knowledge graph.
-
-   Returns vector of related decision IDs."
-  [decision-ids _project-id]
-  (when (seq decision-ids)
-    (try
-      (->> decision-ids
-           (mapcat (fn [decision-id]
-                     ;; Look for entries that implement or refine this decision
-                     ;; Note: Don't pass scope - catchup should see all related entries
-                     (let [results (kg-queries/traverse
-                                    decision-id
-                                    {:direction :both
-                                     :relations #{:implements :refines :depends-on}
-                                     :max-depth 2})]
-                       (map :node-id results))))
-           (distinct)
-           (remove (set decision-ids))  ; Exclude original decisions
-           (vec))
-      (catch Exception e
-        (log/debug "Decision traversal failed:" (.getMessage e))
-        []))))
-
-(defn- count-ungrounded-entries
-  "Count entries that may need verification (re-grounding).
-   Queries Chroma for entries without recent grounding timestamp.
-
-   Returns count of potentially stale entries."
-  [project-id]
-  (try
-    ;; Query decisions and conventions that might need verification
-    (let [decisions (chroma/query-entries :type "decision" :project-id project-id :limit 50)
-          conventions (chroma/query-entries :type "convention" :project-id project-id :limit 50)
-          all-entries (concat decisions conventions)
-          ;; Count entries without grounded-at or with old grounding (> 7 days)
-          now (java.time.Instant/now)
-          week-ago (.minusDays now 7)
-          needs-grounding? (fn [entry]
-                             (let [grounded-at (get-in entry [:metadata :grounded-at])]
-                               (or (nil? grounded-at)
-                                   (try
-                                     (let [grounded-inst (java.time.Instant/parse grounded-at)]
-                                       (.isBefore grounded-inst week-ago))
-                                     (catch Exception _ true)))))]
-      (count (filter needs-grounding? all-entries)))
-    (catch Exception e
-      (log/debug "Ungrounded count failed:" (.getMessage e))
-      0)))
-
-(defn- find-co-accessed-suggestions
-  "Find memory entries frequently co-accessed with the given entries.
-   Uses :co-accessed edges in the Knowledge Graph to surface related entries
-   that aren't already in the catchup result set.
-
-   Arguments:
-     entry-ids       - IDs of entries already surfaced in catchup
-     exclude-ids     - IDs to exclude from suggestions (already visible)
-
-   Returns vector of {:entry-id <id> :confidence <score>}"
-  [entry-ids exclude-ids]
-  (when (seq entry-ids)
-    (try
-      (let [excluded (set exclude-ids)
-            ;; For each entry, find co-accessed entries
-            co-accessed (->> entry-ids
-                             (mapcat (fn [eid]
-                                       (kg-edges/get-co-accessed eid)))
-                             ;; Exclude entries already in the result set
-                             (remove #(contains? excluded (:entry-id %)))
-                             ;; Group by entry-id and take max confidence
-                             (group-by :entry-id)
-                             (map (fn [[eid entries]]
-                                    {:entry-id eid
-                                     :confidence (apply max (map :confidence entries))
-                                     :co-access-count (count entries)}))
-                             ;; Sort by co-access count * confidence for relevance
-                             (sort-by (fn [{:keys [confidence co-access-count]}]
-                                        (* confidence co-access-count))
-                                      >)
-                             (take 5)
-                             vec)]
-        (when (seq co-accessed)
-          (log/debug "Found" (count co-accessed) "co-accessed suggestions"))
-        co-accessed)
-      (catch Exception e
-        (log/debug "Co-access suggestions failed:" (.getMessage e))
-        []))))
-
-(defn- extract-kg-relations
-  "Extract meaningful KG relationships from node context.
-
-   Returns map with:
-   - :supersedes - entries this replaces (outgoing :supersedes)
-   - :superseded-by - entries that replace this (incoming :supersedes)
-   - :depends-on - prerequisites (outgoing :depends-on)
-   - :depended-by - entries depending on this (incoming :depends-on)
-   - :derived-from - source materials (outgoing :derived-from)
-   - :contradicts - conflicting knowledge (both directions)"
-  [{:keys [incoming outgoing]}]
-  (let [;; Helper to extract node IDs by relation from edge list
-        extract-by-rel (fn [edges rel from?]
-                         (->> (:edges edges)
-                              (filter #(= (:kg-edge/relation %) rel))
-                              (map #(if from?
-                                      (:kg-edge/from %)
-                                      (:kg-edge/to %)))
-                              (vec)))
-        ;; Outgoing relations (this node → others)
-        supersedes (extract-by-rel outgoing :supersedes false)
-        depends-on (extract-by-rel outgoing :depends-on false)
-        derived-from (extract-by-rel outgoing :derived-from false)
-        ;; Incoming relations (others → this node)
-        superseded-by (extract-by-rel incoming :supersedes true)
-        depended-by (extract-by-rel incoming :depends-on true)
-        ;; Contradictions (both directions)
-        contradicts-out (extract-by-rel outgoing :contradicts false)
-        contradicts-in (extract-by-rel incoming :contradicts true)
-        contradicts (vec (distinct (concat contradicts-out contradicts-in)))]
-    ;; Only include non-empty relations
-    (cond-> {}
-      (seq supersedes) (assoc :supersedes supersedes)
-      (seq superseded-by) (assoc :superseded-by superseded-by)
-      (seq depends-on) (assoc :depends-on depends-on)
-      (seq depended-by) (assoc :depended-by depended-by)
-      (seq derived-from) (assoc :derived-from derived-from)
-      (seq contradicts) (assoc :contradicts contradicts))))
-
-(defn- enrich-entry-with-kg
-  "Enrich a single entry with its KG relationships.
-   Returns entry with :kg key if relationships exist."
-  [entry]
-  (try
-    (when-let [entry-id (:id entry)]
-      (let [context (kg-queries/get-node-context entry-id)
-            relations (extract-kg-relations context)]
-        (if (seq relations)
-          (assoc entry :kg relations)
-          entry)))
-    (catch Exception e
-      (log/debug "KG enrichment failed for" (:id entry) ":" (.getMessage e))
-      entry)))
-
-(defn- enrich-entries-with-kg
-  "Enrich a collection of entries with KG context.
-   Only entries with KG relationships will have :kg key added.
-
-   Returns {:entries [...] :kg-count n :warnings []}"
-  [entries]
-  (try
-    (let [enriched (mapv enrich-entry-with-kg entries)
-          kg-count (count (filter :kg enriched))]
-      (when (pos? kg-count)
-        (log/debug "Enriched" kg-count "entries with KG context"))
-      {:entries enriched
-       :kg-count kg-count})
-    (catch Exception e
-      (log/warn "KG enrichment failed:" (.getMessage e))
-      {:entries entries
-       :kg-count 0
-       :warnings [(.getMessage e)]})))
-
-(defn- gather-kg-insights
-  "Gather high-level KG insights for catchup summary.
-
-   Returns comprehensive KG context including:
-   - :edge-count - total edges in KG
-   - :by-relation - breakdown by relation type
-   - :contradictions - entries with conflicts that need attention
-   - :superseded - entries that have been replaced (may need cleanup)
-   - :dependency-chains - count of entries with dependency relationships
-   - :related-decisions - decisions connected via KG traversal
-   - :ungrounded-count - entries needing verification"
-  [decisions-meta conventions-meta sessions-meta project-id]
-  (try
-    (let [;; Always query KG stats first - gives overview even without enriched entries
-          kg-stats (kg-edges/edge-stats)
-          edge-count (:total-edges kg-stats)
-          by-relation (:by-relation kg-stats)
-
-          ;; Extract IDs for traversal
-          session-ids (mapv :id sessions-meta)
-          decision-ids (mapv :id decisions-meta)
-
-          ;; Find related entries via KG traversal
-          related-from-sessions (find-related-via-session-summaries session-ids project-id)
-          related-decisions (find-related-decisions-via-kg decision-ids project-id)
-
-          ;; Count ungrounded entries
-          ungrounded-count (count-ungrounded-entries project-id)
-
-          ;; Find entries with concerning relationships from enriched data
-          all-entries (concat decisions-meta conventions-meta)
-          contradictions (->> all-entries
-                              (filter #(seq (get-in % [:kg :contradicts])))
-                              (mapv #(select-keys % [:id :preview :kg])))
-          superseded (->> all-entries
-                          (filter #(seq (get-in % [:kg :superseded-by])))
-                          (mapv #(select-keys % [:id :preview :kg])))
-          ;; Find entries with dependencies (decision chains)
-          with-deps (->> all-entries
-                         (filter #(or (seq (get-in % [:kg :depends-on]))
-                                      (seq (get-in % [:kg :depended-by]))))
-                         (count))
-
-          ;; L1 Disc: Surface stale files (staleness > 0.5) for catchup awareness
-          stale-files (try
-                        (kg-disc/top-stale-files :n 10 :project-id project-id :threshold 0.5)
-                        (catch Exception e
-                          (log/debug "KG insights stale-files query failed:" (.getMessage e))
-                          []))]
-
-      ;; Build insights map - always include edge-count for visibility
-      (cond-> {:edge-count edge-count}
-        (seq by-relation) (assoc :by-relation by-relation)
-        (seq contradictions) (assoc :contradictions contradictions)
-        (seq superseded) (assoc :superseded superseded)
-        (pos? with-deps) (assoc :dependency-chains with-deps)
-        (seq related-from-sessions) (assoc :session-derived related-from-sessions)
-        (seq related-decisions) (assoc :related-decisions related-decisions)
-        (pos? ungrounded-count) (assoc :ungrounded-count ungrounded-count)
-        (seq stale-files) (assoc :stale-files stale-files)))
-    (catch Exception e
-      (log/warn "KG insights gathering failed:" (.getMessage e))
-      {:edge-count 0 :error (.getMessage e)})))
-
-;; =============================================================================
-;; Response Building
-;; =============================================================================
-
-(defn- build-scopes
-  "Build scope list for display.
-   HCR Wave 4: Includes descendant scope info for visibility.
-   FIX: Only includes scope:global when actually in global context,
-   not when in a project context (prevents misleading scope display)."
-  [project-name project-id]
-  (let [in-project? (and project-id (not= project-id "global"))
-        base (cond-> (if in-project? [] ["scope:global"])
-               project-name (conj (str "scope:project:" project-name))
-               (and project-id (not= project-id project-name) (not= project-id "global"))
-               (conj (str "scope:project:" project-id)))
-        ;; HCR Wave 4: Show descendant scopes in display
-        descendants (when (and project-id in-project?)
-                      (kg-scope/descendant-scopes project-id))]
-    (if (seq descendants)
-      (into base (map #(str "scope:project:" %) descendants))
-      base)))
-
-(defn- build-catchup-response
-  "Build the final catchup response structure."
-  [{:keys [project-name project-id scopes git-info permeation
-           axioms-meta priority-meta sessions-meta decisions-meta
-           conventions-meta snippets-meta expiring-meta kg-insights
-           project-tree-scan]}]
-  {:type "text"
-   :text (json/write-str
-          {:success true
-           :project (or project-name project-id "global")
-           :scopes scopes
-           :git git-info
-           :permeation permeation  ;; Auto-permeated ling wraps
-           :counts {:axioms (count axioms-meta)
-                    :priority-conventions (count priority-meta)
-                    :sessions (count sessions-meta)
-                    :decisions (count decisions-meta)
-                    :conventions (count conventions-meta)
-                    :snippets (count snippets-meta)
-                    :expiring (count expiring-meta)}
-           :axioms axioms-meta
-           :priority-conventions priority-meta
-           :context {:sessions sessions-meta
-                     :decisions decisions-meta
-                     :conventions conventions-meta
-                     :snippets snippets-meta
-                     :expiring expiring-meta}
-           ;; KG insights surface contradictions and superseded entries
-           :kg-insights kg-insights
-           ;; HCR Wave 2: Project tree staleness scan result
-           :project-tree project-tree-scan
-           :hint "AXIOMS are INVIOLABLE - follow them word-for-word. Priority conventions and axioms loaded with full content. Entries with :kg key have Knowledge Graph relationships. Use mcp_memory_get_full for other entries."})})
-
-(defn- chroma-not-configured-error
-  "Return error response when Chroma is not configured."
-  []
-  {:type "text"
-   :text (json/write-str {:success false
-                          :error "Chroma not configured"
-                          :message "Memory query requires Chroma with embedding provider"})
-   :isError true})
-
-;; =============================================================================
-;; Auto-Permeation (Architecture > LLM behavior)
-;; =============================================================================
-
-(defn- auto-permeate-wraps
-  "Automatically permeate pending ling wraps during catchup.
-
-   This ensures coordinator always gets ling learnings without explicit call.
-   Architecture-driven: catchup guarantees permeation, no LLM action required.
-
-   Returns map with :permeated count and :agents list."
-  [directory]
-  (try
-    (let [project-id (scope/get-current-project-id directory)
-          ;; Include children for hierarchical projects
-          queue-items (ds/get-unprocessed-wraps-for-hierarchy project-id)
-          processed-count (count queue-items)
-          agent-ids (mapv :wrap-queue/agent-id queue-items)]
-      ;; Mark each as processed
-      (doseq [item queue-items]
-        (ds/mark-wrap-processed! (:wrap-queue/id item)))
-      (when (pos? processed-count)
-        (log/info "catchup auto-permeated" processed-count "ling wraps from agents:" agent-ids))
-      {:permeated processed-count
-       :agents agent-ids})
-    (catch Exception e
-      (log/warn "auto-permeate failed (non-fatal):" (.getMessage e))
-      {:permeated 0 :agents [] :error (.getMessage e)})))
-
-(defn- catchup-error
-  "Return error response for catchup failures."
-  [e]
-  (log/error e "native-catchup failed")
-  {:type "text"
-   :text (json/write-str {:success false :error (.getMessage e)})
-   :isError true})
-
-;; =============================================================================
-;; Spawn Context Injection (Architecture > LLM behavior)
-;; =============================================================================
-
-(defn- format-spawn-axioms
-  "Format axioms section for spawn context markdown."
-  [axioms]
-  (when (seq axioms)
-    (let [lines (map-indexed
-                 (fn [idx ax]
-                   (format "%d. %s" (inc idx) (:content ax)))
-                 axioms)]
-      (str "### Axioms (INVIOLABLE — follow word-for-word)\n\n"
-           (str/join "\n\n" lines)
-           "\n\n"))))
-
-(defn- format-spawn-priorities
-  "Format priority conventions section for spawn context markdown."
-  [conventions]
-  (when (seq conventions)
-    (let [lines (map-indexed
-                 (fn [idx conv]
-                   (format "%d. %s" (inc idx) (:content conv)))
-                 conventions)]
-      (str "### Priority Conventions\n\n"
-           (str/join "\n\n" lines)
-           "\n\n"))))
-
-(defn- format-spawn-decisions
-  "Format active decisions section for spawn context markdown."
-  [decisions]
-  (when (seq decisions)
-    (let [lines (map (fn [d] (format "- %s" (:preview d))) decisions)]
-      (str "### Active Decisions\n\n"
-           (str/join "\n" lines)
-           "\n\n"))))
-
-(defn- format-spawn-git
-  "Format git status section for spawn context markdown."
-  [git-info]
-  (when git-info
-    (str "### Git Status\n\n"
-         (format "- **Branch**: %s\n" (or (:branch git-info) "unknown"))
-         (when (:uncommitted git-info)
-           "- **Uncommitted changes**: yes\n")
-         (format "- **Last commit**: %s\n" (or (:last-commit git-info) "unknown")))))
-
-(defn- format-spawn-stale-files
-  "Format stale files section for spawn context markdown.
-   Surfaces top-N most stale disc entities as files needing re-grounding."
-  [stale-files]
-  (when (seq stale-files)
-    (let [lines (map (fn [{:keys [path score days-since-read hash-mismatch?]}]
-                       (format "- `%s` (staleness: %.1f%s%s)"
-                               path
-                               (float score)
-                               (if days-since-read
-                                 (format ", last read %dd ago" days-since-read)
-                                 ", never read")
-                               (if hash-mismatch?
-                                 ", content changed"
-                                 "")))
-                     stale-files)]
-      (str "### Files Needing Re-Grounding (L1 Disc)\n\n"
-           (str/join "\n" lines)
-           "\n\n"))))
-
-(defn- serialize-spawn-context
-  "Serialize spawn context data to markdown string.
-   Formats as a '## Project Context (Auto-Injected)' section."
-  [{:keys [axioms priority-conventions decisions git-info project-name stale-files]}]
-  (str "## Project Context (Auto-Injected)\n\n"
-       (format "**Project**: %s\n\n" (or project-name "unknown"))
-       (format-spawn-axioms axioms)
-       (format-spawn-priorities priority-conventions)
-       (format-spawn-decisions decisions)
-       (format-spawn-stale-files stale-files)
-       (format-spawn-git git-info)))
-
-(def ^:private max-spawn-context-chars
-  "Maximum characters for spawn context injection (~3K tokens)."
-  12000)
 
 (defn spawn-context
   "Generate a compact context payload for ling spawn injection.
+   Delegates to catchup.spawn/spawn-context. See that ns for full docs."
+  ([directory] (catchup-spawn/spawn-context directory))
+  ([directory opts] (catchup-spawn/spawn-context directory opts)))
 
-   Architecture > LLM behavior: inject context at spawn time rather than
-   relying on lings to /catchup themselves.
-
-   Returns a markdown string with:
-   - Axioms (full content, INVIOLABLE)
-   - Priority conventions (full content, tagged catchup-priority)
-   - Active decisions (preview only, limited to 5)
-   - Git status (branch + last commit)
-
-   Returns nil if:
-   - Chroma not configured
-   - No relevant context found
-   - Any error occurs (graceful degradation)
-
-   CLARITY-C: Composes from existing catchup query helpers.
-   CLARITY-I: Validates payload size (< 3K tokens / ~12K chars).
-   HCR Wave 4: Uses full hierarchy scope, inherits project context from parent."
-  [directory]
-  (when (chroma/embedding-configured?)
-    (try
-      (let [project-id (scope/get-current-project-id directory)
-            project-name (get-current-project-name directory)
-
-            ;; HCR Wave 4: query-scoped-entries now uses full hierarchy scope
-            ;; so spawned lings get context from parent + child projects
-            axioms (query-axioms project-id)
-            priority-conventions (query-scoped-entries "convention" ["catchup-priority"]
-                                                       project-id 50)
-            decisions (query-scoped-entries "decision" nil project-id 50)
-            git-info (gather-git-info directory)
-
-            ;; L1 Disc: Surface top-N most stale files needing re-grounding
-            stale-files (try
-                          (kg-disc/top-stale-files :n 5 :project-id project-id)
-                          (catch Exception e
-                            (log/debug "spawn-context stale-files query failed:" (.getMessage e))
-                            []))
-
-            ;; Transform to metadata
-            axioms-meta (mapv entry->axiom-meta axioms)
-            priority-meta (mapv entry->priority-meta priority-conventions)
-            decisions-meta (mapv #(entry->catchup-meta % 80) decisions)
-
-            ;; Serialize to markdown
-            context-str (serialize-spawn-context
-                         {:axioms axioms-meta
-                          :priority-conventions priority-meta
-                          :decisions decisions-meta
-                          :stale-files stale-files
-                          :git-info git-info
-                          :project-name (or project-name project-id "global")})]
-
-        ;; CLARITY-I: Validate payload size
-        (if (> (count context-str) max-spawn-context-chars)
-          (do
-            (log/warn "spawn-context exceeds token budget:"
-                      (count context-str) "chars, truncating decisions + stale-files")
-            ;; Truncate: keep axioms + priority conventions, drop decisions + stale files
-            (serialize-spawn-context
-             {:axioms axioms-meta
-              :priority-conventions priority-meta
-              :decisions []
-              :stale-files []
-              :git-info git-info
-              :project-name (or project-name project-id "global")}))
-          context-str))
-      (catch Exception e
-        (log/warn "spawn-context failed (non-fatal):" (.getMessage e))
-        nil))))
+(defn check-grounding-freshness
+  "Check grounding freshness of top project entries.
+   Delegates to catchup.enrichment/check-grounding-freshness."
+  [project-id & [opts]]
+  (enrichment/check-grounding-freshness project-id opts))
 
 ;; =============================================================================
 ;; Main Catchup Handler
@@ -770,58 +62,58 @@
     (log/info "native-catchup: querying Chroma with project scope" {:directory directory})
     ;; Guard: early return if Chroma not configured
     (if-not (chroma/embedding-configured?)
-      (chroma-not-configured-error)
+      (fmt/chroma-not-configured-error)
       (try
         (let [project-id (scope/get-current-project-id directory)
-              project-name (get-current-project-name directory)
-              scopes (build-scopes project-name project-id)
+              project-name (catchup-scope/get-current-project-name directory)
+              scopes (fmt/build-scopes project-name project-id)
 
               ;; Query entries (use project-id for scoping, aligned with crud.clj)
-              axioms (query-axioms project-id)
-              priority-conventions (query-scoped-entries "convention" ["catchup-priority"]
-                                                         project-id 50)
-              sessions (query-scoped-entries "note" ["session-summary"] project-id 10)
-              decisions (query-scoped-entries "decision" nil project-id 50)
-              conventions (query-regular-conventions project-id
-                                                     (set (map :id axioms))
-                                                     (set (map :id priority-conventions)))
-              snippets (query-scoped-entries "snippet" nil project-id 20)
-              expiring (query-expiring-entries project-id 20)
-              git-info (gather-git-info directory)
+              axioms (catchup-scope/query-axioms project-id)
+              priority-conventions (catchup-scope/query-scoped-entries "convention" ["catchup-priority"]
+                                                                       project-id 50)
+              sessions (catchup-scope/query-scoped-entries "note" ["session-summary"] project-id 10)
+              decisions (catchup-scope/query-scoped-entries "decision" nil project-id 50)
+              conventions (catchup-scope/query-regular-conventions project-id
+                                                                   (set (map :id axioms))
+                                                                   (set (map :id priority-conventions)))
+              snippets (catchup-scope/query-scoped-entries "snippet" nil project-id 20)
+              expiring (catchup-scope/query-expiring-entries project-id 20)
+              git-info (catchup-git/gather-git-info directory)
 
               ;; Convert to metadata
-              axioms-meta (mapv entry->axiom-meta axioms)
-              priority-meta (mapv entry->priority-meta priority-conventions)
-              sessions-meta (mapv #(entry->catchup-meta % 80) sessions)
+              axioms-meta (mapv fmt/entry->axiom-meta axioms)
+              priority-meta (mapv fmt/entry->priority-meta priority-conventions)
+              sessions-meta (mapv #(fmt/entry->catchup-meta % 80) sessions)
 
               ;; Phase 2 KG Integration: Enrich decisions and conventions
               ;; This surfaces relationships like supersedes, depends-on, contradicts
-              decisions-base (mapv #(entry->catchup-meta % 80) decisions)
-              conventions-base (mapv #(entry->catchup-meta % 80) conventions)
-              decisions-enriched (:entries (enrich-entries-with-kg decisions-base))
-              conventions-enriched (:entries (enrich-entries-with-kg conventions-base))
+              decisions-base (mapv #(fmt/entry->catchup-meta % 80) decisions)
+              conventions-base (mapv #(fmt/entry->catchup-meta % 80) conventions)
+              decisions-enriched (:entries (enrichment/enrich-entries-with-kg decisions-base))
+              conventions-enriched (:entries (enrichment/enrich-entries-with-kg conventions-base))
 
               ;; Gather KG insights for high-level visibility
               ;; Pass sessions-meta and project-id for traversal queries
-              kg-insights (gather-kg-insights decisions-enriched conventions-enriched
-                                              sessions-meta project-id)
+              kg-insights (enrichment/gather-kg-insights decisions-enriched conventions-enriched
+                                                         sessions-meta project-id)
 
               ;; Phase 3: Co-access suggestions
               ;; Surface entries frequently recalled alongside current context
               all-entry-ids (mapv :id (concat axioms priority-conventions
                                               decisions conventions sessions))
-              co-access-suggestions (find-co-accessed-suggestions
+              co-access-suggestions (enrichment/find-co-accessed-suggestions
                                      all-entry-ids all-entry-ids)
               kg-insights (if (seq co-access-suggestions)
                             (assoc kg-insights :co-access-suggestions co-access-suggestions)
                             kg-insights)
 
-              snippets-meta (mapv #(entry->catchup-meta % 60) snippets)
-              expiring-meta (mapv #(entry->catchup-meta % 80) expiring)
+              snippets-meta (mapv #(fmt/entry->catchup-meta % 60) snippets)
+              expiring-meta (mapv #(fmt/entry->catchup-meta % 80) expiring)
 
               ;; Auto-permeate pending ling wraps (Architecture > LLM behavior)
               ;; This ensures coordinator always gets ling learnings without explicit call
-              permeation (auto-permeate-wraps directory)
+              permeation-result (permeation/auto-permeate-wraps directory)
 
               ;; HCR Wave 2: Check project tree staleness and rescan if needed
               ;; This ensures hierarchy is fresh for hierarchical memory scoping
@@ -831,16 +123,20 @@
                                     (log/debug "Project tree scan failed (non-fatal):" (.getMessage e))
                                     {:scanned false :error (.getMessage e)}))]
 
-          (build-catchup-response
+          (fmt/build-catchup-response
            {:project-name project-name :project-id project-id
-            :scopes scopes :git-info git-info :permeation permeation
+            :scopes scopes :git-info git-info :permeation permeation-result
             :axioms-meta axioms-meta :priority-meta priority-meta
             :sessions-meta sessions-meta :decisions-meta decisions-enriched
             :conventions-meta conventions-enriched :snippets-meta snippets-meta
             :expiring-meta expiring-meta :kg-insights kg-insights
             :project-tree-scan project-tree-scan}))
         (catch Exception e
-          (catchup-error e))))))
+          (fmt/catchup-error e))))))
+
+;; =============================================================================
+;; Wrap Handler
+;; =============================================================================
 
 (defn handle-native-wrap
   "Native Clojure wrap implementation that persists to Chroma directly.
@@ -850,7 +146,7 @@
         agent-id (:agent_id args)]
     (log/info "native-wrap: crystallizing to Chroma" {:directory directory :agent-id agent-id})
     (if-not (chroma/embedding-configured?)
-      (chroma-not-configured-error)
+      (fmt/chroma-not-configured-error)
       (try
         (let [harvested (crystal-hooks/harvest-all {:directory directory})
               result (crystal-hooks/crystallize-session harvested)

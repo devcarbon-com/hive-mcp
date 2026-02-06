@@ -98,9 +98,10 @@
 
 (def spawn-modes
   "Valid ling spawn mode values.
-   :vterm    - Spawned inside Emacs vterm buffer (default, visual)
-   :headless - Spawned as OS process without Emacs UI (stdout captured to ring buffer)"
-  #{:vterm :headless})
+   :vterm      - Spawned inside Emacs vterm buffer (default, visual)
+   :headless   - Spawned as OS process without Emacs UI (stdout captured to ring buffer)
+   :openrouter - Direct OpenRouter API calls (multi-model, no CLI needed)"
+  #{:vterm :headless :openrouter})
 
 (def ling-model-default
   "Default ling model. When set, uses Claude Code CLI."

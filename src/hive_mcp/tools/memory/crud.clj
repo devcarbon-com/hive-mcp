@@ -20,11 +20,13 @@
             [hive-mcp.tools.memory.duration :as dur]
             [hive-mcp.tools.core :refer [mcp-json mcp-error coerce-int! coerce-vec!]]
             [hive-mcp.chroma :as chroma]
+            [hive-mcp.plans :as plans]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-mcp.knowledge-graph.schema :as kg-schema]
             [hive-mcp.knowledge-graph.scope :as kg-scope]
             [hive-mcp.agent.context :as ctx]
             [clojure.data.json :as json]
+            [clojure.string :as str]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -84,15 +86,279 @@
           (create-edges kg_depends_on :depends-on)
           (create-edges kg_refines :refines)))))
 
-(defn- default-abstraction-level
-  "Return default abstraction level for entry type.
-   Levels: 4=axiom/decision, 3=convention, 2=snippet/note."
-  [type]
-  (case type
-    ("axiom" "decision") 4
-    "convention" 3
-    ("snippet" "note") 2
-    2)) ; fallback
+;; ============================================================
+;; Abstraction Level Auto-Classification (P1.5)
+;; ============================================================
+;; Three-tier classification:
+;;   Tier 1: Type-based default from kg-schema (16 types mapped)
+;;   Tier 2: Content-keyword bumping (heuristic signals)
+;;   Tier 3: L3+ similarity-based (requiring-resolve stub)
+
+(def ^:private l4-patterns
+  "Regex patterns that indicate L4 (Intent) abstraction.
+   Matches axiom/decision/principle-level language."
+  [#"(?i)\b(must\s+always|must\s+never|inviolable|non-negotiable)\b"
+   #"(?i)^#*\s*(axiom|principle|ADR)\s*[:.]\s"
+   #"(?i)\b(architectural\s+decision|design\s+rationale|strategic\s+decision)\b"
+   #"(?i)\[ax\]"])  ; axiom marker convention
+
+(def ^:private l3-patterns
+  "Regex patterns that indicate L3 (Pattern) abstraction.
+   Matches convention/idiom/pattern-level language."
+  [#"(?i)^#*\s*(pattern|convention|idiom|recipe|guideline|workflow)\s*[:.]\s"
+   #"(?i)\b(always\s+do|never\s+do|when\s+.*?,\s+(do|use)|best\s+practice)\b"
+   #"(?i)\b(anti-pattern|code\s+smell|recurring\s+(pattern|structure))\b"])
+
+(def ^:private l1-patterns
+  "Regex patterns that indicate L1 (Disc/File) abstraction.
+   Matches file-level, concrete code references."
+  [#"(?i)\b(file|path|directory):\s*\S+"
+   #"(?i)\b(git\s+commit|commit\s+hash|SHA-?256)\b"
+   #"(?i)\bat\s+line\s+\d+"
+   #"(?i)\bline\s+\d+[-\u2013]\d+\b"
+   #"(?i)\b(kondo|lint|compilation)\s+(error|warning)\b"])
+
+(defn- content-keyword-level
+  "Analyze content text for abstraction level signals.
+   Returns an integer level (1-4) if keywords suggest a level,
+   or nil if no strong signal detected.
+
+   Priority: L4 > L3 > L1 (L2 is the default, never explicitly detected).
+   Only the first matching tier wins."
+  [content]
+  (when (and content (not (str/blank? content)))
+    (let [content-str (str content)]
+      (cond
+        ;; Check L4 patterns first (highest priority bump)
+        (some #(re-find % content-str) l4-patterns) 4
+
+        ;; Check L3 patterns
+        (some #(re-find % content-str) l3-patterns) 3
+
+        ;; Check L1 patterns (downward bump)
+        (some #(re-find % content-str) l1-patterns) 1
+
+        ;; No strong signal - return nil (use type-based default)
+        :else nil))))
+
+(defn- tag-level-signal
+  "Check tags for abstraction level signals.
+   Certain tags strongly correlate with specific levels.
+   Returns integer level or nil."
+  [tags]
+  (let [tag-set (set (or tags []))]
+    (cond
+      ;; Tags that indicate L4 intent
+      (some tag-set ["axiom" "principle" "ADR" "strategic"]) 4
+
+      ;; Tags that indicate L3 patterns
+      (some tag-set ["convention" "pattern" "idiom" "best-practice"
+                     "anti-pattern" "workflow" "recipe"]) 3
+
+      ;; Tags that indicate L1 file-level
+      (some tag-set ["file-state" "kondo" "lint" "git-state"
+                     "disc" "compilation"]) 1
+
+      :else nil)))
+
+(defn- classify-abstraction-level
+  "Auto-classify abstraction level for a memory entry.
+
+   Three-tier classification (highest specificity wins):
+     1. Type-based default from kg-schema/derive-abstraction-level
+     2. Content-keyword analysis (can bump up or down)
+     3. Tag-based signal (secondary content signal)
+     4. L3+ similarity stub (requiring-resolve, IP boundary)
+
+   Bumping rules:
+     - Content keywords can bump UP (e.g., note with 'must always' -> L4)
+     - Content keywords can bump DOWN (e.g., note with 'at line 42' -> L1)
+     - Tags provide secondary signal, used when content has no signal
+     - L3+ stub can override all heuristics if available
+
+   Arguments:
+     entry-type - String type (e.g., 'decision', 'note')
+     content    - Entry content text
+     tags       - Entry tags vector
+
+   Returns:
+     Integer abstraction level 1-4"
+  [entry-type content tags]
+  (let [;; Tier 1: Type-based default from comprehensive schema map
+        type-level (kg-schema/derive-abstraction-level entry-type)
+
+        ;; Tier 2: Content keyword analysis
+        content-level (content-keyword-level content)
+
+        ;; Tier 3: Tag-based signal
+        tag-level (tag-level-signal tags)
+
+        ;; Combine: content signal > tag signal > type default
+        ;; Content bumps are always respected since they're most specific
+        heuristic-level (or content-level tag-level type-level)
+
+        ;; Tier 4: L3+ similarity-based classification (requiring-resolve stub)
+        ;; Uses requiring-resolve so L3+ functionality is optional (IP boundary)
+        l3-level (try
+                   (when-let [classify-fn
+                              (requiring-resolve
+                               'hive-mcp.knowledge-graph.similarity/classify-abstraction-level)]
+                     (classify-fn entry-type content tags heuristic-level))
+                   (catch Exception _ nil))]
+
+    ;; L3+ result overrides heuristics if available, otherwise use heuristic
+    (or l3-level heuristic-level type-level)))
+
+;; ============================================================
+;; Knowledge Gap Auto-Detection (P2.8)
+;; ============================================================
+;; Lightweight regex/keyword analysis to identify knowledge gaps
+;; in memory content. Populated automatically on memory add.
+;; L3+ stub available for deeper NLP-based gap analysis.
+
+(def ^:private max-gaps
+  "Maximum number of knowledge gaps to extract per entry."
+  10)
+
+(def ^:private max-gap-length
+  "Maximum character length for a single gap descriptor."
+  80)
+
+(defn- truncate-gap
+  "Truncate a gap descriptor to max-gap-length, preserving word boundaries."
+  [s]
+  (if (<= (count s) max-gap-length)
+    s
+    (let [truncated (subs s 0 max-gap-length)
+          last-space (.lastIndexOf truncated " ")]
+      (if (pos? last-space)
+        (str (subs truncated 0 last-space) "...")
+        (str (subs s 0 (- max-gap-length 3)) "...")))))
+
+(defn- extract-questions
+  "Extract sentences ending with question marks from content.
+   Returns vector of gap descriptors like 'question: ...'."
+  [content]
+  (->> (re-seq #"[^.!?\n]*\?" content)
+       (map str/trim)
+       (remove str/blank?)
+       (remove #(< (count %) 10))  ; Skip very short questions (e.g., just "?")
+       (mapv #(truncate-gap (str "question: " %)))))
+
+(defn- extract-todo-markers
+  "Extract TODO/TBD/FIXME/HACK/XXX markers and their context.
+   Returns vector of gap descriptors like 'todo: ...'."
+  [content]
+  (->> (re-seq #"(?i)\b(TODO|TBD|FIXME|HACK|XXX)\b[:\s]*([^\n.!?]{0,60})" content)
+       (mapv (fn [[_ marker context]]
+               (let [marker-lower (str/lower-case marker)
+                     ctx (str/trim (or context ""))]
+                 (truncate-gap
+                  (if (str/blank? ctx)
+                    (str marker-lower ": (no description)")
+                    (str marker-lower ": " ctx))))))))
+
+(def ^:private uncertainty-patterns
+  "Regex patterns for uncertainty language in content."
+  [#"(?i)\b(unclear|unknown|uncertain|unsure|undecided|unresolved)\b[:\s]*([^\n.!?]{0,60})"
+   #"(?i)\b(not\s+sure|needs?\s+investigation|needs?\s+clarification|open\s+question)\b[:\s]*([^\n.!?]{0,60})"
+   #"(?i)\b(needs?\s+to\s+be\s+determined|remains?\s+to\s+be\s+seen)\b[:\s]*([^\n.!?]{0,60})"])
+
+(defn- extract-uncertainty
+  "Extract uncertainty language from content.
+   Returns vector of gap descriptors like 'unclear: ...'."
+  [content]
+  (->> uncertainty-patterns
+       (mapcat #(re-seq % content))
+       (mapv (fn [[_ marker context]]
+               (let [marker-lower (str/lower-case (str/trim marker))
+                     ctx (str/trim (or context ""))]
+                 (truncate-gap
+                  (if (str/blank? ctx)
+                    (str "uncertain: " marker-lower)
+                    (str "uncertain: " marker-lower " " ctx))))))
+       (distinct)
+       (vec)))
+
+(def ^:private missing-patterns
+  "Regex patterns for missing/incomplete markers in content."
+  [#"(?i)\b(missing|incomplete|placeholder|stub|not\s+implemented|needs?\s+work)\b[:\s]*([^\n.!?]{0,60})"])
+
+(defn- extract-missing
+  "Extract missing/incomplete markers from content.
+   Returns vector of gap descriptors like 'missing: ...'."
+  [content]
+  (->> missing-patterns
+       (mapcat #(re-seq % content))
+       (mapv (fn [[_ marker context]]
+               (let [marker-lower (str/lower-case (str/trim marker))
+                     ctx (str/trim (or context ""))]
+                 (truncate-gap
+                  (if (str/blank? ctx)
+                    (str "missing: " marker-lower)
+                    (str "missing: " marker-lower " " ctx))))))
+       (distinct)
+       (vec)))
+
+(def ^:private assumption-patterns
+  "Regex patterns for assumption markers in content."
+  [#"(?i)\b(assuming|assumption)\b[:\s]*([^\n.!?]{0,60})"])
+
+(defn- extract-assumptions
+  "Extract assumption markers from content.
+   Returns vector of gap descriptors like 'assumption: ...'."
+  [content]
+  (->> assumption-patterns
+       (mapcat #(re-seq % content))
+       (mapv (fn [[_ marker context]]
+               (let [marker-lower (str/lower-case (str/trim marker))
+                     ctx (str/trim (or context ""))]
+                 (truncate-gap
+                  (if (str/blank? ctx)
+                    (str "assumption: " marker-lower)
+                    (str "assumption: " ctx))))))
+       (distinct)
+       (vec)))
+
+(defn- extract-knowledge-gaps
+  "Analyze content to detect knowledge gaps.
+
+   Lightweight regex/keyword analysis (L1/L2 level) that identifies:
+   1. Questions (sentences ending with ?)
+   2. TODO/TBD/FIXME/HACK/XXX markers
+   3. Uncertainty language (unclear, unknown, uncertain, etc.)
+   4. Missing/incomplete markers (missing, stub, not implemented, etc.)
+   5. Assumption markers (assuming, assumption)
+
+   Returns vector of gap descriptor strings (max 10), each ≤80 chars.
+   Returns empty vector if no gaps detected or content is nil/blank.
+
+   L3+ stub: delegates to hive-knowledge for deeper NLP-based analysis
+   when available (requiring-resolve, IP boundary)."
+  [content]
+  (if (or (nil? content) (str/blank? (str content)))
+    []
+    (let [content-str (str content)
+          ;; L1/L2: Lightweight regex extraction
+          questions    (extract-questions content-str)
+          todos        (extract-todo-markers content-str)
+          uncertainty  (extract-uncertainty content-str)
+          missing      (extract-missing content-str)
+          assumptions  (extract-assumptions content-str)
+          ;; Combine and deduplicate
+          all-gaps (->> (concat questions todos uncertainty missing assumptions)
+                        (distinct)
+                        (take max-gaps)
+                        (vec))
+          ;; L3+ stub: deeper gap analysis via requiring-resolve (IP boundary)
+          l3-gaps (try
+                    (when-let [analyze-fn
+                               (requiring-resolve
+                                'hive-mcp.knowledge-graph.similarity/extract-knowledge-gaps)]
+                      (analyze-fn content-str all-gaps))
+                    (catch Exception _ nil))]
+      ;; L3+ result overrides L1/L2 if available
+      (or l3-gaps all-gaps))))
 
 (defn handle-add
   "Add an entry to project memory (Chroma-only storage).
@@ -126,7 +392,11 @@
             kg-depends-on-vec (coerce-vec! kg_depends_on :kg_depends_on [])
             kg-refines-vec (coerce-vec! kg_refines :kg_refines [])
             directory (or directory (ctx/current-directory))
-            abstraction-level (or abstraction_level (default-abstraction-level type))]
+            ;; P1.5: Auto-classify abstraction level from type + content + tags
+            abstraction-level (or abstraction_level
+                                  (classify-abstraction-level type content tags-vec))
+            ;; P2.8: Auto-detect knowledge gaps from content
+            knowledge-gaps (extract-knowledge-gaps content)]
         (log/info "mcp-memory-add:" type "directory:" directory "agent_id:" agent_id)
         (with-chroma
           (let [project-id (scope/get-current-project-id directory)
@@ -152,25 +422,44 @@
                     updated (chroma/update-entry! (:id existing) {:tags merged-tags})]
                 (log/info "Duplicate found, merged tags:" (:id existing))
                 (mcp-json (fmt/entry->json-alist updated)))
-              (let [entry-id (chroma/index-memory-entry!
-                              {:type type
-                               :content content
-                               :tags tags-with-scope
-                               :content-hash content-hash
-                               :duration duration-str
-                               :expires (or expires "")
-                               :project-id project-id
-                               :abstraction-level abstraction-level})
+              (let [;; Route type=plan to plans collection (OpenRouter, 4096 dims)
+                    ;; Regular types go to hive-mcp-memory (Ollama, 768 dims)
+                    plan? (= type "plan")
+                    entry-id (if plan?
+                               (plans/index-plan!
+                                {:type type
+                                 :content content
+                                 :tags tags-with-scope
+                                 :content-hash content-hash
+                                 :duration duration-str
+                                 :expires (or expires "")
+                                 :project-id project-id
+                                 :abstraction-level abstraction-level
+                                 :knowledge-gaps knowledge-gaps
+                                 :agent-id agent-id})
+                               (chroma/index-memory-entry!
+                                {:type type
+                                 :content content
+                                 :tags tags-with-scope
+                                 :content-hash content-hash
+                                 :duration duration-str
+                                 :expires (or expires "")
+                                 :project-id project-id
+                                 :abstraction-level abstraction-level
+                                 :knowledge-gaps knowledge-gaps}))
                     kg-params {:kg_implements kg-implements-vec
                                :kg_supersedes kg-supersedes-vec
                                :kg_depends_on kg-depends-on-vec
                                :kg_refines kg-refines-vec}
                     edge-ids (create-kg-edges! entry-id kg-params project-id agent-id)
-                    _ (when (seq edge-ids)
+                    _ (when (and (seq edge-ids) (not plan?))
                         (chroma/update-entry! entry-id {:kg-outgoing edge-ids}))
-                    created (chroma/get-entry-by-id entry-id)]
+                    created (if plan?
+                              (plans/get-plan entry-id)
+                              (chroma/get-entry-by-id entry-id))]
                 (log/info "Created memory entry:" entry-id
-                          (when (seq edge-ids) (str " with " (count edge-ids) " KG edges")))
+                          (when (seq edge-ids) (str " with " (count edge-ids) " KG edges"))
+                          (when (seq knowledge-gaps) (str " gaps:" (count knowledge-gaps))))
                 ;; Notify Olympus Web UI of new memory entry
                 ;; Uses channel/publish! so olympus.clj subscription picks it up
                 (try
@@ -296,16 +585,51 @@
       (let [limit-val (coerce-int! limit :limit 20)]
         (with-chroma
           (let [project-id (scope/get-current-project-id directory)
-                ;; HCR Wave 4: Over-fetch more when including descendants
-                over-fetch-factor (if include-descendants? 8 5)
-                ;; Query from Chroma - DON'T filter by project-id at DB level when scope is nil
-                ;; This allows global entries to be retrieved (they have project-id: "global")
-                ;; Filtering happens in memory to include BOTH project AND global entries
-                entries (chroma/query-entries :type type
-                                              :limit (* limit-val over-fetch-factor))
-                ;; Apply scope filtering based on mode
+                in-project? (and project-id (not= project-id "global"))
+                ;; Compute visible project-ids for DB-level $in filtering
+                ;; Pushes scope filtering to Chroma, replacing over-fetch-all strategy
+                project-ids-for-db
+                (cond
+                  ;; Auto mode: visible scopes for current project
+                  (nil? scope)
+                  (let [visible (kg-scope/visible-scopes project-id)
+                        ;; Exclude "global" when in project context (scope leak fix)
+                        filtered (if in-project?
+                                   (vec (remove #(= "global" %) visible))
+                                   visible)
+                        ;; Include descendants if requested (HCR Wave 4)
+                        descendants (when include-descendants?
+                                      (kg-scope/descendant-scopes project-id))]
+                    (vec (distinct (concat filtered descendants))))
+
+                  ;; "all" mode: no DB-level filter
+                  (= scope "all")
+                  nil
+
+                  ;; "global" mode: only global entries
+                  (= scope "global")
+                  ["global"]
+
+                  ;; Specific scope: visible scopes from that scope
+                  :else
+                  (let [visible (kg-scope/visible-scopes scope)
+                        descendants (when include-descendants?
+                                      (kg-scope/descendant-scopes scope))]
+                    (vec (distinct (concat visible descendants)))))
+                ;; Route type=plan to plans collection
+                plan? (= type "plan")
+                ;; Reduced over-fetch: DB-level $in filtering means less waste
+                over-fetch-factor (if include-descendants? 4 3)
+                entries (if plan?
+                          (plans/query-plans :project-id (first project-ids-for-db)
+                                             :limit (* limit-val over-fetch-factor)
+                                             :tags tags)
+                          (chroma/query-entries :type type
+                                                :project-ids project-ids-for-db
+                                                :limit (* limit-val over-fetch-factor)))
+                ;; Safety net: apply in-memory scope filter (belt-and-suspenders)
                 scope-filtered (cond
-                                 ;; Auto mode (nil scope): include project + global
+                                 ;; Auto mode (nil scope): include project + ancestors
                                  ;; HCR Wave 4: pass include-descendants? flag
                                  (nil? scope)
                                  (apply-auto-scope-filter entries project-id include-descendants?)
@@ -389,8 +713,12 @@
      :incoming (mapv edge->json-map incoming)}))
 
 (defn handle-get-full
-  "Get full content of a memory entry by ID (Chroma-only).
+  "Get full content of a memory entry by ID.
+   Searches both hive-mcp-memory and hive-mcp-plans collections.
    Use after mcp_memory_query_metadata to fetch specific entries.
+
+   Transparent fallback: If not found in memory collection, tries plans collection.
+   This allows get-full to work regardless of which collection stores the entry.
 
    Knowledge Graph Integration:
    Automatically includes KG edges when present:
@@ -399,7 +727,9 @@
   [{:keys [id]}]
   (log/info "mcp-memory-get-full:" id)
   (with-chroma
-    (if-let [entry (chroma/get-entry-by-id id)]
+    ;; Try memory collection first, then fall back to plans collection
+    (if-let [entry (or (chroma/get-entry-by-id id)
+                       (plans/get-plan id))]
       (let [base-result (fmt/entry->json-alist entry)
             ;; Include KG edges
             {:keys [outgoing incoming]} (get-kg-edges-for-entry id)

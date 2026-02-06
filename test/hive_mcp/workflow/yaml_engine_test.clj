@@ -10,10 +10,11 @@
    - Step dependency validation and topological sort
    - Workflow lifecycle (load, validate, execute, status, cancel)
    - Error handling (CLARITY-Y: never throws)
-   - Built-in actions (echo, noop, shell, transform)"
+   - Built-in actions (echo, noop, shell, transform, mcp-call)"
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [hive-mcp.protocols.workflow :as wf]
-            [hive-mcp.workflow.yaml-engine :as engine]))
+            [hive-mcp.workflow.yaml-engine :as engine]
+            [hive-mcp.tools :as tools]))
 
 ;;; ============================================================================
 ;;; Test Fixtures
@@ -582,3 +583,192 @@ steps:
       (is (true? (:success? result)))
       (is (= "hello-data"
              (get-in result [:results "consumer" :result :received]))))))
+
+;;; ============================================================================
+;;; MCP-Call Action Tests
+;;; ============================================================================
+
+(deftest mcp-call-basic-test
+  (testing "mcp-call invokes a mock tool handler and returns result"
+    ;; Register a mock tool in hive-mcp.tools/tools for get-tool-by-name
+    (let [call-log (atom [])
+          mock-handler (fn [args]
+                         (swap! call-log conj args)
+                         {:type "text" :text (str "called with command=" (:command args))})
+          ;; Temporarily override get-tool-by-name via with-redefs
+          result (with-redefs [tools/get-tool-by-name
+                               (fn [name]
+                                 (when (= name "mock-tool")
+                                   {:name "mock-tool"
+                                    :handler mock-handler}))]
+                   (engine/execute-action :mcp-call
+                                          {:tool "mock-tool" :command "status"}
+                                          {}
+                                          {}))]
+      (is (true? (:success? result)))
+      (is (some? (:result result)))
+      ;; Handler was called exactly once
+      (is (= 1 (count @call-log)))
+      ;; Command was passed through
+      (is (= "status" (:command (first @call-log)))))))
+
+(deftest mcp-call-with-params-test
+  (testing "mcp-call passes extra params to tool handler"
+    (let [captured (atom nil)
+          mock-handler (fn [args]
+                         (reset! captured args)
+                         {:type "text" :text "ok"})
+          result (with-redefs [tools/get-tool-by-name
+                               (fn [name]
+                                 (when (= name "memory")
+                                   {:name "memory" :handler mock-handler}))]
+                   (engine/execute-action :mcp-call
+                                          {:tool "memory"
+                                           :command "query"
+                                           :params {:type "axiom" :limit 5}}
+                                          {}
+                                          {}))]
+      (is (true? (:success? result)))
+      ;; Params were merged into handler args
+      (is (= "query" (:command @captured)))
+      (is (= "axiom" (:type @captured)))
+      (is (= 5 (:limit @captured))))))
+
+(deftest mcp-call-variable-substitution-test
+  (testing "mcp-call substitutes {{vars}} in tool name, command, and params"
+    (let [captured (atom nil)
+          mock-handler (fn [args]
+                         (reset! captured args)
+                         {:type "text" :text "ok"})
+          ctx {:tool-name "session"
+               :cmd "whoami"
+               :my-dir "/home/test"}
+          result (with-redefs [tools/get-tool-by-name
+                               (fn [name]
+                                 (when (= name "session")
+                                   {:name "session" :handler mock-handler}))]
+                   (engine/execute-action :mcp-call
+                                          {:tool "{{tool-name}}"
+                                           :command "{{cmd}}"
+                                           :params {:directory "{{my-dir}}"}}
+                                          ctx
+                                          {}))]
+      (is (true? (:success? result)))
+      (is (= "whoami" (:command @captured)))
+      (is (= "/home/test" (:directory @captured))))))
+
+(deftest mcp-call-unknown-tool-test
+  (testing "mcp-call returns error for unknown tool (CLARITY-Y)"
+    (let [result (with-redefs [tools/get-tool-by-name
+                               (fn [_] nil)]
+                   (engine/execute-action :mcp-call
+                                          {:tool "nonexistent-tool"
+                                           :command "status"}
+                                          {}
+                                          {}))]
+      (is (false? (:success? result)))
+      (is (nil? (:result result)))
+      (is (some #(re-find #"Tool not found" %) (:errors result))))))
+
+(deftest mcp-call-missing-tool-arg-test
+  (testing "mcp-call returns error when :tool is missing"
+    (let [result (engine/execute-action :mcp-call
+                                        {:command "status"}
+                                        {}
+                                        {})]
+      (is (false? (:success? result)))
+      (is (some #(re-find #"requires :tool" %) (:errors result))))))
+
+(deftest mcp-call-handler-exception-test
+  (testing "mcp-call catches handler exceptions (CLARITY-Y: never throws)"
+    (let [result (with-redefs [tools/get-tool-by-name
+                               (fn [name]
+                                 (when (= name "broken")
+                                   {:name "broken"
+                                    :handler (fn [_] (throw (ex-info "boom" {})))}))]
+                   (engine/execute-action :mcp-call
+                                          {:tool "broken" :command "explode"}
+                                          {}
+                                          {}))]
+      (is (false? (:success? result)))
+      (is (some #(re-find #"mcp-call error.*boom" %) (:errors result))))))
+
+(deftest mcp-call-context-passthrough-test
+  (testing "mcp-call passes directory and agent_id from context"
+    (let [captured (atom nil)
+          mock-handler (fn [args]
+                         (reset! captured args)
+                         {:type "text" :text "ok"})
+          ctx {:directory "/home/user/project"
+               :agent_id "swarm-worker-123"}
+          result (with-redefs [tools/get-tool-by-name
+                               (fn [name]
+                                 (when (= name "session")
+                                   {:name "session" :handler mock-handler}))]
+                   (engine/execute-action :mcp-call
+                                          {:tool "session" :command "whoami"}
+                                          ctx
+                                          {}))]
+      (is (true? (:success? result)))
+      (is (= "/home/user/project" (:directory @captured)))
+      (is (= "swarm-worker-123" (:agent_id @captured))))))
+
+(deftest mcp-call-in-workflow-test
+  (testing "mcp-call works as a step within a full YAML workflow"
+    (let [captured (atom nil)
+          mock-handler (fn [args]
+                         (reset! captured args)
+                         {:type "text" :text "catchup-data"})
+          yaml-str "name: mcp-call-test
+version: '1.0'
+params:
+  project_dir: /home/test
+steps:
+  - id: setup
+    title: Setup
+    action: echo
+    args:
+      info: starting
+  - id: call-tool
+    title: Call MCP Tool
+    action: mcp-call
+    depends-on:
+      - setup
+    args:
+      tool: session
+      command: whoami
+      params:
+        directory: '{{project_dir}}'"
+          engine (make-engine)
+          wf     (load-from-yaml engine yaml-str "mcp-call-test")
+          result (with-redefs [tools/get-tool-by-name
+                               (fn [name]
+                                 (when (= name "session")
+                                   {:name "session" :handler mock-handler}))]
+                   (wf/execute-workflow engine wf {}))]
+      (is (true? (:success? result)))
+      (is (= 2 (:steps-completed result)))
+      ;; Tool was called
+      (is (some? @captured))
+      (is (= "whoami" (:command @captured)))
+      (is (= "/home/test" (:directory @captured))))))
+
+(deftest mcp-call-no-command-test
+  (testing "mcp-call works without command (some tools don't need it)"
+    (let [captured (atom nil)
+          mock-handler (fn [args]
+                         (reset! captured args)
+                         {:type "text" :text "ok"})
+          result (with-redefs [tools/get-tool-by-name
+                               (fn [name]
+                                 (when (= name "simple-tool")
+                                   {:name "simple-tool" :handler mock-handler}))]
+                   (engine/execute-action :mcp-call
+                                          {:tool "simple-tool"
+                                           :params {:key "value"}}
+                                          {}
+                                          {}))]
+      (is (true? (:success? result)))
+      ;; No :command key in captured args
+      (is (nil? (:command @captured)))
+      (is (= "value" (:key @captured))))))

@@ -172,6 +172,30 @@ When a ling finishes a task and becomes idle, the auto-wrap hook will:
   :type 'boolean
   :group 'hive-mcp-swarm-terminal)
 
+(defcustom hive-mcp-swarm-terminal-lazy-render t
+  "If non-nil, only flush process output for visible vterm buffers.
+When enabled, invisible vterm buffers skip `accept-process-output'
+during polling ticks, significantly reducing Emacs memory pressure
+when running 5+ concurrent lings.
+
+Invisible buffers are still polled at a reduced frequency controlled
+by `hive-mcp-swarm-terminal-lazy-render-interval' to maintain
+completion detection accuracy.
+
+Output is flushed immediately when a buffer becomes visible
+via `window-buffer-change-functions' hook."
+  :type 'boolean
+  :group 'hive-mcp-swarm-terminal)
+
+(defcustom hive-mcp-swarm-terminal-lazy-render-interval 10
+  "Ticks between forced flushes for invisible buffers.
+Only used when `hive-mcp-swarm-terminal-lazy-render' is non-nil.
+With default completion-poll-interval of 1.0s and this at 10,
+invisible buffers are flushed every ~10 seconds.
+Set to 1 to effectively disable lazy rendering (flush every tick)."
+  :type 'integer
+  :group 'hive-mcp-swarm-terminal)
+
 ;;;; Completion Watcher State:
 
 (defvar hive-mcp-swarm-terminal--completion-timer nil
@@ -208,6 +232,13 @@ Used to detect terminal output for activity tracking.")
 (defvar hive-mcp-swarm-terminal--wrapped-sessions (make-hash-table :test 'equal)
   "Hash of slave-id -> t for sessions that have already been auto-wrapped.
 Prevents duplicate wraps for the same session.")
+
+;;;; Lazy Render State:
+
+(defvar hive-mcp-swarm-terminal--lazy-tick-count 0
+  "Counter for lazy render ticks.
+Incremented each completion-watcher tick.
+When (mod count lazy-render-interval) is 0, invisible buffers are flushed.")
 
 ;;;; Backend Detection:
 
@@ -247,6 +278,51 @@ Prevents duplicate wraps for the same session.")
                    (throw 'found id)))
                hive-mcp-swarm--slaves)
       nil)))
+
+;;;; Lazy Render Helpers:
+
+(defun hive-mcp-swarm-terminal--buffer-visible-p (buffer)
+  "Return non-nil if BUFFER is displayed in any window across all frames."
+  (and (buffer-live-p buffer)
+       (get-buffer-window buffer t)))
+
+(defun hive-mcp-swarm-terminal--should-flush-p (buffer)
+  "Return non-nil if BUFFER should have its process output flushed.
+Always returns t when lazy rendering is disabled.
+When lazy rendering is enabled, returns t only if:
+- Buffer is visible in a window, OR
+- The lazy tick counter has reached the interval threshold."
+  (or (not hive-mcp-swarm-terminal-lazy-render)
+      (hive-mcp-swarm-terminal--buffer-visible-p buffer)
+      (zerop (mod hive-mcp-swarm-terminal--lazy-tick-count
+                  (max 1 hive-mcp-swarm-terminal-lazy-render-interval)))))
+
+(defun hive-mcp-swarm-terminal--flush-buffer (buffer)
+  "Flush pending process output for BUFFER if it should be flushed.
+Respects lazy render settings: visible buffers always flush,
+invisible buffers only flush on the lazy-tick interval.
+Returns non-nil if a flush was actually performed."
+  (when (and (buffer-live-p buffer)
+             (hive-mcp-swarm-terminal--should-flush-p buffer))
+    (when-let* ((proc (get-buffer-process buffer)))
+      (accept-process-output proc 0.01)
+      t)))
+
+(defun hive-mcp-swarm-terminal--on-window-buffer-change (frame)
+  "Flush pending output for newly-visible swarm terminal buffers in FRAME.
+Added to `window-buffer-change-functions' when lazy render is active.
+This ensures vterm buffers catch up immediately when the user focuses them,
+providing a seamless experience despite lazy rendering."
+  (when hive-mcp-swarm-terminal-lazy-render
+    (walk-windows
+     (lambda (win)
+       (let ((buf (window-buffer win)))
+         (when (buffer-live-p buf)
+           (when-let* ((proc (get-buffer-process buf)))
+             ;; Use a longer flush timeout on focus to catch up
+             ;; on accumulated output from the invisible period
+             (accept-process-output proc 0.1)))))
+     nil frame)))
 
 ;;;; Error Detection:
 
@@ -527,9 +603,8 @@ STATUS is one of:
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       ;; Flush vterm process output before inspecting buffer content
-      ;; Without this, events only fire when manually displaying the buffer
-      (when-let* ((proc (get-buffer-process buffer)))
-        (accept-process-output proc 0.01))
+      ;; Lazy render: only flush visible buffers (invisible on interval)
+      (hive-mcp-swarm-terminal--flush-buffer buffer)
       (when (and hive-mcp-swarm-terminal--working-p
                  (hive-mcp-swarm-terminal-ready-p buffer))
         ;; Transition detected: working → ready
@@ -562,9 +637,8 @@ Updates activity timestamp if output detected.
 Returns t if activity was recorded, nil otherwise."
   (when (buffer-live-p buffer)
     ;; Flush vterm process output before checking buffer size
-    ;; Without this, activity detection only works when buffer is displayed
-    (when-let* ((proc (get-buffer-process buffer)))
-      (accept-process-output proc 0.01))
+    ;; Lazy render: only flush visible buffers (invisible on interval)
+    (hive-mcp-swarm-terminal--flush-buffer buffer)
     (let* ((current-size (buffer-size buffer))
            (last-size (gethash slave-id hive-mcp-swarm-terminal--buffer-sizes 0)))
       (puthash slave-id current-size hive-mcp-swarm-terminal--buffer-sizes)
@@ -580,11 +654,17 @@ Called periodically by the completion watcher timer.
 Detects both successful completions and errors, emitting the
 appropriate auto-shout event for each.
 
-Also tracks buffer output for Layer 2 activity detection."
+Also tracks buffer output for Layer 2 activity detection.
+
+Lazy render: Increments `hive-mcp-swarm-terminal--lazy-tick-count'
+each tick. Invisible buffers are only flushed when the tick count
+is a multiple of `hive-mcp-swarm-terminal-lazy-render-interval'."
   (condition-case err
       (when (and hive-mcp-swarm-terminal-auto-shout
                  (boundp 'hive-mcp-swarm--slaves)
                  (hash-table-p hive-mcp-swarm--slaves))
+        ;; Lazy render: increment tick counter for invisible buffer polling
+        (cl-incf hive-mcp-swarm-terminal--lazy-tick-count)
         (maphash
      (lambda (slave-id slave)
        (when-let* ((buffer (plist-get slave :buffer)))
@@ -629,23 +709,35 @@ Also tracks buffer output for Layer 2 activity detection."
 
 (defun hive-mcp-swarm-terminal-start-completion-watcher (callback)
   "Start the completion watcher timer with CALLBACK.
-CALLBACK is called with (buffer slave-id duration-secs) on completion."
+CALLBACK is called with (buffer slave-id duration-secs) on completion.
+When lazy render is enabled, also registers the window-buffer-change hook
+for immediate output flush when buffers become visible."
   (hive-mcp-swarm-terminal-stop-completion-watcher)
   (setq hive-mcp-swarm-terminal--completion-callback callback)
+  (setq hive-mcp-swarm-terminal--lazy-tick-count 0)
   (setq hive-mcp-swarm-terminal--completion-timer
         (run-with-timer
          hive-mcp-swarm-terminal-completion-poll-interval
          hive-mcp-swarm-terminal-completion-poll-interval
          #'hive-mcp-swarm-terminal--completion-watcher-tick))
-  (message "[swarm-terminal] Completion watcher started (interval: %.1fs)"
-           hive-mcp-swarm-terminal-completion-poll-interval))
+  ;; Lazy render: register hook to flush output when buffers become visible
+  (when hive-mcp-swarm-terminal-lazy-render
+    (add-hook 'window-buffer-change-functions
+              #'hive-mcp-swarm-terminal--on-window-buffer-change))
+  (message "[swarm-terminal] Completion watcher started (interval: %.1fs, lazy: %s)"
+           hive-mcp-swarm-terminal-completion-poll-interval
+           (if hive-mcp-swarm-terminal-lazy-render "on" "off")))
 
 (defun hive-mcp-swarm-terminal-stop-completion-watcher ()
-  "Stop the completion watcher timer."
+  "Stop the completion watcher timer and clean up lazy render hook."
   (when hive-mcp-swarm-terminal--completion-timer
     (cancel-timer hive-mcp-swarm-terminal--completion-timer)
     (setq hive-mcp-swarm-terminal--completion-timer nil)
     (setq hive-mcp-swarm-terminal--completion-callback nil)
+    (setq hive-mcp-swarm-terminal--lazy-tick-count 0)
+    ;; Remove lazy render hook
+    (remove-hook 'window-buffer-change-functions
+                 #'hive-mcp-swarm-terminal--on-window-buffer-change)
     (message "[swarm-terminal] Completion watcher stopped")))
 
 (defun hive-mcp-swarm-terminal-reset-working-state (buffer)
@@ -747,14 +839,13 @@ indicates the coordinator needs to respond to unblock the ling."
   (condition-case err
       (when (and (boundp 'hive-mcp-swarm--slaves)
                  (hash-table-p hive-mcp-swarm--slaves))
-    ;; First pass: flush all process output so buffer content is fresh
-    ;; Without this, idle detection only works when hovering over buffers
+    ;; First pass: flush process output so buffer content is fresh
+    ;; Lazy render: only flush visible buffers (invisible on interval)
     (maphash
      (lambda (_slave-id slave)
        (when-let* ((buffer (plist-get slave :buffer)))
          (when (buffer-live-p buffer)
-           (when-let* ((proc (get-buffer-process buffer)))
-             (accept-process-output proc 0.01)))))
+           (hive-mcp-swarm-terminal--flush-buffer buffer))))
      hive-mcp-swarm--slaves)
     ;; Second pass: check for idle timeouts with fresh data
     (maphash

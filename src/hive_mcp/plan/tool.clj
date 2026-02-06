@@ -16,6 +16,7 @@
             [hive-mcp.plan.schema :as schema]
             [hive-mcp.plan.parser :as parser]
             [hive-mcp.chroma :as chroma]
+            [hive-mcp.plans :as plans]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-mcp.agent.context :as ctx]
             [clojure.data.json :as json]
@@ -203,8 +204,9 @@
     (let [directory (or directory (ctx/current-directory))
           agent-id (System/getenv "CLAUDE_SWARM_SLAVE_ID")]
 
-      ;; 1. Fetch memory entry
-      (if-let [entry (chroma/get-entry-by-id plan-memory-id)]
+      ;; 1. Fetch memory entry (try plans collection first, then memory)
+      (if-let [entry (or (plans/get-plan plan-memory-id)
+                         (chroma/get-entry-by-id plan-memory-id))]
         (let [content (:content entry)
               project-id (:project-id entry)]
 

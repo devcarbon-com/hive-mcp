@@ -216,8 +216,9 @@
      Vector of convention content strings"
   [task project-id]
   (try
-    ;; Try semantic search first
-    (let [results (chroma/search-similar task :type "convention" :limit 5)]
+    ;; Try semantic search first (filter by project at DB level)
+    (let [results (chroma/search-similar task :type "convention" :limit 5
+                                         :project-ids (when project-id [project-id]))]
       (if (seq results)
         (->> results
              (map (fn [r]

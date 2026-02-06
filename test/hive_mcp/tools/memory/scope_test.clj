@@ -14,6 +14,7 @@
    This prevents cross-project scope leaks when Emacs buffer focus
    doesn't match MCP request origin."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
+            [clojure.java.io :as io]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.knowledge-graph.scope :as kg-scope]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -329,6 +330,56 @@
               {:tags []} #{"scope:global"})))))
 
 ;; =============================================================================
+;; .hive-project.edn Preference (R1 fix: KG/memory scope unification)
+;; =============================================================================
+
+(deftest test-get-current-project-id-prefers-edn
+  (testing "Prefers :project-id from .hive-project.edn over last path segment"
+    (with-redefs [kg-scope/infer-scope-from-path (fn [_] "edn-project-id")]
+      (is (= "edn-project-id"
+             (scope/get-current-project-id "/home/user/projects/directory-name"))
+          "Should use .hive-project.edn :project-id, not 'directory-name'"))))
+
+(deftest test-get-current-project-id-edn-differs-from-dirname
+  (testing "Returns edn project-id even when directory name differs"
+    ;; This is the key fix: renamed directories use the .edn project-id
+    (with-redefs [kg-scope/infer-scope-from-path (fn [_] "canonical-name")]
+      (is (= "canonical-name"
+             (scope/get-current-project-id "/home/user/code/old-directory-name"))))))
+
+(deftest test-get-current-project-id-fallback-no-edn
+  (testing "Falls back to last path segment when no .hive-project.edn found"
+    ;; infer-scope-from-path returns "global" when no .edn found
+    (with-redefs [kg-scope/infer-scope-from-path (fn [_] "global")]
+      (is (= "directory-name"
+             (scope/get-current-project-id "/home/user/projects/directory-name"))
+          "Should fall back to last path segment when no .edn"))))
+
+(deftest test-get-current-project-id-fallback-infer-returns-nil
+  (testing "Falls back to last path segment when infer returns nil"
+    (with-redefs [kg-scope/infer-scope-from-path (fn [_] nil)]
+      (is (= "my-project"
+             (scope/get-current-project-id "/path/to/my-project"))
+          "nil from infer should trigger fallback"))))
+
+(deftest test-get-current-project-id-fallback-on-exception
+  (testing "Falls back to last path segment when infer-scope-from-path throws"
+    (with-redefs [kg-scope/infer-scope-from-path
+                  (fn [_] (throw (Exception. "disk error")))]
+      (is (= "directory-name"
+             (scope/get-current-project-id "/home/user/projects/directory-name"))
+          "Should gracefully fall back on exception"))))
+
+(deftest test-get-current-project-id-real-project-dir
+  (testing "Integration: actual project dir resolves via .hive-project.edn"
+    ;; The hive-mcp project root has .hive-project.edn with :project-id "hive-mcp"
+    (let [project-dir (System/getProperty "user.dir")]
+      ;; Only run this assertion if we're in the hive-mcp project
+      (when (.exists (io/file project-dir ".hive-project.edn"))
+        (is (= "hive-mcp" (scope/get-current-project-id project-dir))
+            "Should resolve 'hive-mcp' from .hive-project.edn, not dir name")))))
+
+;; =============================================================================
 ;; Cross-Project Leak Prevention (regression test)
 ;; =============================================================================
 
@@ -393,3 +444,137 @@
       ;; Both should return the same entries
       (is (= (set (map :tags direct-results))
              (set (map :tags hierarchy-results)))))))
+
+;; =============================================================================
+;; R3: Alias-aware Scope Resolution
+;; =============================================================================
+;; These tests verify that alias resolution is wired into the memory layer.
+;; The KG layer (scope.clj) provides resolve-project-id, reverse-alias-index,
+;; and register-project-config!. The memory layer wraps these to ensure:
+;; 1. get-current-project-id resolves aliases to canonical project-ids
+;; 2. expand-scope-tags includes alias scope tags for Chroma backward compat
+;; 3. derive-hierarchy-scope-filter includes alias scope tags
+
+(deftest test-r3-get-current-project-id-resolves-alias-from-path-segment
+  (testing "R3: Directory name that's a known alias resolves to canonical project-id"
+    ;; Scenario: directory is /path/to/emacs-mcp but emacs-mcp is alias for hive-mcp
+    (kg-scope/register-project-config! "hive-mcp" {:aliases ["emacs-mcp"]})
+    ;; No .hive-project.edn found, falls back to path segment -> alias resolution
+    (with-redefs [kg-scope/infer-scope-from-path (fn [_] "global")]
+      (is (= "hive-mcp"
+             (scope/get-current-project-id "/home/user/projects/emacs-mcp"))
+          "Should resolve alias 'emacs-mcp' to canonical 'hive-mcp'"))))
+
+(deftest test-r3-get-current-project-id-resolves-alias-from-edn
+  (testing "R3: Even .hive-project.edn project-id is alias-resolved"
+    ;; Scenario: .edn file itself has an old/aliased project-id
+    (kg-scope/register-project-config! "canonical-proj" {:aliases ["edn-alias"]})
+    (with-redefs [kg-scope/infer-scope-from-path (fn [_] "edn-alias")]
+      (is (= "canonical-proj"
+             (scope/get-current-project-id "/path/to/project"))
+          "Should resolve even edn-returned aliases to canonical"))))
+
+(deftest test-r3-get-current-project-id-canonical-unchanged
+  (testing "R3: Non-aliased project-id passes through unchanged"
+    (with-redefs [kg-scope/infer-scope-from-path (fn [_] "global")]
+      (is (= "my-project"
+             (scope/get-current-project-id "/path/to/my-project"))
+          "Non-aliased name passes through unchanged"))))
+
+(deftest test-r3-expand-scope-tags-includes-alias-tags
+  (testing "R3: Alias scope tags are included in expansion for Chroma queries"
+    (kg-scope/register-project-config! "hive-mcp" {:aliases ["emacs-mcp" "old-hive"]})
+    (let [tags (scope/expand-scope-tags "hive-mcp")]
+      ;; Canonical scope tag
+      (is (contains? tags "scope:project:hive-mcp"))
+      ;; Alias scope tags (for backward compat with old memories)
+      (is (contains? tags "scope:project:emacs-mcp")
+          "Should include alias 'emacs-mcp' scope tag")
+      (is (contains? tags "scope:project:old-hive")
+          "Should include alias 'old-hive' scope tag")
+      ;; Global
+      (is (contains? tags "scope:global")))))
+
+(deftest test-r3-expand-scope-tags-alias-in-parent-chain
+  (testing "R3: Alias tags for parent projects in hierarchy are included"
+    ;; Parent hive-mcp has alias emacs-mcp
+    (kg-scope/register-project-config! "hive-mcp" {:aliases ["emacs-mcp"]})
+    (let [tags (scope/expand-scope-tags "hive-mcp:agora")]
+      ;; Self
+      (is (contains? tags "scope:project:hive-mcp:agora"))
+      ;; Parent canonical
+      (is (contains? tags "scope:project:hive-mcp"))
+      ;; Parent alias — key R3 behavior
+      (is (contains? tags "scope:project:emacs-mcp")
+          "Should include parent's alias scope tag in child expansion")
+      ;; Global
+      (is (contains? tags "scope:global")))))
+
+(deftest test-r3-expand-scope-tags-no-aliases
+  (testing "R3: Projects without aliases work exactly as before"
+    (let [tags (scope/expand-scope-tags "simple-project")]
+      (is (contains? tags "scope:project:simple-project"))
+      (is (contains? tags "scope:global"))
+      ;; No extra alias tags — backward compatible
+      (is (= 2 (count tags))
+          "Should only have self + global when no aliases configured"))))
+
+(deftest test-r3-expand-scope-tags-queried-via-alias
+  (testing "R3: Querying via alias name also includes alias scope tags"
+    (kg-scope/register-project-config! "hive-mcp" {:aliases ["emacs-mcp"]})
+    ;; Query from the alias name — should resolve and include alias tags
+    (let [tags (scope/expand-scope-tags "emacs-mcp")]
+      ;; Canonical (resolved from alias)
+      (is (contains? tags "scope:project:hive-mcp")
+          "Should include canonical project scope tag")
+      ;; Alias scope tag (for memories stored under old name)
+      (is (contains? tags "scope:project:emacs-mcp")
+          "Should include alias scope tag for old memories")
+      ;; Global
+      (is (contains? tags "scope:global")))))
+
+(deftest test-r3-derive-hierarchy-scope-filter-includes-aliases
+  (testing "R3: derive-hierarchy-scope-filter also includes alias scope tags"
+    (kg-scope/register-project-config! "hive-mcp" {:aliases ["emacs-mcp"]})
+    (let [filter-tags (scope/derive-hierarchy-scope-filter "hive-mcp")]
+      ;; Canonical
+      (is (contains? filter-tags "scope:project:hive-mcp"))
+      ;; Alias
+      (is (contains? filter-tags "scope:project:emacs-mcp")
+          "derive-hierarchy-scope-filter should include alias tags")
+      ;; Global
+      (is (contains? filter-tags "scope:global")))))
+
+(deftest test-r3-matches-hierarchy-scopes-finds-alias-tagged-entries
+  (testing "R3: matches-hierarchy-scopes? with alias-expanded tags finds old entries"
+    (kg-scope/register-project-config! "hive-mcp" {:aliases ["emacs-mcp"]})
+    (let [expanded (scope/expand-scope-tags "hive-mcp")
+          old-entry {:tags ["scope:project:emacs-mcp"]}
+          canonical-entry {:tags ["scope:project:hive-mcp"]}
+          global-entry {:tags ["scope:global"]}
+          unrelated-entry {:tags ["scope:project:other"]}]
+      ;; Should match entries stored under alias name
+      (is (scope/matches-hierarchy-scopes? old-entry expanded)
+          "Should match entries stored under alias name 'emacs-mcp'")
+      ;; Should still match canonical entries
+      (is (scope/matches-hierarchy-scopes? canonical-entry expanded))
+      ;; Should still match global entries
+      (is (scope/matches-hierarchy-scopes? global-entry expanded))
+      ;; Should NOT match unrelated
+      (is (not (scope/matches-hierarchy-scopes? unrelated-entry expanded))))))
+
+(deftest test-r3-integration-alias-end-to-end
+  (testing "R3 Integration: full flow from directory -> project-id -> scope tags -> match"
+    (kg-scope/register-project-config! "hive-mcp" {:aliases ["emacs-mcp"]})
+    ;; Step 1: Resolve project-id from aliased directory name
+    (with-redefs [kg-scope/infer-scope-from-path (fn [_] "global")]
+      (let [project-id (scope/get-current-project-id "/path/to/emacs-mcp")]
+        (is (= "hive-mcp" project-id) "Step 1: alias resolved to canonical")
+        ;; Step 2: Expand scope tags (includes aliases)
+        (let [tags (scope/expand-scope-tags project-id)]
+          (is (contains? tags "scope:project:emacs-mcp")
+              "Step 2: alias scope tag included")
+          ;; Step 3: Match against entry stored under old name
+          (is (scope/matches-hierarchy-scopes?
+               {:tags ["scope:project:emacs-mcp"]} tags)
+              "Step 3: old alias-tagged entries are found"))))))

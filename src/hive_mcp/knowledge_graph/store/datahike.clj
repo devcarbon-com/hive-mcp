@@ -42,7 +42,7 @@
        :or {db-path default-db-path
             backend :file
             index :datahike.index/persistent-set}}]]
-  (let [store-id (or id (java.util.UUID/randomUUID))]
+  (let [store-id (or id (java.util.UUID/nameUUIDFromBytes (.getBytes "hive-mcp-kg")))]
     (case backend
       :file {:store {:backend :file
                      :path db-path
@@ -101,9 +101,13 @@
       (let [dh-schema (schema/full-schema)]
         (log/debug "Datahike schema" {:attributes (count dh-schema)})
         ;; Create database if it doesn't exist
-        ;; With :schema-flexibility :read, Datahike accepts any attributes
-        ;; Schema can be transacted later for indexing/unique constraints
+        ;; Datahike treats an existing empty directory as "store exists"
+        ;; so we remove it first to let create-database handle dir creation
         (when-not (d/database-exists? cfg)
+          (when (= :file (get-in cfg [:store :backend]))
+            (let [dir (io/file (get-in cfg [:store :path]))]
+              (when (and (.exists dir) (empty? (.listFiles dir)))
+                (.delete dir))))
           (log/info "Creating new Datahike database" {:cfg cfg})
           (d/create-database cfg))
         ;; Connect to database
