@@ -125,3 +125,17 @@
         (is (some? msg) "Should find the agent's message")
         (is (= "Message takes priority" (:m msg))
             ":message should take precedence over :task")))))
+
+(deftest piggyback-no-nil-message-when-both-nil-test
+  (testing "Bug regression: :m should never be nil, use empty string when both :task and :message are nil"
+    (piggyback/reset-all-cursors!)
+
+    ;; Shout with NEITHER :task NOR :message - this was causing {:m nil}
+    (hivemind/shout! "nil-both-agent" :started {})
+
+    (let [msgs (piggyback/get-messages "coordinator" :project-id "global")]
+      (is (seq msgs) "Should have messages")
+      (let [msg (first (filter #(= "nil-both-agent" (:a %)) msgs))]
+        (is (some? msg) "Should find the agent's message")
+        (is (string? (:m msg)) "Bug fix: :m should be a string, never nil")
+        (is (= "" (:m msg)) "Bug fix: :m should be empty string when both :task and :message are nil")))))

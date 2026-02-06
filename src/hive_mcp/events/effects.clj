@@ -749,6 +749,18 @@
                    (catch Exception e
                      (log/error "[hot-reload] Failed to refresh tool registry:" (ex-message e))))))
 
+    ;; :olympus-broadcast - Broadcast event to Olympus Web UI (port 7911)
+    ;; Sends typed events to all connected Olympus WebSocket clients.
+    ;; Uses requiring-resolve to avoid circular deps with transport.olympus.
+    ;; Expected data shape: {:type :wave-update :wave-id "..." ...}
+    (ev/reg-fx :olympus-broadcast
+               (fn [event-data]
+                 (try
+                   (when-let [broadcast-fn (requiring-resolve 'hive-mcp.transport.olympus/broadcast!)]
+                     (broadcast-fn event-data))
+                   (catch Exception e
+                     (log/debug "[EVENT] Olympus broadcast failed (non-fatal):" (.getMessage e))))))
+
     ;; ==========================================================================
     ;; Knowledge Graph Effects (delegated to kg.clj for SRP compliance)
     ;; ==========================================================================
@@ -760,7 +772,7 @@
 
     (reset! *registered true)
     (log/info "[hive-events] Coeffects registered: :now :agent-context :db-snapshot :waiting-lings :request-ctx")
-    (log/info "[hive-events] Effects registered: :shout :targeted-shout :log :ds-transact :wrap-notify :channel-publish :memory-write :report-metrics :emit-system-error :dispatch :dispatch-n :git-commit :kanban-sync :dispatch-task :swarm-send-prompt :agora/continue :kanban-move-done :wrap-crystallize :tool-registry-refresh")
+    (log/info "[hive-events] Effects registered: :shout :targeted-shout :log :ds-transact :wrap-notify :channel-publish :memory-write :report-metrics :emit-system-error :dispatch :dispatch-n :git-commit :kanban-sync :dispatch-task :swarm-send-prompt :agora/continue :kanban-move-done :wrap-crystallize :tool-registry-refresh :olympus-broadcast")
     true))
 
 (defn reset-registration!
