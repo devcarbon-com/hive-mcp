@@ -35,6 +35,7 @@
   (:require [hive-mcp.embeddings.config :as config]
             [hive-mcp.embeddings.registry :as registry]
             [hive-mcp.chroma :as chroma]
+            [hive-mcp.config :as global-config]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -250,6 +251,7 @@
    Sets up:
    - hive-mcp-memory: Ollama (fast, local, 768 dims)
    - hive-mcp-presets: OpenRouter (accurate, 4096 dims) if API key available
+   - hive-mcp-plans: OpenRouter (4096 dims) if API key available, Ollama fallback
 
    Call after init! for typical hive-mcp setup."
   []
@@ -257,13 +259,25 @@
   (configure-collection! "hive-mcp-memory" (config/ollama-config))
 
   ;; Presets use OpenRouter if available (more accurate semantic search)
-  (when (System/getenv "OPENROUTER_API_KEY")
+  (when (global-config/get-secret :openrouter-api-key)
     (try
       (configure-collection! "hive-mcp-presets" (config/openrouter-config))
       (catch Exception e
         (log/warn "Could not configure OpenRouter for presets:" (.getMessage e))
         ;; Fall back to Ollama for presets too
         (configure-collection! "hive-mcp-presets" (config/ollama-config)))))
+
+  ;; Plans use OpenRouter if available (plans are 1000-5000+ chars, exceed Ollama limit)
+  (if (global-config/get-secret :openrouter-api-key)
+    (try
+      (configure-collection! "hive-mcp-plans" (config/openrouter-config))
+      (catch Exception e
+        (log/warn "Could not configure OpenRouter for plans:" (.getMessage e))
+        (configure-collection! "hive-mcp-plans" (config/ollama-config))))
+    ;; Fallback: Ollama with truncation risk warning
+    (do
+      (configure-collection! "hive-mcp-plans" (config/ollama-config))
+      (log/warn "Plans collection using Ollama (no OPENROUTER_API_KEY) - entries >1500 chars may be truncated")))
 
   (log/info "Default embedding configuration applied:"
             (list-configured-collections)))

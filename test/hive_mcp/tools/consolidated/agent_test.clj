@@ -9,6 +9,7 @@
    5. handle-claims - Lists claims, shows ownership info"
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.data.json :as json]
+            [clojure.string :as str]
             [hive-mcp.tools.consolidated.agent :as agent]
             [hive-mcp.tools.cli :as cli]
             [hive-mcp.agent.protocol :as proto]
@@ -21,27 +22,40 @@
             [hive-mcp.swarm.logic :as logic]
             [hive-mcp.emacsclient :as ec]
             [hive-mcp.tools.swarm.core :as swarm-core]
-            [hive-mcp.events.core :as events]))
+            [hive-mcp.events.core :as events]
+            [hive-mcp.scheduler.dag-waves :as dag-waves]
+            [hive-mcp.guards :as guards]))
 
 ;; =============================================================================
 ;; Test Fixtures
 ;; =============================================================================
 
 (defn reset-swarm-state-fixture
-  "Reset swarm state for clean tests."
+  "Reset swarm state for clean tests.
+
+   Temporarily marks coordinator as stopped so conn/reset-conn! actually
+   works (it's guarded by when-not-coordinator to protect production state).
+   Restores coordinator-running? after the test."
   [f]
-  ;; Reset DataScript connection
-  (conn/reset-conn!)
-  ;; Reset logic database
-  (logic/reset-db!)
-  ;; Mock swarm-addon-available? to return false during tests
-  ;; This prevents handle-status from querying elisp for lings
-  ;; (FIX: swarm_status merge with elisp lings)
-  (with-redefs [swarm-core/swarm-addon-available? (constantly false)]
-    (f))
-  ;; Cleanup after test
-  (conn/reset-conn!)
-  (logic/reset-db!))
+  (let [was-running? (guards/coordinator-running?)]
+    ;; Temporarily disable coordinator guard so reset-conn! works
+    (when was-running? (guards/mark-coordinator-stopped!))
+    (try
+      ;; Reset DataScript connection
+      (conn/reset-conn!)
+      ;; Reset logic database
+      (logic/reset-db!)
+      ;; Mock swarm-addon-available? to return false during tests
+      ;; This prevents handle-status from querying elisp for lings
+      ;; (FIX: swarm_status merge with elisp lings)
+      (with-redefs [swarm-core/swarm-addon-available? (constantly false)]
+        (f))
+      ;; Cleanup after test
+      (conn/reset-conn!)
+      (logic/reset-db!)
+      (finally
+        ;; Restore coordinator state
+        (when was-running? (guards/mark-coordinator-running!))))))
 
 (use-fixtures :each reset-swarm-state-fixture)
 
@@ -95,8 +109,10 @@
 (deftest test-handle-spawn-ling-success
   (testing "spawn ling returns agent-id on success"
     ;; Mock elisp calls at the emacsclient level
+    ;; The vterm strategy uses (:result resp) as the slave-id, so mock must
+    ;; return the expected agent name (not a generic string like "spawned").
     (with-redefs [ec/eval-elisp-with-timeout (fn [_elisp _timeout]
-                                               {:success true :result "spawned"})]
+                                               {:success true :result "test-ling-1"})]
       (let [result (agent/handle-spawn {:type "ling"
                                         :name "test-ling-1"
                                         :cwd "/tmp/project"
@@ -134,8 +150,17 @@
 
 (deftest test-handle-spawn-auto-generates-id
   (testing "spawn auto-generates agent-id when name not provided"
-    (with-redefs [ec/eval-elisp-with-timeout (fn [_elisp _timeout]
-                                               {:success true :result "spawned"})]
+    ;; The vterm strategy uses (:result resp) as the slave-id.
+    ;; When no name is provided, the handler generates a "ling-<uuid>" id
+    ;; and passes it to elisp. The mock returns the elisp result which
+    ;; vterm strategy uses as slave-id. We capture the generated id
+    ;; from the elisp call to return it back correctly.
+    (with-redefs [ec/eval-elisp-with-timeout (fn [elisp _timeout]
+                                               ;; Extract the agent-id from the elisp spawn call
+                                               ;; Format: (hive-mcp-swarm-api-spawn "ling-xxx" ...)
+                                               (let [m (re-find #"\"(ling-[^\"]+)\"" elisp)
+                                                     agent-id (or (second m) "ling-fallback")]
+                                                 {:success true :result agent-id}))]
       (let [result (agent/handle-spawn {:type "ling" :cwd "/tmp/project"})]
         (is (not (:isError result)))
         (let [parsed (parse-response result)]
@@ -396,6 +421,7 @@
     ;; Note: Drone dispatch requires delegate-fn which isn't set in tests.
     ;; This test verifies the handler validates params and attempts dispatch.
     ;; The actual dispatch may fail, but that's different from param validation.
+    ;; We check it returns a map result (success or error) without crashing.
     (let [result (agent/handle-dispatch {:agent_id "drone-for-dispatch"
                                          :prompt "Write tests"})]
       ;; Should return a map response (success or spawn error)
@@ -404,7 +430,8 @@
       (when-not (:isError result)
         (let [parsed (parse-response result)]
           (is (:success parsed))
-          (is (string? (:task-id parsed))))))))
+          ;; task-id may be a string or a map depending on drone execution path
+          (is (some? (:task-id parsed))))))))
 
 (deftest test-handle-dispatch-default-priority
   (testing "dispatch uses normal priority by default"
@@ -564,9 +591,17 @@
     (is (contains? agent/handlers :list))))
 
 (deftest test-handlers-are-functions
-  (testing "all handlers are functions"
+  (testing "all top-level handlers are functions or nested handler maps"
     (doseq [[k v] agent/handlers]
-      (is (fn? v) (str "Handler " k " should be a function")))))
+      (is (or (fn? v) (map? v))
+          (str "Handler " k " should be a function or nested handler map"))))
+
+  (testing "nested handler maps contain only functions and :_handler"
+    (doseq [[k v] agent/handlers
+            :when (map? v)]
+      (doseq [[sub-k sub-v] v]
+        (is (fn? sub-v)
+            (str "Nested handler " k " " sub-k " should be a function"))))))
 
 ;; =============================================================================
 ;; Integration Tests (handler routing)
@@ -732,6 +767,247 @@
           "Schema should include directory param")
       (is (contains? props "force_cross_project")
           "Schema should include force_cross_project param")
-      ;; Check descriptions mention HIL/cross-project
-      (is (re-find #"cross-project" (get-in props ["force_cross_project" :description]))
-          "force_cross_project description should mention cross-project"))))
+      ;; Check descriptions mention HIL/different projects
+      (is (re-find #"(?i)different project|cross.project" (get-in props ["force_cross_project" :description]))
+          "force_cross_project description should mention cross-project or different projects"))))
+
+;; =============================================================================
+;; DAG Scheduler n-depth Subcommand Tests
+;; =============================================================================
+
+(deftest test-dag-status-via-cli
+  (testing "'dag status' routes to dag-status handler via n-depth dispatch"
+    (with-redefs [dag-waves/dag-status (fn []
+                                         {:active false
+                                          :plan-id nil
+                                          :max-slots 5
+                                          :completed 0
+                                          :failed 0
+                                          :dispatched 0
+                                          :ready 0
+                                          :completed-ids #{}
+                                          :failed-ids #{}
+                                          :dispatched-map {}
+                                          :wave-log []})]
+      (let [result (agent/handle-agent {:command "dag status"})
+            parsed (parse-response result)]
+        (is (not (:isError result))
+            (str "dag status should succeed, got: " (:text result)))
+        (is (= false (:active parsed)))
+        (is (= 5 (:max-slots parsed)))
+        (is (= 0 (:completed parsed)))))))
+
+(deftest test-dag-bare-defaults-to-status
+  (testing "'dag' alone defaults to status via _handler fallback"
+    (with-redefs [dag-waves/dag-status (fn []
+                                         {:active true
+                                          :plan-id "test-plan-123"
+                                          :max-slots 3
+                                          :completed 2
+                                          :failed 0
+                                          :dispatched 1
+                                          :ready 0
+                                          :completed-ids #{}
+                                          :failed-ids #{}
+                                          :dispatched-map {}
+                                          :wave-log []})]
+      (let [result (agent/handle-agent {:command "dag"})
+            parsed (parse-response result)]
+        (is (not (:isError result))
+            (str "bare 'dag' should default to status, got: " (:text result)))
+        (is (= true (:active parsed)))
+        (is (= "test-plan-123" (:plan-id parsed)))
+        (is (= 3 (:max-slots parsed)))))))
+
+(deftest test-dag-start-via-cli
+  (testing "'dag start' routes to dag-start handler with params"
+    (with-redefs [dag-waves/start-dag! (fn [plan-id opts]
+                                         {:started true
+                                          :plan-id plan-id
+                                          :max-slots (:max-slots opts 5)
+                                          :ready-count 3
+                                          :initial-dispatch nil})]
+      (let [result (agent/handle-agent {:command "dag start"
+                                        :plan_id "plan-abc-123"
+                                        :cwd "/tmp/test-project"
+                                        :max_slots 4})
+            parsed (parse-response result)]
+        (is (not (:isError result))
+            (str "dag start should succeed, got: " (:text result)))
+        (is (= true (:started parsed)))
+        (is (= "plan-abc-123" (:plan-id parsed)))
+        (is (= 4 (:max-slots parsed)))))))
+
+(deftest test-dag-start-validation-missing-plan-id
+  (testing "'dag start' requires plan_id"
+    (let [result (agent/handle-agent {:command "dag start"
+                                      :cwd "/tmp/test"})]
+      (is (:isError result))
+      (is (re-find #"plan_id is required" (:text result))))))
+
+(deftest test-dag-start-validation-missing-cwd
+  (testing "'dag start' requires cwd"
+    (let [result (agent/handle-agent {:command "dag start"
+                                      :plan_id "some-plan"})]
+      (is (:isError result))
+      (is (re-find #"cwd is required" (:text result))))))
+
+(deftest test-dag-stop-via-cli
+  (testing "'dag stop' routes to dag-stop handler"
+    (with-redefs [dag-waves/stop-dag! (fn []
+                                        {:stopped true
+                                         :plan-id "plan-xyz"
+                                         :completed-count 5
+                                         :failed-count 1
+                                         :dispatched-count 0
+                                         :wave-log []})]
+      (let [result (agent/handle-agent {:command "dag stop"})
+            parsed (parse-response result)]
+        (is (not (:isError result))
+            (str "dag stop should succeed, got: " (:text result)))
+        (is (= true (:stopped parsed)))
+        (is (= "plan-xyz" (:plan-id parsed)))
+        (is (= 5 (:completed-count parsed)))
+        (is (= 1 (:failed-count parsed)))))))
+
+(deftest test-dag-start-exception-handling
+  (testing "'dag start' handles scheduler exceptions gracefully"
+    (with-redefs [dag-waves/start-dag! (fn [_ _]
+                                         (throw (ex-info "DAG already active" {})))]
+      (let [result (agent/handle-agent {:command "dag start"
+                                        :plan_id "plan-123"
+                                        :cwd "/tmp/test"})]
+        (is (:isError result))
+        (is (re-find #"Failed to start DAG" (:text result)))))))
+
+(deftest test-dag-stop-exception-handling
+  (testing "'dag stop' handles scheduler exceptions gracefully"
+    (with-redefs [dag-waves/stop-dag! (fn []
+                                        (throw (ex-info "No DAG active" {})))]
+      (let [result (agent/handle-agent {:command "dag stop"})]
+        (is (:isError result))
+        (is (re-find #"Failed to stop DAG" (:text result)))))))
+
+(deftest test-dag-handlers-in-handlers-map
+  (testing "handlers map contains :dag subtree with nested handlers"
+    (is (map? (:dag agent/handlers))
+        "handlers should have :dag as a map (subtree)")
+    (is (fn? (get-in agent/handlers [:dag :start]))
+        ":dag :start should be a function")
+    (is (fn? (get-in agent/handlers [:dag :stop]))
+        ":dag :stop should be a function")
+    (is (fn? (get-in agent/handlers [:dag :status]))
+        ":dag :status should be a function")
+    (is (fn? (get-in agent/handlers [:dag :_handler]))
+        ":dag :_handler should be a function (defaults to status)")))
+
+(deftest test-help-includes-dag-subcommands
+  (testing "help output includes dag subcommands"
+    (let [result (agent/handle-agent {:command "help"})]
+      (is (not (:isError result)))
+      (is (str/includes? (:text result) "dag start")
+          "help should list 'dag start'")
+      (is (str/includes? (:text result) "dag stop")
+          "help should list 'dag stop'")
+      (is (str/includes? (:text result) "dag status")
+          "help should list 'dag status'"))))
+
+(deftest test-tool-schema-includes-dag-params
+  (testing "tool inputSchema includes dag-specific params"
+    (let [props (get-in agent/tool-def [:inputSchema :properties])]
+      (is (contains? props "plan_id")
+          "Schema should include plan_id param")
+      (is (contains? props "max_slots")
+          "Schema should include max_slots param")))
+
+  (testing "tool inputSchema enum includes dag subcommands"
+    (let [enum (get-in agent/tool-def [:inputSchema :properties "command" :enum])]
+      (is (some #(= "dag start" %) enum)
+          "command enum should include 'dag start'")
+      (is (some #(= "dag stop" %) enum)
+          "command enum should include 'dag stop'")
+      (is (some #(= "dag status" %) enum)
+          "command enum should include 'dag status'")))
+
+  (testing "tool description mentions dag"
+    (is (str/includes? (:description agent/tool-def) "dag")
+        "tool description should mention dag")))
+
+;; =============================================================================
+;; KG-Compressed Context Dispatch Tests (RefContext wiring)
+;; =============================================================================
+
+(deftest test-handle-dispatch-with-ctx-refs-creates-ref-context
+  (testing "dispatch with ctx_refs creates RefContext instead of TextContext"
+    (add-test-slave! "ling-ref-ctx" {:depth 1 :status :idle})
+
+    (let [result (agent/handle-dispatch {:agent_id "ling-ref-ctx"
+                                         :prompt "Fix the bug in core.clj"
+                                         :ctx_refs {"axioms" "ctx-ax-123"
+                                                    "decisions" "ctx-dec-456"}
+                                         :kg_node_ids ["node-A" "node-B"]
+                                         :scope "test-project"})
+          parsed (parse-response result)]
+      (is (not (:isError result))
+          (str "RefContext dispatch should succeed, got: " (:text result)))
+      (is (:success parsed))
+      (is (= "ling-ref-ctx" (:agent-id parsed)))
+      (is (string? (:task-id parsed)))
+      ;; Context type should be :ref (RefContext), not :text
+      (is (= "ref" (:context-type parsed))
+          "ctx_refs should trigger RefContext creation"))))
+
+(deftest test-handle-dispatch-without-ctx-refs-uses-text-context
+  (testing "dispatch without ctx_refs uses TextContext (backward compat)"
+    (add-test-slave! "ling-text-ctx" {:depth 1 :status :idle})
+
+    (let [result (agent/handle-dispatch {:agent_id "ling-text-ctx"
+                                         :prompt "Plain text task"})
+          parsed (parse-response result)]
+      (is (not (:isError result)))
+      (is (= "text" (:context-type parsed))
+          "No ctx_refs should use TextContext"))))
+
+(deftest test-handle-dispatch-ref-context-auto-derives-scope
+  (testing "dispatch auto-derives scope from agent's project-id when not provided"
+    (add-test-slave! "ling-auto-scope" {:depth 1 :status :idle
+                                        :project-id "derived-project"})
+
+    (let [result (agent/handle-dispatch {:agent_id "ling-auto-scope"
+                                         :prompt "Task with refs"
+                                         :ctx_refs {"axioms" "ctx-123"}})
+          parsed (parse-response result)]
+      (is (not (:isError result)))
+      ;; Should succeed with auto-derived scope
+      (is (= "ref" (:context-type parsed))))))
+
+(deftest test-handle-dispatch-ctx-refs-with-empty-map-uses-text-context
+  (testing "dispatch with empty ctx_refs map falls back to TextContext"
+    (add-test-slave! "ling-empty-refs" {:depth 1 :status :idle})
+
+    (let [result (agent/handle-dispatch {:agent_id "ling-empty-refs"
+                                         :prompt "Task with empty refs"
+                                         :ctx_refs {}})
+          parsed (parse-response result)]
+      (is (not (:isError result)))
+      (is (= "text" (:context-type parsed))
+          "Empty ctx_refs should fall back to TextContext"))))
+
+(deftest test-tool-schema-includes-ref-context-params
+  (testing "tool schema includes ctx_refs, kg_node_ids, scope params"
+    (let [props (get-in agent/tool-def [:inputSchema :properties])]
+      (is (contains? props "ctx_refs")
+          "Schema should include ctx_refs param")
+      (is (contains? props "kg_node_ids")
+          "Schema should include kg_node_ids param")
+      (is (contains? props "scope")
+          "Schema should include scope param")))
+
+  (testing "ctx_refs schema is object type"
+    (let [ctx-refs-schema (get-in agent/tool-def [:inputSchema :properties "ctx_refs"])]
+      (is (= "object" (:type ctx-refs-schema)))))
+
+  (testing "kg_node_ids schema is array of strings"
+    (let [kg-schema (get-in agent/tool-def [:inputSchema :properties "kg_node_ids"])]
+      (is (= "array" (:type kg-schema)))
+      (is (= "string" (get-in kg-schema [:items :type]))))))

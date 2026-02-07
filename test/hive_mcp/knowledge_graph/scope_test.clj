@@ -274,3 +274,242 @@
     (let [scope-name "my-project_v2.0"]
       (is (= ["my-project_v2.0" "global"]
              (scope/visible-scopes scope-name))))))
+
+;; =============================================================================
+;; HCR Wave 3: Descendant Scope Tags
+;; =============================================================================
+
+(deftest test-descendant-scope-tags-nil-scope
+  (testing "nil scope returns nil (no descendants)"
+    (is (nil? (scope/descendant-scope-tags nil)))))
+
+(deftest test-descendant-scope-tags-global-scope
+  (testing "global scope returns nil (global has no descendant concept)"
+    (is (nil? (scope/descendant-scope-tags "global")))))
+
+(deftest test-descendant-scope-tags-empty-tree
+  (testing "Project with no scanned tree returns empty set"
+    ;; With no tree scanned, descendants should be empty set
+    (is (= #{} (scope/descendant-scope-tags "unknown-project")))))
+
+(deftest test-descendant-scopes-nil-scope
+  (testing "nil scope returns nil"
+    (is (nil? (scope/descendant-scopes nil)))))
+
+(deftest test-descendant-scopes-global-scope
+  (testing "global scope returns nil"
+    (is (nil? (scope/descendant-scopes "global")))))
+
+(deftest test-descendant-scopes-empty-tree
+  (testing "Project with no scanned tree returns empty vector"
+    (is (= [] (scope/descendant-scopes "unknown-project")))))
+
+(deftest test-full-hierarchy-scope-tags-nil
+  (testing "nil scope returns just global"
+    (is (= #{"scope:global"} (scope/full-hierarchy-scope-tags nil)))))
+
+(deftest test-full-hierarchy-scope-tags-global
+  (testing "global scope returns just global"
+    (is (= #{"scope:global"} (scope/full-hierarchy-scope-tags "global")))))
+
+(deftest test-full-hierarchy-scope-tags-includes-ancestors
+  (testing "full-hierarchy includes ancestors (visible-scope-tags behavior)"
+    (let [tags (scope/full-hierarchy-scope-tags "hive-mcp:agora")]
+      ;; Should include self
+      (is (contains? tags "scope:project:hive-mcp:agora"))
+      ;; Should include parent
+      (is (contains? tags "scope:project:hive-mcp"))
+      ;; Should include global
+      (is (contains? tags "scope:global")))))
+
+;; =============================================================================
+;; Alias Resolution
+;; =============================================================================
+
+(deftest test-resolve-project-id-alias
+  (testing "Alias resolves to canonical project-id"
+    (scope/register-project-config! "hive-mcp"
+                                    {:project-id "hive-mcp"
+                                     :aliases ["emacs-mcp" "hive-emacs"]})
+    (is (= "hive-mcp" (scope/resolve-project-id "emacs-mcp")))
+    (is (= "hive-mcp" (scope/resolve-project-id "hive-emacs")))))
+
+(deftest test-resolve-project-id-canonical
+  (testing "Canonical project-id passes through unchanged"
+    (scope/register-project-config! "hive-mcp"
+                                    {:project-id "hive-mcp"
+                                     :aliases ["emacs-mcp"]})
+    (is (= "hive-mcp" (scope/resolve-project-id "hive-mcp")))))
+
+(deftest test-resolve-project-id-unknown
+  (testing "Unknown project-id passes through unchanged"
+    (is (= "unknown-project" (scope/resolve-project-id "unknown-project")))))
+
+(deftest test-resolve-project-id-nil
+  (testing "nil returns nil"
+    (is (nil? (scope/resolve-project-id nil)))))
+
+(deftest test-reverse-alias-index
+  (testing "Reverse alias index is populated by register-project-config!"
+    (scope/register-project-config! "hive-mcp"
+                                    {:project-id "hive-mcp"
+                                     :aliases ["emacs-mcp" "hive-emacs"]})
+    (let [idx (scope/get-alias-index)]
+      (is (= {"emacs-mcp" "hive-mcp"
+              "hive-emacs" "hive-mcp"} idx)))))
+
+(deftest test-reverse-alias-index-no-aliases
+  (testing "Config without aliases doesn't pollute alias index"
+    (scope/register-project-config! "simple-project"
+                                    {:project-id "simple-project"})
+    (is (= {} (scope/get-alias-index)))))
+
+(deftest test-reverse-alias-index-ignores-self-alias
+  (testing "Alias same as project-id is skipped"
+    (scope/register-project-config! "hive-mcp"
+                                    {:project-id "hive-mcp"
+                                     :aliases ["hive-mcp" "emacs-mcp"]})
+    ;; Only emacs-mcp should be indexed, not hive-mcp
+    (let [idx (scope/get-alias-index)]
+      (is (= {"emacs-mcp" "hive-mcp"} idx))
+      (is (not (contains? idx "hive-mcp"))))))
+
+(deftest test-reverse-alias-index-ignores-nil-alias
+  (testing "nil values in aliases vector are skipped"
+    (scope/register-project-config! "hive-mcp"
+                                    {:project-id "hive-mcp"
+                                     :aliases [nil "emacs-mcp" nil]})
+    (is (= {"emacs-mcp" "hive-mcp"} (scope/get-alias-index)))))
+
+(deftest test-reverse-alias-index-ignores-non-string-alias
+  (testing "Non-string values in aliases vector are skipped"
+    (scope/register-project-config! "hive-mcp"
+                                    {:project-id "hive-mcp"
+                                     :aliases [:keyword 42 "emacs-mcp"]})
+    (is (= {"emacs-mcp" "hive-mcp"} (scope/get-alias-index)))))
+
+;; =============================================================================
+;; Alias-Aware Scope Functions
+;; =============================================================================
+
+(deftest test-visible-scopes-alias-resolves
+  (testing "visible-scopes with alias resolves to canonical and walks hierarchy"
+    (scope/register-project-config! "hive-mcp"
+                                    {:project-id "hive-mcp"
+                                     :aliases ["emacs-mcp"]})
+    ;; Querying via alias should produce same result as canonical
+    (is (= ["hive-mcp" "global"] (scope/visible-scopes "emacs-mcp")))
+    (is (= (scope/visible-scopes "hive-mcp")
+           (scope/visible-scopes "emacs-mcp")))))
+
+(deftest test-visible-scope-tags-alias-resolves
+  (testing "visible-scope-tags with alias uses canonical project-id in tags"
+    (scope/register-project-config! "hive-mcp"
+                                    {:project-id "hive-mcp"
+                                     :aliases ["emacs-mcp"]})
+    (is (= #{"scope:project:hive-mcp" "scope:global"}
+           (scope/visible-scope-tags "emacs-mcp")))))
+
+(deftest test-get-parent-scope-alias-resolves
+  (testing "get-parent-scope with alias resolves to canonical first"
+    (scope/register-project-config! "hive-mcp"
+                                    {:project-id "hive-mcp"
+                                     :parent-id "parent-org"
+                                     :aliases ["emacs-mcp"]})
+    ;; Alias should resolve, then find parent from canonical config
+    (is (= "parent-org" (scope/get-parent-scope "emacs-mcp")))
+    (is (= (scope/get-parent-scope "hive-mcp")
+           (scope/get-parent-scope "emacs-mcp")))))
+
+(deftest test-scope-contains-alias-resolves
+  (testing "scope-contains? with alias resolves both sides"
+    (scope/register-project-config! "hive-mcp"
+                                    {:project-id "hive-mcp"
+                                     :aliases ["emacs-mcp"]})
+    ;; Alias = canonical (same scope after resolution)
+    (is (scope/scope-contains? "hive-mcp" "emacs-mcp"))
+    (is (scope/scope-contains? "emacs-mcp" "hive-mcp"))
+    ;; Global contains alias
+    (is (scope/scope-contains? "global" "emacs-mcp"))))
+
+(deftest test-get-project-config-via-alias
+  (testing "get-project-config returns canonical config when queried by alias"
+    (scope/register-project-config! "hive-mcp"
+                                    {:project-id "hive-mcp"
+                                     :aliases ["emacs-mcp"]
+                                     :kg-backend :datahike})
+    (let [config (scope/get-project-config "emacs-mcp")]
+      (is (some? config))
+      (is (= "hive-mcp" (:project-id config)))
+      (is (= :datahike (:kg-backend config))))))
+
+;; =============================================================================
+;; Deregister and Cleanup
+;; =============================================================================
+
+(deftest test-deregister-removes-config-and-aliases
+  (testing "deregister-project-config! removes config and all alias mappings"
+    (scope/register-project-config! "hive-mcp"
+                                    {:project-id "hive-mcp"
+                                     :aliases ["emacs-mcp" "hive-emacs"]})
+    ;; Verify registered
+    (is (some? (scope/get-project-config "hive-mcp")))
+    (is (= 2 (count (scope/get-alias-index))))
+    ;; Deregister
+    (scope/deregister-project-config! "hive-mcp")
+    ;; Verify removed
+    (is (nil? (scope/get-project-config "hive-mcp")))
+    (is (= {} (scope/get-alias-index)))
+    ;; Alias no longer resolves
+    (is (= "emacs-mcp" (scope/resolve-project-id "emacs-mcp")))))
+
+(deftest test-deregister-nil-is-noop
+  (testing "deregister-project-config! with nil is safe noop"
+    (scope/deregister-project-config! nil)
+    (is (= {} (scope/get-alias-index)))))
+
+(deftest test-clear-config-cache-resets-all
+  (testing "clear-config-cache! resets config cache, project configs, and alias index"
+    (scope/register-project-config! "hive-mcp"
+                                    {:project-id "hive-mcp"
+                                     :aliases ["emacs-mcp"]})
+    ;; Verify populated
+    (is (some? (scope/get-project-config "hive-mcp")))
+    (is (= 1 (count (scope/get-alias-index))))
+    ;; Clear all
+    (scope/clear-config-cache!)
+    ;; Verify empty
+    (is (nil? (scope/get-project-config "hive-mcp")))
+    (is (= {} (scope/get-alias-index)))))
+
+;; =============================================================================
+;; Multi-Project Alias Scenarios
+;; =============================================================================
+
+(deftest test-multiple-projects-with-aliases
+  (testing "Multiple projects each with their own aliases"
+    (scope/register-project-config! "hive-mcp"
+                                    {:project-id "hive-mcp"
+                                     :aliases ["emacs-mcp"]})
+    (scope/register-project-config! "my-app"
+                                    {:project-id "my-app"
+                                     :aliases ["my-app-old" "my-app-v1"]})
+    ;; Each alias resolves to its own canonical
+    (is (= "hive-mcp" (scope/resolve-project-id "emacs-mcp")))
+    (is (= "my-app" (scope/resolve-project-id "my-app-old")))
+    (is (= "my-app" (scope/resolve-project-id "my-app-v1")))
+    ;; Index has all mappings
+    (is (= 3 (count (scope/get-alias-index))))))
+
+(deftest test-alias-with-explicit-parent
+  (testing "Alias resolves correctly with explicit parent chain"
+    (scope/register-project-config! "parent-org" {:project-id "parent-org"})
+    (scope/register-project-config! "child-project"
+                                    {:project-id "child-project"
+                                     :parent-id "parent-org"
+                                     :aliases ["child-old-name"]})
+    ;; Querying visible-scopes via alias should walk the full chain
+    (is (= ["child-project" "parent-org" "global"]
+           (scope/visible-scopes "child-old-name")))
+    ;; Parent should contain the alias (resolves to child)
+    (is (scope/scope-contains? "parent-org" "child-old-name"))))

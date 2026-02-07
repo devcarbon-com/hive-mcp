@@ -73,3 +73,54 @@
     (is (not (migration/hash-scope? "sisf-caixa-fe")))
     (is (not (migration/hash-scope? "hive-mcp")))
     (is (not (migration/hash-scope? "dotfiles")))))
+
+;; =============================================================================
+;; import-entry! Content-Hash Deduplication Tests
+;; =============================================================================
+
+(deftest test-import-entry-returns-keywords
+  (testing "import-entry! returns keyword status values"
+    ;; Test that the function returns the expected keyword statuses
+    ;; :imported, :skipped-hash, or :skipped-id
+    (with-redefs [hive-mcp.chroma/find-duplicate (constantly nil)
+                  hive-mcp.chroma/get-entry-by-id (constantly nil)
+                  hive-mcp.chroma/content-hash (constantly "abc123")
+                  hive-mcp.chroma/index-memory-entry! (constantly "test-id")]
+      (let [import-entry! (var-get #'hive-mcp.tools.memory.migration/import-entry!)
+            result (import-entry! {:id "new-id" :content "test"} "project")]
+        (is (= :imported result))))))
+
+(deftest test-import-entry-skips-duplicate-hash
+  (testing "import-entry! returns :skipped-hash for duplicate content"
+    (with-redefs [hive-mcp.chroma/find-duplicate (constantly {:id "existing"})
+                  hive-mcp.chroma/content-hash (constantly "abc123")]
+      (let [import-entry! (var-get #'hive-mcp.tools.memory.migration/import-entry!)
+            result (import-entry! {:id "new-id" :content "duplicate"} "project")]
+        (is (= :skipped-hash result))))))
+
+(deftest test-import-entry-skips-duplicate-id
+  (testing "import-entry! returns :skipped-id for duplicate ID"
+    (with-redefs [hive-mcp.chroma/find-duplicate (constantly nil)
+                  hive-mcp.chroma/get-entry-by-id (constantly {:id "existing"})
+                  hive-mcp.chroma/content-hash (constantly "abc123")]
+      (let [import-entry! (var-get #'hive-mcp.tools.memory.migration/import-entry!)
+            result (import-entry! {:id "existing" :content "test"} "project")]
+        (is (= :skipped-id result))))))
+
+(deftest test-import-entry-uses-provided-hash
+  (testing "import-entry! uses provided content-hash instead of computing"
+    (let [computed-hash (atom nil)]
+      (with-redefs [hive-mcp.chroma/find-duplicate
+                    (fn [_type hash & _]
+                      (reset! computed-hash hash)
+                      nil)
+                    hive-mcp.chroma/get-entry-by-id (constantly nil)
+                    hive-mcp.chroma/content-hash (constantly "computed-hash")
+                    hive-mcp.chroma/index-memory-entry! (constantly "test-id")]
+        (let [import-entry! (var-get #'hive-mcp.tools.memory.migration/import-entry!)]
+          ;; Entry with provided hash
+          (import-entry! {:id "e1" :content "x" :content-hash "provided-hash"} "p")
+          (is (= "provided-hash" @computed-hash))
+          ;; Entry without hash - should compute
+          (import-entry! {:id "e2" :content "y"} "p")
+          (is (= "computed-hash" @computed-hash)))))))

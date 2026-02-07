@@ -12,15 +12,26 @@
             [hive-mcp.swarm.datascript.core :as ds]))
 
 ;;; =============================================================================
+;;; Test Helpers
+;;; =============================================================================
+
+(defn- register-test-ling!
+  "Register a test ling in DataScript with depth=1 (ling tier).
+   Returns the slave-id."
+  [slave-id & {:keys [name status] :or {status :idle}}]
+  (ds/add-slave! slave-id {:name (or name slave-id)
+                           :status status
+                           :depth 1})
+  slave-id)
+
+;;; =============================================================================
 ;;; Test Fixtures
 ;;; =============================================================================
 
 (defn test-fixture [f]
-  ;; Guard: only reset if coordinator not running (TAO-adaptive)
-  (when-not (try
-              (some? @ds/conn)
-              (catch Exception _ false))
-    (ds/init-conn!))
+  ;; Reset DataScript to clean empty state before each test.
+  ;; No coordinator guard in test context — reset-conn! works.
+  (ds/reset-conn!)
   (f))
 
 (use-fixtures :each test-fixture)
@@ -59,10 +70,11 @@
 
 (deftest handle-olympus-focus-valid-ling
   (testing "Focus on valid ling ID succeeds"
+    ;; Register a ling so it exists in DataScript for focus to find
+    (register-test-ling! "ling-1")
     (let [result (olympus-tools/handle-olympus-focus {:ling-id "ling-1"})]
-      ;; Stub returns success structure
-      (is (contains? result :success))
-      (is (contains? result :focused-ling)))))
+      (is (:success result))
+      (is (= "ling-1" (:focused-ling result))))))
 
 (deftest handle-olympus-focus-by-number
   (testing "Focus by position number (1-4)"
@@ -126,9 +138,14 @@
 
 (deftest handle-olympus-tab-specific
   (testing "Jump to specific tab number"
-    (let [result (olympus-tools/handle-olympus-tab {:tab 2})]
+    ;; Register 5 lings to trigger tabbed layout:
+    ;; calculate-layout(5) => {:tabs 2 :per-tab 4}
+    ;; With 2 tabs, tab 1 (0-indexed) is a valid jump target.
+    (doseq [i (range 5)]
+      (register-test-ling! (str "tab-ling-" i)))
+    (let [result (olympus-tools/handle-olympus-tab {:tab 1})]
       (is (:success result))
-      (is (= 2 (:active-tab result))))))
+      (is (= 1 (:active-tab result))))))
 
 ;;; =============================================================================
 ;;; DataScript Integration Tests

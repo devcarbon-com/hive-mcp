@@ -4,7 +4,8 @@
    Provides functions to create, read, update, and delete edges
    between knowledge nodes (memory entries) via the IGraphStore protocol."
   (:require [hive-mcp.knowledge-graph.connection :as conn]
-            [hive-mcp.knowledge-graph.schema :as schema]))
+            [hive-mcp.knowledge-graph.schema :as schema]
+            [taoensso.timbre :as log]))
 
 (defn generate-edge-id
   "Generate a unique edge ID."
@@ -310,3 +311,285 @@
     {:total-edges (count all-edges)
      :by-relation by-relation
      :by-scope by-scope}))
+
+;; =============================================================================
+;; Edge Scope Migration
+;; =============================================================================
+
+(defn migrate-edge-scopes!
+  "Migrate all edges from one scope to another.
+
+   Queries edges with :kg-edge/scope = old-scope and batch-updates
+   their scope to new-scope via a single conn/transact! call.
+
+   Arguments:
+     old-scope - The scope string to migrate from
+     new-scope - The scope string to migrate to
+
+   Returns:
+     {:migrated <count of edges updated>
+      :old-scope old-scope
+      :new-scope new-scope}
+
+   Idempotent: calling when no old-scope edges exist returns {:migrated 0}.
+   Throws on nil or same old/new scope."
+  [old-scope new-scope]
+  (when (or (nil? old-scope) (nil? new-scope))
+    (throw (ex-info "migrate-edge-scopes! requires old-scope and new-scope"
+                    {:old-scope old-scope :new-scope new-scope})))
+  (when (= old-scope new-scope)
+    (throw (ex-info "old-scope and new-scope must be different"
+                    {:old-scope old-scope :new-scope new-scope})))
+  (let [edges (get-edges-by-scope old-scope)
+        tx-data (vec (for [edge edges
+                           :let [eid (conn/entid [:kg-edge/id (:kg-edge/id edge)])]
+                           :when eid]
+                       [:db/add eid :kg-edge/scope new-scope]))]
+    (when (seq tx-data)
+      (conn/transact! tx-data)
+      (log/info "Migrated" (count tx-data) "KG edge scopes from" old-scope "to" new-scope))
+    {:migrated (count tx-data)
+     :old-scope old-scope
+     :new-scope new-scope}))
+
+;; =============================================================================
+;; Co-Access → Depends-On Promotion (P1.6)
+;; =============================================================================
+
+(def ^:const default-promotion-threshold
+  "Minimum confidence for co-access edge promotion to :depends-on.
+   At 0.3 start + 0.1 per reinforce, 0.7 requires ~5 co-accesses."
+  0.7)
+
+(def ^:const default-promoted-confidence
+  "Confidence score for newly promoted :depends-on edges.
+   Lower than manual (1.0) since this is inferred from co-access patterns."
+  0.5)
+
+(def ^:const default-promotion-limit
+  "Maximum co-access edges to evaluate per promotion cycle.
+   Bounded to prevent long-running cycles on large graphs."
+  20)
+
+(defn- co-access-edge-promotable?
+  "Check if a co-access edge is eligible for promotion to :depends-on.
+
+   An edge is promotable when:
+   1. It is a :co-accessed relation
+   2. Its confidence >= threshold
+
+   Pure predicate — no side effects."
+  [edge threshold]
+  (and (= :co-accessed (:kg-edge/relation edge))
+       (>= (or (:kg-edge/confidence edge) 0.0) threshold)))
+
+(defn- depends-on-exists?
+  "Check if a :depends-on edge already exists between two nodes (either direction).
+   Returns true if found, false otherwise.
+
+   Checks both directions because co-access is undirected:
+   A co-accessed with B could mean A depends-on B or B depends-on A."
+  [from-id to-id]
+  (or (some? (find-edge from-id to-id :depends-on))
+      (some? (find-edge to-id from-id :depends-on))))
+
+(defn promote-co-access-edges!
+  "Promote high-confidence co-access edges to :depends-on semantic edges.
+
+   Scans co-access edges above the confidence threshold and creates
+   :depends-on edges for pairs that don't already have one.
+
+   Options:
+     :threshold  - Minimum confidence for promotion (default: 0.7)
+     :confidence - Confidence for new :depends-on edges (default: 0.5)
+     :limit      - Max edges to evaluate (default: 20)
+     :scope      - Optional scope filter for co-access edges
+     :created-by - Agent ID for attribution
+
+   Returns:
+     {:promoted   <count of new :depends-on edges created>
+      :skipped    <count of edges already having :depends-on>
+      :below      <count of edges below threshold>
+      :evaluated  <count of co-access edges checked>}
+
+   Idempotent: calling multiple times with same state produces same result.
+   Non-blocking: errors on individual edges don't stop the cycle."
+  [& [{:keys [threshold confidence limit scope created-by]
+       :or {threshold  default-promotion-threshold
+            confidence default-promoted-confidence
+            limit      default-promotion-limit}}]]
+  (let [;; Query co-access edges, optionally filtered by scope
+        co-access-edges (get-edges-by-relation :co-accessed scope)
+        ;; Sort by confidence descending to promote highest-confidence first
+        sorted-edges (->> co-access-edges
+                          (sort-by #(or (:kg-edge/confidence %) 0.0) >)
+                          (take limit))
+        ;; Track promotion results
+        results (reduce
+                 (fn [acc edge]
+                   (try
+                     (if-not (co-access-edge-promotable? edge threshold)
+                       (update acc :below inc)
+                       (let [from-id (:kg-edge/from edge)
+                             to-id (:kg-edge/to edge)]
+                         (if (depends-on-exists? from-id to-id)
+                           (update acc :skipped inc)
+                           ;; Create the promoted :depends-on edge
+                           (do
+                             (add-edge! (cond-> {:from from-id
+                                                 :to to-id
+                                                 :relation :depends-on
+                                                 :confidence confidence
+                                                 :source-type :inferred}
+                                          scope (assoc :scope scope)
+                                          created-by (assoc :created-by created-by)))
+                             (update acc :promoted inc)))))
+                     (catch Exception e
+                       (log/debug "Co-access promotion failed for edge"
+                                  (:kg-edge/id edge) ":" (.getMessage e))
+                       (update acc :errors inc))))
+                 {:promoted 0 :skipped 0 :below 0 :errors 0}
+                 sorted-edges)]
+    (when (pos? (:promoted results))
+      (log/info "Promoted" (:promoted results) "co-access edges to :depends-on"))
+    (assoc results :evaluated (count sorted-edges))))
+
+;; =============================================================================
+;; Edge Confidence Decay for Unverified Edges (P2.9)
+;; =============================================================================
+
+(def ^:const default-decay-staleness-days
+  "Minimum days since last-verified before an edge is considered stale.
+   Edges verified within this window are untouched."
+  30)
+
+(def ^:const co-access-decay-rate
+  "Confidence decay per wrap cycle for co-access edges.
+   Co-access edges are less intentional, so decay faster."
+  0.05)
+
+(def ^:const semantic-decay-rate
+  "Confidence decay per wrap cycle for semantic edges.
+   Semantic edges are more intentional (explicitly created), so decay slower."
+  0.02)
+
+(def ^:const prune-threshold
+  "Confidence below which edges are removed entirely.
+   Prevents near-zero ghost edges from accumulating."
+  0.1)
+
+(def ^:const default-decay-limit
+  "Maximum edges to evaluate per decay cycle.
+   Bounded to prevent long-running cycles on large graphs."
+  100)
+
+(def ^:private semantic-relations
+  "Relations considered semantic (intentional). Decay slower."
+  #{:implements :supersedes :refines :contradicts
+    :depends-on :derived-from :applies-to :projects-to})
+
+(defn- edge-stale?
+  "Check if an edge's last-verified timestamp is older than staleness-days.
+
+   An edge is stale when:
+   1. It has a :kg-edge/last-verified timestamp
+   2. That timestamp is older than staleness-days ago
+
+   Edges without :last-verified are considered stale (they were never verified).
+
+   Pure predicate — no side effects."
+  [edge staleness-days now-millis]
+  (let [last-verified (:kg-edge/last-verified edge)]
+    (if (nil? last-verified)
+      true ;; Never verified = stale
+      (let [verified-millis (if (instance? java.util.Date last-verified)
+                              (.getTime ^java.util.Date last-verified)
+                              0)
+            staleness-millis (* staleness-days 24 60 60 1000)]
+        (> (- now-millis verified-millis) staleness-millis)))))
+
+(defn- decay-rate-for-edge
+  "Return the decay rate for an edge based on its relation type.
+
+   Co-access edges decay at co-access-decay-rate (faster).
+   Semantic edges decay at semantic-decay-rate (slower).
+
+   Pure function — no side effects."
+  [edge]
+  (let [relation (:kg-edge/relation edge)]
+    (if (contains? semantic-relations relation)
+      semantic-decay-rate
+      co-access-decay-rate)))
+
+(defn decay-unverified-edges!
+  "Decay confidence of edges not verified within the staleness window.
+
+   Scans all edges (optionally filtered by scope), finds those with
+   :last-verified older than staleness-days, and reduces their confidence
+   by the appropriate decay rate. Edges that fall below prune-threshold
+   are removed entirely.
+
+   Options:
+     :staleness-days - Days before edge is considered stale (default: 30)
+     :limit          - Max edges to evaluate (default: 100)
+     :scope          - Optional scope filter
+     :created-by     - Agent ID for attribution in logs
+
+   Returns:
+     {:decayed  <count of edges with reduced confidence>
+      :pruned   <count of edges removed (below threshold)>
+      :fresh    <count of edges still within staleness window>
+      :evaluated <count of edges checked>}
+
+   Idempotent: calling multiple times reduces confidence incrementally.
+   Non-blocking: errors on individual edges don't stop the cycle."
+  [& [{:keys [staleness-days limit scope created-by]
+       :or {staleness-days default-decay-staleness-days
+            limit          default-decay-limit}}]]
+  (let [;; Query all edges, optionally filtered by scope
+        all-edges (if scope
+                    (get-edges-by-scope scope)
+                    (get-all-edges))
+        now-millis (System/currentTimeMillis)
+        ;; Sort by last-verified ascending (oldest first = most stale first)
+        sorted-edges (->> all-edges
+                          (sort-by (fn [e]
+                                     (if-let [lv (:kg-edge/last-verified e)]
+                                       (if (instance? java.util.Date lv)
+                                         (.getTime ^java.util.Date lv)
+                                         0)
+                                       0)))
+                          (take limit))
+        ;; Process each edge
+        results (reduce
+                 (fn [acc edge]
+                   (try
+                     (if-not (edge-stale? edge staleness-days now-millis)
+                       (update acc :fresh inc)
+                       (let [edge-id (:kg-edge/id edge)
+                             rate (decay-rate-for-edge edge)
+                             old-confidence (or (:kg-edge/confidence edge) 1.0)
+                             new-confidence (- old-confidence rate)]
+                         (if (< new-confidence prune-threshold)
+                           ;; Below threshold — prune the edge
+                           (do
+                             (remove-edge! edge-id)
+                             (log/debug "Pruned stale edge" edge-id
+                                        "confidence:" old-confidence "->" new-confidence
+                                        "relation:" (:kg-edge/relation edge))
+                             (update acc :pruned inc))
+                           ;; Still above threshold — decay confidence
+                           (do
+                             (update-edge-confidence! edge-id new-confidence)
+                             (update acc :decayed inc)))))
+                     (catch Exception e
+                       (log/debug "Edge decay failed for edge"
+                                  (:kg-edge/id edge) ":" (.getMessage e))
+                       (update acc :errors inc))))
+                 {:decayed 0 :pruned 0 :fresh 0 :errors 0}
+                 sorted-edges)]
+    (when (or (pos? (:decayed results)) (pos? (:pruned results)))
+      (log/info "Edge decay:" (:decayed results) "decayed,"
+                (:pruned results) "pruned"
+                (when created-by (str " by:" created-by))))
+    (assoc results :evaluated (count sorted-edges))))

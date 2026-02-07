@@ -15,7 +15,7 @@
    DDD: Value Objects for enums, schemas as domain contracts."
   (:require [malli.core :as m]
             [malli.error :as me]
-            [malli.generator :as mg]))
+            [clojure.string :as str]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -231,7 +231,7 @@
   (cond
     (nil? priority) :medium
     (keyword? priority) priority
-    (string? priority) (keyword (clojure.string/lower-case priority))
+    (string? priority) (keyword (str/lower-case priority))
     :else :medium))
 
 (defn normalize-estimate
@@ -240,7 +240,7 @@
   (cond
     (nil? estimate) :medium
     (keyword? estimate) estimate
-    (string? estimate) (keyword (clojure.string/lower-case estimate))
+    (string? estimate) (keyword (str/lower-case estimate))
     :else :medium))
 
 (defn normalize-step

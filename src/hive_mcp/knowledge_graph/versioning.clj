@@ -86,7 +86,9 @@
     (resolve (symbol "yggdrasil.protocols" (name protocol-fn-name)))))
 
 (defmacro with-protocol
-  "Execute body with resolved protocol function, or return default on failure."
+  "Execute body with resolved protocol function, or return default on failure.
+   Note: Introduces `pfn` binding for use in body."
+  {:clj-kondo/ignore [:unresolved-symbol]}
   [fn-name default-val & body]
   `(if-let [~'pfn (protocol-fn ~fn-name)]
      (try
@@ -440,7 +442,7 @@
      :snapshot-id  - Current commit
      :branches     - All branches"
   []
-  (if-let [sys @versioned-system]
+  (if-let [_sys @versioned-system]
     {:available true
      :system-id (system-id)
      :branch (current-branch)

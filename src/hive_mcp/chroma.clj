@@ -405,18 +405,26 @@
   "Query memory entries from Chroma with filtering.
    Options:
      :type - Filter by type (note, snippet, convention, decision)
-     :project-id - Filter by project
+     :project-id - Filter by single project (backward compat)
+     :project-ids - Filter by multiple projects using Chroma $in operator
      :limit - Max results (default: 100)
      :include-expired? - Include expired entries (default: false)
 
+   When :project-ids is provided, builds {:project-id {:$in ids}} for
+   DB-level filtering. This is more efficient than over-fetching and
+   filtering in memory, especially when project distributions are skewed.
+   :project-ids takes precedence over :project-id when both are provided.
+
    Returns seq of entry maps."
-  [& {:keys [type project-id limit include-expired?]
+  [& {:keys [type project-id project-ids limit include-expired?]
       :or {limit 100 include-expired? false}}]
   (require-embedding!)
   (let [coll (get-or-create-collection)
         where-clause (cond-> {}
                        type (assoc :type type)
-                       project-id (assoc :project-id project-id))
+                       ;; project-ids ($in) takes precedence over project-id (singular)
+                       project-ids (assoc :project-id {:$in (vec project-ids)})
+                       (and project-id (not project-ids)) (assoc :project-id project-id))
         where (when (seq where-clause) where-clause)
         results @(chroma/get coll
                              :where where
@@ -554,13 +562,20 @@
    Options:
      :limit - Max results to return (default: 10)
      :type - Filter by memory type (note, snippet, convention, decision)
+     :project-ids - Filter by multiple projects using Chroma $in operator
+
+   When :project-ids is provided, builds {:project-id {:$in ids}} for
+   DB-level filtering, reducing over-fetch needs for scoped searches.
 
    Returns seq of {:id, :document, :metadata, :distance}"
-  [query-text & {:keys [limit type] :or {limit 10}}]
+  [query-text & {:keys [limit type project-ids] :or {limit 10}}]
   (require-embedding!)
   (let [coll (get-or-create-collection)
         query-embedding (embed-text @embedding-provider query-text)
-        where-clause (when type {:type type})
+        where-clause (cond-> {}
+                       type (assoc :type type)
+                       project-ids (assoc :project-id {:$in (vec project-ids)}))
+        where-clause (when (seq where-clause) where-clause)
         results @(chroma/query coll query-embedding
                                :num-results limit
                                :where where-clause

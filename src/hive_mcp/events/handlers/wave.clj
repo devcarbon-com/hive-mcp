@@ -34,13 +34,20 @@
     :item-count 5}
 
    Produces effects:
-   - :channel-publish - Broadcast wave-started to WebSocket clients
-   - :log             - Log wave start message"
+   - :channel-publish    - Broadcast wave-started to WebSocket clients
+   - :olympus-broadcast  - Push to Olympus Web UI (port 7911)
+   - :log                - Log wave start message"
   [_coeffects [_ {:keys [plan-id wave-id item-count]}]]
   {:channel-publish {:event :wave-started
                      :data {:plan-id plan-id
                             :wave-id wave-id
                             :item-count item-count}}
+   :olympus-broadcast {:type :wave-dispatched
+                       :wave-id wave-id
+                       :plan-id plan-id
+                       :item-count item-count
+                       :status "started"
+                       :timestamp (System/currentTimeMillis)}
    :log {:level :info
          :message (str "Wave started: " wave-id " with " item-count " items")}})
 
@@ -86,12 +93,18 @@
     :wave-id \"wave-uuid\"}
 
    Produces effects:
-   - :channel-publish - Broadcast wave-item-done to WebSocket clients"
+   - :channel-publish    - Broadcast wave-item-done to WebSocket clients
+   - :olympus-broadcast  - Push task update to Olympus Web UI"
   [_coeffects [_ {:keys [item-id status wave-id]}]]
   {:channel-publish {:event :wave-item-done
                      :data {:item-id item-id
                             :status status
-                            :wave-id wave-id}}})
+                            :wave-id wave-id}}
+   :olympus-broadcast {:type :wave-task-update
+                       :wave-id wave-id
+                       :item-id item-id
+                       :status (when status (name status))
+                       :timestamp (System/currentTimeMillis)}})
 
 ;; =============================================================================
 ;; Handler: :wave/cancelled
@@ -110,14 +123,21 @@
     :message  \"Optional details\"}
 
    Produces effects:
-   - :channel-publish - Broadcast wave-cancelled to WebSocket clients
-   - :log             - Log wave cancellation message"
+   - :channel-publish    - Broadcast wave-cancelled to WebSocket clients
+   - :olympus-broadcast  - Push cancellation to Olympus Web UI
+   - :log                - Log wave cancellation message"
   [_coeffects [_ {:keys [plan-id wave-id reason message]}]]
   {:channel-publish {:event :wave-cancelled
                      :data {:plan-id plan-id
                             :wave-id wave-id
                             :reason reason
                             :message message}}
+   :olympus-broadcast {:type :wave-completed
+                       :wave-id wave-id
+                       :plan-id plan-id
+                       :status "cancelled"
+                       :reason (when reason (name reason))
+                       :timestamp (System/currentTimeMillis)}
    :log {:level :warn
          :message (str "Wave cancelled: " wave-id
                        " - reason: " (name (or reason :unknown))
@@ -139,14 +159,22 @@
     :results  {:completed N :failed M}}
 
    Produces effects:
-   - :channel-publish - Broadcast wave-complete to WebSocket clients
-   - :log             - Log wave completion message"
+   - :channel-publish    - Broadcast wave-complete to WebSocket clients
+   - :olympus-broadcast  - Push completion to Olympus Web UI
+   - :log                - Log wave completion message"
   [_coeffects [_ {:keys [plan-id wave-id results]}]]
   (let [{:keys [completed failed]} results]
     {:channel-publish {:event :wave-complete
                        :data {:plan-id plan-id
                               :wave-id wave-id
                               :results results}}
+     :olympus-broadcast {:type :wave-completed
+                         :wave-id wave-id
+                         :plan-id plan-id
+                         :completed completed
+                         :failed failed
+                         :status "completed"
+                         :timestamp (System/currentTimeMillis)}
      :log {:level :info
            :message (str "Wave complete: " wave-id
                          " - " completed " completed, " failed " failed")}}))

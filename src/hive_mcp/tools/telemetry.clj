@@ -7,7 +7,8 @@
 
    CLARITY-T: Telemetry first - enables self-observability.
    CLARITY-Y: Graceful degradation on connection failures."
-  (:require [hive-mcp.tools.core :refer [mcp-json]]
+  (:require [hive-mcp.config :as config]
+            [hive-mcp.tools.core :refer [mcp-json]]
             [clj-http.client :as http]
             [clojure.string :as str]
             [taoensso.timbre :as log]))
@@ -36,9 +37,11 @@
 ;; =============================================================================
 
 (defn- get-prometheus-url
-  "Get Prometheus URL from env or use default."
+  "Get Prometheus URL from config > env > default."
   []
-  (or (System/getenv "PROMETHEUS_URL") default-prometheus-url))
+  (config/get-service-value :prometheus :url
+                            :env "PROMETHEUS_URL"
+                            :default default-prometheus-url))
 
 (defn- query-prometheus
   "Execute a PromQL query against Prometheus.
@@ -141,9 +144,11 @@
 ;; =============================================================================
 
 (defn- get-loki-url
-  "Get Loki URL from env or use default."
+  "Get Loki URL from config > env > default."
   []
-  (or (System/getenv "LOKI_URL") default-loki-url))
+  (config/get-service-value :loki :url
+                            :env "LOKI_URL"
+                            :default default-loki-url))
 
 (defn parse-time-range
   "Parse a time range string to milliseconds.

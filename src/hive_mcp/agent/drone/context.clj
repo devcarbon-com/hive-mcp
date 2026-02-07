@@ -12,7 +12,6 @@
   (:require [hive-mcp.tools.kondo :as kondo]
             [hive-mcp.chroma :as chroma]
             [hive-mcp.knowledge-graph.disc :as kg-disc]
-            [hive-mcp.knowledge-graph.edges :as kg-edges]
             [clojure.string :as str]
             [clojure.java.io :as io]
             [taoensso.timbre :as log]))
@@ -217,8 +216,9 @@
      Vector of convention content strings"
   [task project-id]
   (try
-    ;; Try semantic search first
-    (let [results (chroma/search-similar task :type "convention" :limit 5)]
+    ;; Try semantic search first (filter by project at DB level)
+    (let [results (chroma/search-similar task :type "convention" :limit 5
+                                         :project-ids (when project-id [project-id]))]
       (if (seq results)
         (->> results
              (map (fn [r]

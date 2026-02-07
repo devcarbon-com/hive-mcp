@@ -303,6 +303,7 @@
    "guideline"  3  ; Guidelines are pattern-level
    "workflow"   3  ; Workflows are patterns
    "recipe"     3  ; Recipes are patterns
+   "plan"       4  ; Plans are intent-level (architectural plans, implementation strategies)
    })
 
 (defn derive-abstraction-level

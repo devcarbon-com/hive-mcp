@@ -17,7 +17,7 @@
 
    SOLID: Facade pattern - single tool entry point for code analysis.
    CLARITY: L - Thin adapter delegating to domain handlers."
-  (:require [hive-mcp.tools.cli :refer [make-cli-handler format-help]]
+  (:require [hive-mcp.tools.cli :refer [make-cli-handler]]
             [hive-mcp.tools.kondo :as kondo-handlers]
             [hive-mcp.tools.scc :as scc-handlers]))
 

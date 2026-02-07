@@ -19,6 +19,8 @@
             [hive-mcp.agent.context :as ctx]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.memory.duration :as dur]
+            [hive-mcp.knowledge-graph.edges :as kg-edges]
+            [hive-mcp.tools.memory.lifecycle :as lifecycle]
             [hive-mcp.chroma :as chroma]
             [clojure.data.json :as json]
             [clojure.string :as str]
@@ -432,13 +434,58 @@
                  git-commits)]
     ;; Only persist if there's actual content to save
     (if (nil? summary)
-      (do
+      (let [;; P1.6: Still run co-access promotion even when no content to crystallize
+            promotion-stats (try
+                              (kg-edges/promote-co-access-edges!
+                               {:scope project-id :created-by "crystallize-session"})
+                              (catch Exception e
+                                (log/warn "crystallize-session: co-access promotion failed (non-blocking):" (.getMessage e))
+                                {:error (.getMessage e) :promoted 0 :skipped 0 :below 0 :evaluated 0}))
+            ;; P2.9: Run edge confidence decay after promotion
+            decay-stats (try
+                          (kg-edges/decay-unverified-edges!
+                           {:scope project-id :created-by "crystallize-session"})
+                          (catch Exception e
+                            (log/warn "crystallize-session: edge decay failed (non-blocking):" (.getMessage e))
+                            {:error (.getMessage e) :decayed 0 :pruned 0 :fresh 0 :evaluated 0}))
+            ;; P2.7: Run cross-pollination auto-promotion after decay
+            ;; Bounded (limit 100), idempotent, non-blocking (errors caught inside)
+            xpoll-stats (try
+                          (lifecycle/run-cross-pollination-cycle!
+                           {:directory directory :limit 100})
+                          (catch Exception e
+                            (log/warn "crystallize-session: cross-pollination failed (non-blocking):" (.getMessage e))
+                            {:error (.getMessage e) :promoted 0 :candidates 0 :total-scanned 0}))
+            ;; P0.3: Run memory staleness decay (L2 time-decay)
+            ;; Bounded (limit 50), idempotent, non-blocking (errors caught inside)
+            memory-decay-stats (try
+                                 (lifecycle/run-decay-cycle!
+                                  {:directory directory :limit 50})
+                                 (catch Exception e
+                                   (log/warn "crystallize-session: memory decay failed (non-blocking):" (.getMessage e))
+                                   {:error (.getMessage e) :decayed 0 :expired 0 :total-scanned 0}))]
         (log/info "No content to crystallize for session:" (crystal/session-id))
+        (when (pos? (:promoted promotion-stats 0))
+          (log/info "Co-access promotion (no-content path): promoted" (:promoted promotion-stats)
+                    "edges to :depends-on"))
+        (when (or (pos? (:decayed decay-stats 0)) (pos? (:pruned decay-stats 0)))
+          (log/info "Edge decay (no-content path): decayed" (:decayed decay-stats)
+                    "pruned" (:pruned decay-stats)))
+        (when (pos? (:promoted xpoll-stats 0))
+          (log/info "Cross-pollination (no-content path): promoted" (:promoted xpoll-stats)
+                    "of" (:candidates xpoll-stats) "candidates"))
+        (when (pos? (:decayed memory-decay-stats 0))
+          (log/info "Memory decay (no-content path): decayed" (:decayed memory-decay-stats)
+                    "expired" (:expired memory-decay-stats)))
         {:skipped true
          :reason "no-content"
          :session (crystal/session-id)
          :project-id project-id
-         :stats (:summary harvested)})
+         :stats (:summary harvested)
+         :promotion-stats (select-keys promotion-stats [:promoted :skipped :below :evaluated :error])
+         :decay-stats (select-keys decay-stats [:decayed :pruned :fresh :evaluated :error])
+         :xpoll-stats (select-keys xpoll-stats [:promoted :candidates :total-scanned :error])
+         :memory-decay-stats (select-keys memory-decay-stats [:decayed :expired :total-scanned :error])})
       (let [content (:content summary)
             tags (scope/inject-project-scope (or (:tags summary) []) project-id)
             ;; Calculate expiration (short-term = 7 days)
@@ -452,14 +499,60 @@
                            :duration "short"
                            :expires (or expires "")
                            :project-id project-id
-                           :content-hash (chroma/content-hash content)})]
+                           :content-hash (chroma/content-hash content)})
+                ;; P1.6: Run co-access → depends-on promotion after summary is stored
+                ;; Bounded (limit 20), idempotent, non-blocking (errors caught inside)
+                promotion-stats (try
+                                  (kg-edges/promote-co-access-edges!
+                                   {:scope project-id :created-by "crystallize-session"})
+                                  (catch Exception e
+                                    (log/warn "crystallize-session: co-access promotion failed (non-blocking):" (.getMessage e))
+                                    {:error (.getMessage e) :promoted 0 :skipped 0 :below 0 :evaluated 0}))
+                ;; P2.9: Run edge confidence decay after promotion
+                ;; Bounded (limit 100), idempotent, non-blocking (errors caught inside)
+                decay-stats (try
+                              (kg-edges/decay-unverified-edges!
+                               {:scope project-id :created-by "crystallize-session"})
+                              (catch Exception e
+                                (log/warn "crystallize-session: edge decay failed (non-blocking):" (.getMessage e))
+                                {:error (.getMessage e) :decayed 0 :pruned 0 :fresh 0 :evaluated 0}))
+                ;; P2.7: Run cross-pollination auto-promotion after decay
+                ;; Bounded (limit 100), idempotent, non-blocking (errors caught inside)
+                xpoll-stats (try
+                              (lifecycle/run-cross-pollination-cycle!
+                               {:directory directory :limit 100})
+                              (catch Exception e
+                                (log/warn "crystallize-session: cross-pollination failed (non-blocking):" (.getMessage e))
+                                {:error (.getMessage e) :promoted 0 :candidates 0 :total-scanned 0}))
+                ;; P0.3: Run memory staleness decay (L2 time-decay)
+                ;; Bounded (limit 50), idempotent, non-blocking (errors caught inside)
+                memory-decay-stats (try
+                                     (lifecycle/run-decay-cycle!
+                                      {:directory directory :limit 50})
+                                     (catch Exception e
+                                       (log/warn "crystallize-session: memory decay failed (non-blocking):" (.getMessage e))
+                                       {:error (.getMessage e) :decayed 0 :expired 0 :total-scanned 0}))]
             (log/info "Created session summary in Chroma:" entry-id "project:" project-id)
-            ;; 2. Check for entries to promote (based on recall scores)
-            ;; TODO: Integrate with recall tracking when we have access patterns
+            (when (pos? (:promoted promotion-stats 0))
+              (log/info "Co-access promotion: promoted" (:promoted promotion-stats)
+                        "of" (:evaluated promotion-stats) "evaluated edges to :depends-on"))
+            (when (or (pos? (:decayed decay-stats 0)) (pos? (:pruned decay-stats 0)))
+              (log/info "Edge decay: decayed" (:decayed decay-stats)
+                        "pruned" (:pruned decay-stats)))
+            (when (pos? (:promoted xpoll-stats 0))
+              (log/info "Cross-pollination: promoted" (:promoted xpoll-stats)
+                        "of" (:candidates xpoll-stats) "candidates"))
+            (when (pos? (:decayed memory-decay-stats 0))
+              (log/info "Memory decay: decayed" (:decayed memory-decay-stats)
+                        "expired" (:expired memory-decay-stats)))
             {:summary-id entry-id
              :session (crystal/session-id)
              :project-id project-id
-             :stats (:summary harvested)})
+             :stats (:summary harvested)
+             :promotion-stats (select-keys promotion-stats [:promoted :skipped :below :evaluated :error])
+             :decay-stats (select-keys decay-stats [:decayed :pruned :fresh :evaluated :error])
+             :xpoll-stats (select-keys xpoll-stats [:promoted :candidates :total-scanned :error])
+             :memory-decay-stats (select-keys memory-decay-stats [:decayed :expired :total-scanned :error])})
           (catch Exception e
             (log/error e "Failed to crystallize session to Chroma")
             {:error (.getMessage e)

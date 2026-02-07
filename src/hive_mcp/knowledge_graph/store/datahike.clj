@@ -1,5 +1,5 @@
 (ns hive-mcp.knowledge-graph.store.datahike
-  "Datahike implementation of IGraphStore protocol.
+  "Datahike implementation of IKGStore protocol.
 
    Immutable, content-addressable Datalog store with time-travel capabilities.
    Data is persistent and supports branching/merging for multi-ling exploration.
@@ -12,7 +12,7 @@
    CLARITY-T: Logs backend selection, config, schema.
    CLARITY-Y: Falls back to DataScript with warning if Datahike fails."
   (:require [datahike.api :as d]
-            [hive-mcp.knowledge-graph.protocol :as proto]
+            [hive-mcp.protocols.kg :as kg]
             [hive-mcp.knowledge-graph.schema :as schema]
             [clojure.java.io :as io]
             [taoensso.timbre :as log]))
@@ -42,7 +42,7 @@
        :or {db-path default-db-path
             backend :file
             index :datahike.index/persistent-set}}]]
-  (let [store-id (or id (java.util.UUID/randomUUID))]
+  (let [store-id (or id (java.util.UUID/nameUUIDFromBytes (.getBytes "hive-mcp-kg")))]
     (case backend
       :file {:store {:backend :file
                      :path db-path
@@ -92,7 +92,7 @@
 ;; =============================================================================
 
 (defrecord DatahikeStore [conn-atom cfg]
-  proto/IGraphStore
+  kg/IKGStore
 
   (ensure-conn! [_this]
     (when (nil? @conn-atom)
@@ -101,9 +101,13 @@
       (let [dh-schema (schema/full-schema)]
         (log/debug "Datahike schema" {:attributes (count dh-schema)})
         ;; Create database if it doesn't exist
-        ;; With :schema-flexibility :read, Datahike accepts any attributes
-        ;; Schema can be transacted later for indexing/unique constraints
+        ;; Datahike treats an existing empty directory as "store exists"
+        ;; so we remove it first to let create-database handle dir creation
         (when-not (d/database-exists? cfg)
+          (when (= :file (get-in cfg [:store :backend]))
+            (let [dir (io/file (get-in cfg [:store :path]))]
+              (when (and (.exists dir) (empty? (.listFiles dir)))
+                (.delete dir))))
           (log/info "Creating new Datahike database" {:cfg cfg})
           (d/create-database cfg))
         ;; Connect to database
@@ -111,16 +115,16 @@
     @conn-atom)
 
   (transact! [this tx-data]
-    (d/transact (proto/ensure-conn! this) tx-data))
+    (d/transact (kg/ensure-conn! this) tx-data))
 
   (query [this q]
-    (d/q q (d/db (proto/ensure-conn! this))))
+    (d/q q (d/db (kg/ensure-conn! this))))
 
   (query [this q inputs]
-    (apply d/q q (d/db (proto/ensure-conn! this)) inputs))
+    (apply d/q q (d/db (kg/ensure-conn! this)) inputs))
 
   (entity [this eid]
-    (d/entity (d/db (proto/ensure-conn! this)) eid))
+    (d/entity (d/db (kg/ensure-conn! this)) eid))
 
   (entid [this lookup-ref]
     ;; Datahike doesn't have entid like DataScript, so we query for it
@@ -128,15 +132,15 @@
           results (d/q '[:find ?e .
                          :in $ ?attr ?val
                          :where [?e ?attr ?val]]
-                       (d/db (proto/ensure-conn! this))
+                       (d/db (kg/ensure-conn! this))
                        attr val)]
       results))
 
   (pull-entity [this pattern eid]
-    (d/pull (d/db (proto/ensure-conn! this)) pattern eid))
+    (d/pull (d/db (kg/ensure-conn! this)) pattern eid))
 
   (db-snapshot [this]
-    (d/db (proto/ensure-conn! this)))
+    (d/db (kg/ensure-conn! this)))
 
   (reset-conn! [this]
     (log/info "Resetting Datahike KG store" {:cfg cfg})
@@ -151,7 +155,7 @@
     (when (d/database-exists? cfg)
       (d/delete-database cfg))
     (reset! conn-atom nil)
-    (proto/ensure-conn! this))
+    (kg/ensure-conn! this))
 
   (close! [_this]
     (when-let [c @conn-atom]
@@ -164,16 +168,16 @@
       (reset! conn-atom nil)))
 
   ;; Temporal Store Protocol - Datahike supports time-travel queries
-  proto/ITemporalGraphStore
+  kg/ITemporalKGStore
 
   (history-db [this]
-    (d/history (d/db (proto/ensure-conn! this))))
+    (d/history (d/db (kg/ensure-conn! this))))
 
   (as-of-db [this tx-or-time]
-    (d/as-of (d/db (proto/ensure-conn! this)) tx-or-time))
+    (d/as-of (d/db (kg/ensure-conn! this)) tx-or-time))
 
   (since-db [this tx-or-time]
-    (d/since (d/db (proto/ensure-conn! this)) tx-or-time)))
+    (d/since (d/db (kg/ensure-conn! this)) tx-or-time)))
 
 ;; =============================================================================
 ;; Store Factory
@@ -188,7 +192,7 @@
        :backend - :file or :mem (default: :file)
        :index   - Index type (default: :datahike.index/persistent-set)
 
-   Returns an IGraphStore implementation.
+   Returns an IKGStore implementation.
 
    CLARITY-Y: If Datahike fails to initialize, logs warning
    and returns nil (caller should fall back to DataScript)."
@@ -210,7 +214,7 @@
   "Get full history database for temporal queries.
    Returns a DB value that includes all historical facts."
   [store]
-  (d/history (d/db (proto/ensure-conn! store))))
+  (d/history (d/db (kg/ensure-conn! store))))
 
 (defn as-of-db
   "Get database as of a specific transaction ID or timestamp.
@@ -218,7 +222,7 @@
      - Transaction ID (integer)
      - java.util.Date instance"
   [store tx-or-time]
-  (d/as-of (d/db (proto/ensure-conn! store)) tx-or-time))
+  (d/as-of (d/db (kg/ensure-conn! store)) tx-or-time))
 
 (defn since-db
   "Get database with only facts added since a transaction ID or timestamp.
@@ -226,7 +230,7 @@
      - Transaction ID (integer)
      - java.util.Date instance"
   [store tx-or-time]
-  (d/since (d/db (proto/ensure-conn! store)) tx-or-time))
+  (d/since (d/db (kg/ensure-conn! store)) tx-or-time))
 
 (defn query-history
   "Query against the full history database.

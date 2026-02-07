@@ -15,7 +15,9 @@
             [hive-mcp.tools.memory-kanban :as mem-kanban]
             [hive-mcp.plan.schema :as schema]
             [hive-mcp.plan.parser :as parser]
+            [hive-mcp.plan.fsm :as plan-fsm]
             [hive-mcp.chroma :as chroma]
+            [hive-mcp.plans :as plans]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-mcp.agent.context :as ctx]
             [clojure.data.json :as json]
@@ -138,7 +140,7 @@
     (vec
      (for [task-id task-ids
            :let [step-id (get task-id-to-step-id task-id)
-                 wave (get waves step-id 0)]]
+                 _wave (get waves step-id 0)]]
        (kg-edges/add-edge!
         {:from plan-id
          :to task-id
@@ -167,8 +169,8 @@
          :when (and dep-id (contains? step-id-to-task-id dep-id))]
      (let [from-task-id (get step-id-to-task-id (:id step))
            to-task-id (get step-id-to-task-id dep-id)
-           from-wave (get waves (:id step) 0)
-           to-wave (get waves dep-id 0)]
+           _from-wave (get waves (:id step) 0)
+           _to-wave (get waves dep-id 0)]
        (kg-edges/add-edge!
         {:from from-task-id
          :to to-task-id
@@ -179,15 +181,87 @@
          :created-by (str "plan_to_kanban" (when agent-id (str ":" agent-id)))})))))
 
 ;;; =============================================================================
+;;; FSM Execute Function Builder
+;;; =============================================================================
+
+(defn- build-execute-fn
+  "Build the execute function for the Plan FSM.
+
+   Closes over directory/plan-id/project-id/agent-id to create
+   kanban tasks and KG edges during the :approved → :executing transition.
+
+   Args (closed over):
+     directory      - Working directory for kanban task creation
+     plan-memory-id - Plan memory entry ID for KG edge source
+     project-id     - Project scope for KG edges
+     agent-id       - Creating agent ID
+
+   Returns: (fn [data] -> {:task-ids [...] :kg-edges [...] :waves {...} ...})
+   Throws: ExceptionInfo if task creation fails."
+  [directory plan-memory-id project-id agent-id]
+  (fn [{:keys [plan]}]
+    (let [steps (:steps plan)
+          ;; Compute wave numbers for DAG-Wave execution
+          waves (compute-waves steps)
+
+          ;; Create kanban tasks for each step
+          task-results (doall
+                        (for [step steps]
+                          (let [{:keys [ok error]} (create-kanban-task! step directory)]
+                            (if error
+                              {:step-id (:id step) :error error}
+                              {:step-id (:id step) :task-id ok}))))
+          errors (filter :error task-results)
+          successes (remove :error task-results)]
+
+      (when (seq errors)
+        (throw (ex-info "Failed to create some kanban tasks"
+                        {:errors (mapv #(str (:step-id %) ": " (:error %)) errors)})))
+
+      (let [step-id-to-task-id (into {} (map (juxt :step-id :task-id) successes))
+            task-ids (mapv :task-id successes)
+            decision-id (:decision-id plan)
+
+            ;; Plan --derived-from--> Decision (if decision-id present)
+            decision-edge (create-plan-decision-edge!
+                           plan-memory-id decision-id project-id agent-id)
+
+            ;; Plan --depends-on--> Task edges
+            plan-task-edges (create-plan-task-edges!
+                             plan-memory-id task-ids project-id agent-id
+                             waves step-id-to-task-id)
+
+            ;; Task --depends-on--> Task dependency edges
+            task-dep-edges (create-task-dependency-edges!
+                            step-id-to-task-id steps project-id agent-id waves)
+
+            all-edges (cond-> (vec (concat plan-task-edges task-dep-edges))
+                        decision-edge (conj decision-edge))]
+
+        {:task-ids task-ids
+         :kg-edges all-edges
+         :waves waves
+         :step-mapping step-id-to-task-id
+         :decision-id decision-id}))))
+
+;;; =============================================================================
 ;;; Main Tool Handler
 ;;; =============================================================================
 
 (defn plan-to-kanban
-  "Convert a plan memory entry to kanban tasks with KG edges.
+  "Convert a plan memory entry (or file) to kanban tasks with KG edges.
+
+   Uses the Plan FSM (plan.fsm) to drive the lifecycle:
+     draft → validated → approved → executing
+
+   The FSM handles parsing, validation (schema + deps + cycles),
+   and delegates execution to an injected execute-fn that creates
+   kanban tasks and KG edges.
 
    Arguments:
-     plan-memory-id - Memory entry ID containing the plan
+     plan-memory-id - Memory entry ID containing the plan (nil when using plan-path)
      :directory     - Working directory for project scope (optional)
+     :plan-path     - File path to slurp plan content from (alternative to memory ID)
      :auto-assign?  - Auto-assign tasks to lings (optional, not yet implemented)
 
    Returns:
@@ -197,92 +271,73 @@
      - Creates kanban tasks in memory system
      - Creates KG edges: plan --depends-on--> tasks
      - Creates KG edges: task --depends-on--> task (based on step dependencies)"
-  [plan-memory-id & {:keys [directory auto-assign?]}]
-  (log/info "plan_to_kanban" {:plan-id plan-memory-id :directory directory})
+  [plan-memory-id & {:keys [directory plan-path]}]
+  (log/info "plan_to_kanban" {:plan-id plan-memory-id :plan-path plan-path :directory directory})
   (try
     (let [directory (or directory (ctx/current-directory))
-          agent-id (System/getenv "CLAUDE_SWARM_SLAVE_ID")]
+          agent-id (System/getenv "CLAUDE_SWARM_SLAVE_ID")
 
-      ;; 1. Fetch memory entry
-      (if-let [entry (chroma/get-entry-by-id plan-memory-id)]
-        (let [content (:content entry)
-              project-id (:project-id entry)]
+          ;; Resolve content: file path takes priority over memory ID
+          [content project-id plan-id]
+          (if plan-path
+            (do (log/info "plan_to_kanban: loading plan from file" {:path plan-path})
+                [(slurp plan-path)
+                 (ctx/current-project-id)
+                 (str "file:" plan-path)])
+            (when-let [entry (or (plans/get-plan plan-memory-id)
+                                 (chroma/get-entry-by-id plan-memory-id))]
+              [(:content entry)
+               (:project-id entry)
+               plan-memory-id]))]
 
-          ;; 2. Parse plan content using shared parser
-          (let [{:keys [success plan error details]} (parser/parse-plan content {:memory-id plan-memory-id})]
-            (if-not success
-              (mcp-error (str error (when details (str " - " (pr-str details)))))
+      (if-not content
+        (mcp-error (str "Plan not found. Provide plan_id (memory entry) or plan_path (file). "
+                        (when plan-memory-id (str "Tried memory ID: " plan-memory-id))
+                        (when plan-path (str "Tried file: " plan-path))))
 
-              (let [steps (:steps plan)]
-                ;; 3. Validate dependencies exist
-                (let [dep-check (schema/validate-dependencies plan)]
-                  (if-not (:valid dep-check)
-                    (mcp-error (str "Invalid dependency references: " (pr-str (:invalid-refs dep-check))))
+        (let [plan-memory-id (or plan-id plan-memory-id)
+              execute-fn (build-execute-fn directory plan-memory-id project-id agent-id)
 
-                    ;; 4. Check for circular dependencies
-                    (let [cycle-check (schema/detect-cycles plan)]
-                      (if-not (:valid cycle-check)
-                        (mcp-error (str "Circular dependency detected: " (:cycle cycle-check)))
+              ;; Run Plan FSM: draft → validated → approved → executing
+              result (plan-fsm/run-plan-fsm
+                      {:content content :plan-id plan-memory-id}
+                      {:execute-fn execute-fn :directory directory})]
 
-                        ;; 5. Compute wave numbers for DAG-Wave execution
-                        (let [waves (compute-waves steps)
+          (mcp-json {:success true
+                     :plan-id plan-memory-id
+                     :plan-title (get-in result [:plan :title])
+                     :plan-source (if plan-path :file :memory)
+                     :decision-id (:decision-id result)
+                     :task-ids (:task-ids result)
+                     :task-count (count (:task-ids result))
+                     :waves (:waves result)
+                     :max-wave (when (seq (:waves result)) (apply max (vals (:waves result))))
+                     :kg-edges (:kg-edges result)
+                     :edge-count (count (:kg-edges result))
+                     :step-mapping (:step-mapping result)}))))
 
-                              ;; 6. Create kanban tasks for each step
-                              task-results (for [step steps]
-                                             (let [{:keys [ok error]} (create-kanban-task! step directory)]
-                                               (if error
-                                                 {:step-id (:id step) :error error}
-                                                 {:step-id (:id step) :task-id ok})))
-                              errors (filter :error task-results)
-                              successes (remove :error task-results)]
-
-                          (if (seq errors)
-                            (mcp-error (str "Failed to create some tasks: "
-                                            (str/join ", " (map #(str (:step-id %) ": " (:error %)) errors))))
-
-                            ;; 7. Create KG edges
-                            (let [step-id-to-task-id (into {} (map (juxt :step-id :task-id) successes))
-                                  task-ids (mapv :task-id successes)
-                                  decision-id (:decision-id plan)
-
-                                  ;; Plan --derived-from--> Decision (if decision-id present)
-                                  decision-edge (create-plan-decision-edge!
-                                                 plan-memory-id decision-id project-id agent-id)
-
-                                  ;; Plan --depends-on--> Task edges
-                                  plan-task-edges (create-plan-task-edges!
-                                                   plan-memory-id task-ids project-id agent-id
-                                                   waves step-id-to-task-id)
-
-                                  ;; Task --depends-on--> Task dependency edges
-                                  task-dep-edges (create-task-dependency-edges!
-                                                  step-id-to-task-id steps project-id agent-id waves)
-
-                                  all-edges (cond-> (vec (concat plan-task-edges task-dep-edges))
-                                              decision-edge (conj decision-edge))]
-
-                              (mcp-json {:success true
-                                         :plan-id plan-memory-id
-                                         :plan-title (:title plan)
-                                         :decision-id decision-id
-                                         :task-ids task-ids
-                                         :task-count (count task-ids)
-                                         :waves waves
-                                         :max-wave (when (seq waves) (apply max (vals waves)))
-                                         :kg-edges all-edges
-                                         :edge-count (count all-edges)
-                                         :step-mapping step-id-to-task-id}))))))))))))
-
-        (mcp-error (str "Plan memory entry not found: " plan-memory-id))))
-
+    (catch clojure.lang.ExceptionInfo e
+      (let [data (ex-data e)]
+        (log/error e "plan_to_kanban FSM failed" data)
+        (mcp-error (str "Plan conversion failed: " (.getMessage e)
+                        (when-let [v (:validation data)]
+                          (str "\nValidation: " (pr-str v)))
+                        (when-let [errs (:errors data)]
+                          (str "\nErrors: " (str/join ", " errs)))))))
     (catch Exception e
       (log/error e "plan_to_kanban failed")
       (mcp-error (str "Failed to convert plan to kanban: " (.getMessage e))))))
 
 (defn handle-plan-to-kanban
-  "MCP tool handler for plan_to_kanban."
-  [{:keys [plan_id directory auto_assign]}]
-  (plan-to-kanban plan_id :directory directory :auto-assign? auto_assign))
+  "MCP tool handler for plan_to_kanban.
+   Accepts plan_id (memory entry) OR plan_path (file path). At least one required."
+  [{:keys [plan_id plan_path directory auto_assign]}]
+  (if (and (str/blank? plan_id) (str/blank? plan_path))
+    (mcp-error "Either plan_id or plan_path is required")
+    (plan-to-kanban plan_id
+                    :directory directory
+                    :plan-path plan_path
+                    :auto-assign? auto_assign)))
 
 ;;; =============================================================================
 ;;; Tool Definition
@@ -290,13 +345,15 @@
 
 (def tools
   [{:name "plan_to_kanban"
-    :description "Convert an exploration plan memory entry to kanban tasks with KG linking. Parses plan steps from EDN or markdown format, creates kanban tasks, and creates KG edges for plan->task and task->task dependencies."
+    :description "Convert a plan (from memory or file) to kanban tasks with KG linking. Parses plan steps from EDN or markdown format, creates kanban tasks, and creates KG edges for plan->task and task->task dependencies. Use plan_id for memory entries or plan_path for direct file loading (zero-token for large plans)."
     :inputSchema {:type "object"
                   :properties {"plan_id" {:type "string"
-                                          :description "Memory entry ID containing the plan (required)"}
+                                          :description "Memory entry ID containing the plan (alternative to plan_path)"}
+                               "plan_path" {:type "string"
+                                            :description "File path to a plan file. Slurps content directly — zero-token plan loading for large plans (alternative to plan_id)."}
                                "directory" {:type "string"
                                             :description "Working directory for project scope (optional)"}
                                "auto_assign" {:type "boolean"
                                               :description "Auto-assign tasks to lings (optional, not yet implemented)"}}
-                  :required ["plan_id"]}
+                  :required []}
     :handler handle-plan-to-kanban}])

@@ -35,9 +35,10 @@
     :task       \"Implement feature X\"}
 
    Produces effects:
-   - :channel-publish - Broadcast drone-started to WebSocket clients
-   - :log             - Log drone start message
-   - :prometheus      - Increment drone_started counter"
+   - :channel-publish    - Broadcast drone-started to WebSocket clients
+   - :olympus-broadcast  - Push to Olympus Web UI (port 7911)
+   - :log                - Log drone start message
+   - :prometheus         - Increment drone_started counter"
   [_coeffects [_ {:keys [drone-id task-id parent-id files task]}]]
   {:channel-publish {:event :drone-started
                      :data {:drone-id drone-id
@@ -46,6 +47,14 @@
                             :files files
                             :task-preview (when task
                                             (subs task 0 (min 100 (count task))))}}
+   :olympus-broadcast {:type :agent-spawned
+                       :agent {:id drone-id
+                               :name drone-id
+                               :type "drone"
+                               :status "working"
+                               :parent-id parent-id
+                               :files files}
+                       :timestamp (System/currentTimeMillis)}
    :log {:level :info
          :message (str "Drone started: " drone-id
                        (when parent-id (str " (parent: " parent-id ")"))
@@ -105,6 +114,12 @@
                               :duration-ms duration-ms
                               ;; Include partial-success flag for coordinator decision
                               :partial-success (boolean (seq files-failed))}}
+     :olympus-broadcast {:type :agent-status
+                         :agent {:id drone-id
+                                 :status "completed"
+                                 :duration-ms duration-ms
+                                 :files-modified (count files-modified)}
+                         :timestamp (System/currentTimeMillis)}
      :log {:level (if (seq files-failed) :warn :info)  ;; Escalate to warn if failures
            :message (str "Drone completed: " drone-id
                          " - " (count files-modified) " files modified"
@@ -164,6 +179,12 @@
                             :error error
                             :error-type error-type
                             :files files}}
+   :olympus-broadcast {:type :agent-status
+                       :agent {:id drone-id
+                               :status "failed"
+                               :error (or error "unknown")
+                               :error-type (when error-type (name error-type))}
+                       :timestamp (System/currentTimeMillis)}
    :log {:level :warn
          :message (str "Drone failed: " drone-id
                        " - " (or error "unknown error")

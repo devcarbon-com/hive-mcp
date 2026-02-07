@@ -54,3 +54,6 @@ test/drone-test-file-*.txt
 
 # Datalevin LMDB data (persistent KG storage)
 data/
+
+# python stuff
+classes

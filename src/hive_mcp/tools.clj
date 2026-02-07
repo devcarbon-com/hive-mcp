@@ -21,8 +21,7 @@
    [hive-mcp.tools.prompt :as prompt]
    [hive-mcp.tools.presets :as presets-tools]
    [hive-mcp.tools.diff :as diff]
-   [hive-mcp.tools.kondo :as kondo]
-   [hive-mcp.tools.scc :as scc]
+   ;; kondo and scc - now in consolidated/analysis, requires removed
    ;; kg/tools REMOVED - compat shims delegate to consolidated
    [hive-mcp.tools.crystal :as crystal]
    [hive-mcp.tools.hot :as hot]
@@ -60,6 +59,8 @@
    [hive-mcp.tools.consolidated.emacs :as c-emacs]
    [hive-mcp.tools.consolidated.wave :as c-wave]
    [hive-mcp.tools.consolidated.migration :as c-migration]
+   [hive-mcp.tools.consolidated.config :as c-config]
+   [hive-mcp.tools.consolidated.workflow :as c-workflow]
    ;; Backward-compatibility shims for deprecated tools
    [hive-mcp.tools.compat :as compat]
    [taoensso.timbre :as log]))
@@ -145,6 +146,8 @@
                c-emacs/tools
                c-wave/tools
                c-migration/tools  ; KG/Memory migration operations
+               c-config/tools     ; Config management (~/.config/hive-mcp/config.edn)
+               c-workflow/tools   ; Forja Belt workflow automation
                ;; Backward-compatibility shims (deprecated, sunset: 2026-04-01)
                ;; These provide old tool names (magit_status, mcp_memory_add, etc.)
                ;; and delegate to consolidated handlers
@@ -285,6 +288,8 @@
                c-emacs/tools
                c-wave/tools
                c-migration/tools  ; KG/Memory migration operations
+               c-config/tools     ; Config management (~/.config/hive-mcp/config.edn)
+               c-workflow/tools   ; Forja Belt workflow automation
                ;; Backward-compatibility shims (deprecated, sunset: 2026-04-01)
                ;; These provide old tool names (magit_status, mcp_memory_add, etc.)
                ;; and delegate to consolidated handlers

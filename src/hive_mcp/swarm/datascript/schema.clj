@@ -7,7 +7,8 @@
    - Schema documentation
 
    SOLID-S: Single Responsibility - only schema definitions.
-   DDD: Value Objects for status enums, schema as domain model.")
+   DDD: Value Objects for status enums, schema as domain model."
+  (:require [clojure.string :as str]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -75,6 +76,14 @@
    :terminated - Gracefully shutdown"
   #{:active :stale :error :terminated})
 
+(def daemon-health-levels
+  "Health score thresholds for daemon selection in multi-daemon setups.
+
+   :healthy   - 70-100: Preferred for new ling spawns
+   :degraded  - 30-69:  Usable but not preferred
+   :unhealthy - 0-29:   Avoid spawning new lings"
+  #{:healthy :degraded :unhealthy})
+
 (def olympus-layout-modes
   "Valid Olympus layout mode values.
    :auto    - Automatically calculate optimal layout
@@ -87,6 +96,30 @@
    :ling  - Persistent Claude Code instance (can chain tools)
    :drone - Ephemeral API call (single task, stateless)"
   #{:ling :drone})
+
+(def spawn-modes
+  "Valid ling spawn mode values.
+   :vterm      - Spawned inside Emacs vterm buffer (default for interactive)
+   :headless   - Alias for :agent-sdk (ProcessBuilder legacy, auto-mapped since 0.12.0)
+   :openrouter - Direct OpenRouter API calls (multi-model, no CLI needed)
+   :agent-sdk  - Claude Agent SDK via libpython-clj (default for headless since 0.12.0)"
+  #{:vterm :headless :openrouter :agent-sdk})
+
+(def ling-model-default
+  "Default ling model. When set, uses Claude Code CLI."
+  "claude")
+
+(defn claude-model?
+  "Check if a model identifier represents a Claude Code CLI ling (default).
+   Returns true for nil, 'claude', or any 'anthropic/claude-*' model.
+   This determines routing: claude models use Claude Code CLI,
+   non-claude models route to OpenRouter API."
+  [model]
+  (or (nil? model)
+      (= model "claude")
+      (= model ling-model-default)
+      (and (string? model)
+           (str/starts-with? model "anthropic/"))))
 
 (def task-types
   "Valid task type values for drone routing.
@@ -180,6 +213,29 @@
 
    :slave/upgraded-from
    {:db/doc "Original drone-id if this ling was upgraded from a drone"}
+
+   ;; Multi-daemon support (ADR-010)
+   :slave/daemon
+   {:db/doc "Reference to daemon this ling is bound to (multi-daemon support)"
+    :db/valueType :db.type/ref
+    :db/cardinality :db.cardinality/one}
+
+   ;; Headless ling support (process-based spawn without Emacs vterm)
+   :ling/spawn-mode
+   {:db/doc "Spawn mode: :vterm, :headless, :openrouter, or :agent-sdk"
+    :db/index true}
+
+   :ling/process-pid
+   {:db/doc "Operating system process ID for headless lings (nil for vterm lings)"}
+
+   :ling/process-alive?
+   {:db/doc "Whether the headless ling OS process is still running (heartbeat-derived)"}
+
+   :ling/model
+   {:db/doc "Model identifier for multi-model lings. Default 'claude' uses Claude Code CLI.
+             Non-claude models (e.g., OpenRouter models like 'deepseek/deepseek-v3.2')
+             spawn headless with openrouter-compatible CLI or API call."
+    :db/index true}
 
    ;;; =========================================================================
    ;;; Task Entity
@@ -569,4 +625,16 @@
 
    :emacs-daemon/lings
    {:db/doc "Set of ling/slave IDs bound to this daemon"
-    :db/cardinality :db.cardinality/many}})
+    :db/cardinality :db.cardinality/many}
+
+   ;; Multi-daemon network support (ADR-010)
+   :emacs-daemon/host
+   {:db/doc "Network host where the daemon is running (for remote daemons, e.g., 'localhost', '192.168.1.10')"}
+
+   :emacs-daemon/port
+   {:db/doc "Network port for remote daemon connection (TCP server mode, e.g., 9999)"}
+
+   :emacs-daemon/health-score
+   {:db/doc "Health score 0-100 based on response latency, error rate, and availability.
+            Used for daemon selection in multi-daemon setups.
+            70-100=healthy (preferred), 30-69=degraded, 0-29=unhealthy (avoid)"}})

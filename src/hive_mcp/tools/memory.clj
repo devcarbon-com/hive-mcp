@@ -37,6 +37,7 @@
 (def handle-mcp-memory-query crud/handle-query)
 (def handle-mcp-memory-query-metadata crud/handle-query-metadata)
 (def handle-mcp-memory-get-full crud/handle-get-full)
+(def handle-mcp-memory-batch-get crud/handle-batch-get)
 (def handle-mcp-memory-check-duplicate crud/handle-check-duplicate)
 (def handle-mcp-memory-update-tags crud/handle-update-tags)
 
@@ -50,6 +51,8 @@
 (def handle-mcp-memory-cleanup-expired lifecycle/handle-cleanup-expired)
 (def handle-mcp-memory-expiring-soon lifecycle/handle-expiring-soon)
 (def handle-mcp-memory-expire lifecycle/handle-expire)
+(def handle-mcp-memory-decay lifecycle/handle-decay)
+(def handle-mcp-memory-cross-pollination-promote lifecycle/handle-cross-pollination-promote)
 
 ;; Analytics Operations
 (def handle-mcp-memory-log-access analytics/handle-log-access)
@@ -59,6 +62,7 @@
 ;; Migration Operations
 (def handle-mcp-memory-migrate-project migration/handle-migrate-project)
 (def handle-mcp-memory-import-json migration/handle-import-json)
+(def handle-mcp-memory-rename-project migration/handle-rename-project)
 
 ;; ============================================================
 ;; Tool Definitions
@@ -66,11 +70,11 @@
 
 (def tools
   [{:name "mcp_memory_add"
-    :description "Add an entry to project memory (Chroma storage). Types: note, snippet, convention, decision, axiom. Optionally specify duration for TTL: ephemeral (1 day), short (7 days), medium (30 days), long (90 days), permanent (never expires). For ling attribution, pass agent_id to tag entry with agent:<id>. Knowledge Graph: Use kg_* params to create edges linking this entry to existing entries (implements, supersedes, depends-on, refines)."
+    :description "Add an entry to project memory (Chroma storage). Types: note, snippet, convention, decision, axiom, plan. Optionally specify duration for TTL: ephemeral (1 day), short (7 days), medium (30 days), long (90 days), permanent (never expires). For ling attribution, pass agent_id to tag entry with agent:<id>. Knowledge Graph: Use kg_* params to create edges linking this entry to existing entries (implements, supersedes, depends-on, refines). Plans (type=plan) are stored in a separate collection with OpenRouter embeddings for large content support."
     :inputSchema {:type "object"
                   :properties {"type" {:type "string"
-                                       :enum ["note" "snippet" "convention" "decision" "axiom"]
-                                       :description "Type of memory entry"}
+                                       :enum ["note" "snippet" "convention" "decision" "axiom" "plan"]
+                                       :description "Type of memory entry. Use 'plan' for large implementation plans (1000-5000+ chars) - these are stored in a dedicated collection with OpenRouter embeddings."}
                                "content" {:type "string"
                                           :description "Content of the memory entry"}
                                "tags" {:type "array"
@@ -103,10 +107,10 @@
     :handler handle-mcp-memory-add}
 
    {:name "mcp_memory_query"
-    :description "Query project memory by type with scope filtering (Chroma storage). Returns stored notes, snippets, conventions, decisions, or axioms filtered by scope (auto-filters by current project + global unless specified)."
+    :description "Query project memory by type with scope filtering (Chroma storage). Returns stored notes, snippets, conventions, decisions, axioms, or plans filtered by scope (auto-filters by current project + global unless specified). HCR Wave 4: Use include_descendants=true to also see child project memories."
     :inputSchema {:type "object"
                   :properties {"type" {:type "string"
-                                       :enum ["note" "snippet" "convention" "decision" "conversation" "axiom"]
+                                       :enum ["note" "snippet" "convention" "decision" "conversation" "axiom" "plan"]
                                        :description "Type of memory entries to query"}
                                "tags" {:type "array"
                                        :items {:type "string"}
@@ -119,7 +123,9 @@
                                "scope" {:type "string"
                                         :description "Scope filter: nil=auto (project+global), 'all'=no filter, 'global'=only global, or specific scope tag"}
                                "directory" {:type "string"
-                                            :description "Working directory to determine project scope (pass your cwd to ensure correct scoping)"}}
+                                            :description "Working directory to determine project scope (pass your cwd to ensure correct scoping)"}
+                               "include_descendants" {:type "boolean"
+                                                      :description "HCR Wave 4: Include child project memories in results (default: false). Use for coordinator-level queries that need visibility into sub-project memories."}}
                   :required ["type"]}
     :handler handle-mcp-memory-query}
 
@@ -127,7 +133,7 @@
     :description "Query project memory by type, returning only metadata (id, type, preview, tags, created). Use this for efficient browsing - returns ~10x fewer tokens than full query. Follow up with mcp_memory_get_full to fetch specific entries."
     :inputSchema {:type "object"
                   :properties {"type" {:type "string"
-                                       :enum ["note" "snippet" "convention" "decision" "conversation" "axiom"]
+                                       :enum ["note" "snippet" "convention" "decision" "conversation" "axiom" "plan"]
                                        :description "Type of memory entries to query"}
                                "tags" {:type "array"
                                        :items {:type "string"}
@@ -168,8 +174,8 @@
                                "limit" {:type "integer"
                                         :description "Maximum number of results to return (default: 10)"}
                                "type" {:type "string"
-                                       :enum ["note" "snippet" "convention" "decision" "axiom"]
-                                       :description "Optional filter by memory type"}}
+                                       :enum ["note" "snippet" "convention" "decision" "axiom" "plan"]
+                                       :description "Optional filter by memory type. Use 'plan' to search only plan entries (stored in dedicated collection)."}}
                   :required ["query"]}
     :handler handle-mcp-memory-search-semantic}
 

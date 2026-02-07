@@ -6,6 +6,7 @@
 
    Handlers:
    - migrate-project: Move entries between project IDs
+   - rename-project: Unified rename orchestrating Chroma + KG + .edn + config
    - import-json: Import from legacy JSON storage to Chroma
    - detect-orphaned-scopes: Find hash-based scope tags that need migration
    - migrate-scope: Migrate entries from old hash scope to new name scope
@@ -19,9 +20,13 @@
   (:require [hive-mcp.tools.memory.core :refer [with-chroma]]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.core :refer [mcp-json mcp-error]]
+            [hive-mcp.knowledge-graph.edges :as kg-edges]
+            [hive-mcp.knowledge-graph.scope :as kg-scope]
             [hive-mcp.emacsclient :as ec]
             [hive-mcp.chroma :as chroma]
             [clojure.data.json :as json]
+            [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -33,8 +38,9 @@
 ;; ============================================================
 
 (defn handle-migrate-project
-  "Migrate memory from one project-id to another (Chroma-only).
-   Updates project-id and optionally scope tags for all matching entries."
+  "Migrate memory from one project-id to another (Chroma + KG edges).
+   Updates project-id and optionally scope tags for all matching Chroma entries.
+   Also migrates KG edge scopes from old-project-id to new-project-id."
   [{:keys [old-project-id new-project-id update-scopes]}]
   (log/info "mcp-memory-migrate-project:" old-project-id "->" new-project-id)
   (with-chroma
@@ -43,6 +49,7 @@
           updated-scopes (atom 0)
           old-scope-tag (scope/make-scope-tag old-project-id)
           new-scope-tag (scope/make-scope-tag new-project-id)]
+      ;; Phase 1: Migrate Chroma entries
       (doseq [entry entries]
         (let [new-tags (if update-scopes
                          (mapv (fn [tag]
@@ -55,39 +62,66 @@
           (chroma/update-entry! (:id entry) {:project-id new-project-id
                                              :tags new-tags})
           (swap! migrated inc)))
-      (mcp-json {:migrated @migrated
-                 :updated-scopes @updated-scopes
-                 :old-project-id old-project-id
-                 :new-project-id new-project-id}))))
+      ;; Phase 2: Migrate KG edge scopes
+      (let [kg-result (try
+                        (kg-edges/migrate-edge-scopes! old-project-id new-project-id)
+                        (catch Exception e
+                          (log/warn "KG edge scope migration failed (non-blocking):"
+                                    (.getMessage e))
+                          {:migrated 0 :error (.getMessage e)}))]
+        (mcp-json {:migrated @migrated
+                   :updated-scopes @updated-scopes
+                   :kg-edges-migrated (:migrated kg-result)
+                   :kg-error (:error kg-result)
+                   :old-project-id old-project-id
+                   :new-project-id new-project-id})))))
 
 ;; ============================================================
 ;; JSON Import Handler
 ;; ============================================================
 
 (defn- import-entry!
-  "Import a single entry to Chroma. Returns true if imported, false if skipped."
+  "Import a single entry to Chroma. Returns :imported, :skipped-id, or :skipped-hash.
+
+   Deduplication strategy (content-hash preferred):
+   1. Compute content-hash for the entry
+   2. Check if entry with same content-hash already exists (semantic dedup)
+   3. Fall back to ID check for backward compatibility
+
+   This prevents duplicate content even when imported with different IDs."
   [entry project-id]
-  (if (chroma/get-entry-by-id (:id entry))
-    false ; Already exists
-    (do
-      (chroma/index-memory-entry!
-       {:id (:id entry)
-        :type (:type entry)
-        :content (:content entry)
-        :tags (if (vector? (:tags entry))
-                (vec (:tags entry))
-                (:tags entry))
-        :content-hash (or (:content-hash entry)
-                          (chroma/content-hash (:content entry)))
-        :created (:created entry)
-        :updated (:updated entry)
-        :duration (or (:duration entry) "long")
-        :expires (or (:expires entry) "")
-        :access-count (or (:access-count entry) 0)
-        :helpful-count (or (:helpful-count entry) 0)
-        :unhelpful-count (or (:unhelpful-count entry) 0)
-        :project-id project-id})
-      true)))
+  (let [entry-hash (or (:content-hash entry)
+                       (chroma/content-hash (:content entry)))
+        entry-type (or (:type entry) "note")]
+    (cond
+      ;; Primary dedup: content-hash (prevents duplicate content)
+      (chroma/find-duplicate entry-type entry-hash :project-id project-id)
+      :skipped-hash
+
+      ;; Secondary dedup: ID (backward compatibility)
+      (chroma/get-entry-by-id (:id entry))
+      :skipped-id
+
+      ;; No duplicate found, import
+      :else
+      (do
+        (chroma/index-memory-entry!
+         {:id (:id entry)
+          :type entry-type
+          :content (:content entry)
+          :tags (if (vector? (:tags entry))
+                  (vec (:tags entry))
+                  (:tags entry))
+          :content-hash entry-hash
+          :created (:created entry)
+          :updated (:updated entry)
+          :duration (or (:duration entry) "long")
+          :expires (or (:expires entry) "")
+          :access-count (or (:access-count entry) 0)
+          :helpful-count (or (:helpful-count entry) 0)
+          :unhelpful-count (or (:unhelpful-count entry) 0)
+          :project-id project-id})
+        :imported))))
 
 (defn handle-import-json
   "Import memory entries from JSON (for migrating from elisp JSON storage to Chroma).
@@ -115,11 +149,14 @@
                                  :snippets (count (:snippets data))
                                  :conventions (count (:conventions data))
                                  :decisions (count (:decisions data))}})
-            (let [results (map #(import-entry! % pid) all-entries)
-                  imported (count (filter identity results))
-                  skipped (count (remove identity results))]
+            (let [results (mapv #(import-entry! % pid) all-entries)
+                  imported (count (filter #(= :imported %) results))
+                  skipped-hash (count (filter #(= :skipped-hash %) results))
+                  skipped-id (count (filter #(= :skipped-id %) results))]
               (mcp-json {:imported imported
-                         :skipped skipped
+                         :skipped {:by-hash skipped-hash
+                                   :by-id skipped-id
+                                   :total (+ skipped-hash skipped-id)}
                          :project-id pid}))))))))
 
 ;; ============================================================
@@ -250,6 +287,176 @@
                      :dry-run (boolean dry-run)
                      :old-scope old_scope
                      :new-scope new_scope}))))))
+
+;; ============================================================
+;; Unified Rename Project
+;; ============================================================
+
+(defn- read-hive-project-edn
+  "Read and parse .hive-project.edn from a directory.
+   Returns parsed config map or nil on failure."
+  [directory]
+  (try
+    (let [edn-file (io/file directory ".hive-project.edn")]
+      (when (.exists edn-file)
+        (edn/read-string (slurp edn-file))))
+    (catch Exception e
+      (log/debug "read-hive-project-edn failed:" (.getMessage e))
+      nil)))
+
+(defn- update-hive-project-edn!
+  "Update .hive-project.edn: set new project-id and append old-project-id to :aliases.
+   Returns {:success true :config ...} or {:error ...}.
+
+   CLARITY-Y: Yields safe failure on I/O errors."
+  [directory old-project-id new-project-id]
+  (try
+    (let [edn-file (io/file directory ".hive-project.edn")
+          existing (when (.exists edn-file)
+                     (edn/read-string (slurp edn-file)))
+          current-aliases (or (:aliases existing) [])
+          ;; Only add old-project-id if not already in aliases
+          updated-aliases (if (some #{old-project-id} current-aliases)
+                            current-aliases
+                            (conj current-aliases old-project-id))
+          updated-config (assoc (or existing {})
+                                :project-id new-project-id
+                                :aliases updated-aliases)]
+      ;; Write the updated EDN back
+      (spit (.getAbsolutePath edn-file)
+            (pr-str updated-config))
+      (log/info "Updated .hive-project.edn:" (.getAbsolutePath edn-file)
+                {:project-id new-project-id :aliases updated-aliases})
+      {:success true :config updated-config})
+    (catch Exception e
+      (log/warn "Failed to update .hive-project.edn:" (.getMessage e))
+      {:error (.getMessage e)})))
+
+(defn handle-rename-project
+  "Unified rename-project command that orchestrates all migration steps.
+
+   This is the single entry point for renaming a project. It coordinates:
+   1. Chroma migration: update project-id + scope tags on all memory entries
+   2. KG edge migration: update :kg-edge/scope from old to new project-id
+   3. .hive-project.edn update: set new project-id, append old to :aliases
+   4. Re-register project config: update kg-scope registry + reverse-alias-index
+   5. Clear scope caches
+
+   Params:
+     :old-project-id  - Current project-id to rename from (required)
+     :new-project-id  - New project-id to rename to (required)
+     :directory       - Directory containing .hive-project.edn (required for edn update)
+     :dry-run         - If true, preview what would happen (default: false)
+
+   Returns:
+     {:status 'success' or 'dry-run'
+      :chroma {:migrated N :updated-scopes N}
+      :kg-edges {:migrated N}
+      :edn {:updated true/false :aliases [...]}
+      :config-registered true/false
+      :old-project-id '...'
+      :new-project-id '...'}"
+  [{:keys [old-project-id new-project-id directory dry-run]}]
+  (cond
+    (str/blank? old-project-id)
+    (mcp-error "old-project-id is required")
+
+    (str/blank? new-project-id)
+    (mcp-error "new-project-id is required")
+
+    (= old-project-id new-project-id)
+    (mcp-error "old-project-id and new-project-id must be different")
+
+    :else
+    (let [dry-run (boolean dry-run)]
+      (log/info "rename-project:" old-project-id "->" new-project-id
+                (when dry-run "(dry-run)") {:directory directory})
+
+      (if dry-run
+        ;; Dry-run: report what would happen without modifying anything
+        (let [;; Phase 1: Count Chroma entries that would migrate
+              chroma-count (try
+                             (with-chroma
+                               (count (chroma/query-entries :project-id old-project-id
+                                                            :limit 10000)))
+                             (catch Exception _ 0))
+              ;; Phase 2: Check KG edges that would migrate
+              kg-count (try
+                         (count (kg-edges/get-edges-by-scope old-project-id))
+                         (catch Exception _ 0))
+              ;; Phase 3: Check .hive-project.edn state
+              edn-config (when directory (read-hive-project-edn directory))
+              current-aliases (or (:aliases edn-config) [])
+              would-add-alias (not (some #{old-project-id} current-aliases))]
+          (mcp-json {:status "dry-run"
+                     :chroma {:would-migrate chroma-count}
+                     :kg-edges {:would-migrate kg-count}
+                     :edn {:exists (boolean edn-config)
+                           :current-aliases current-aliases
+                           :would-add-alias would-add-alias}
+                     :old-project-id old-project-id
+                     :new-project-id new-project-id
+                     :directory directory}))
+
+        ;; Actual rename: execute all phases
+        (let [;; Phase 1: Chroma + KG migration via existing handler
+              ;; This handles Chroma entry updates + KG edge scope migration
+              migrate-result (try
+                               (let [raw (handle-migrate-project
+                                          {:old-project-id old-project-id
+                                           :new-project-id new-project-id
+                                           :update-scopes true})
+                                     text (or (get-in raw [:result 0 :text])
+                                              (:text raw))
+                                     parsed (json/read-str text :key-fn keyword)]
+                                 parsed)
+                               (catch Exception e
+                                 (log/warn "Phase 1 (Chroma+KG migration) failed:"
+                                           (.getMessage e))
+                                 {:error (.getMessage e)
+                                  :migrated 0
+                                  :updated-scopes 0
+                                  :kg-edges-migrated 0}))
+
+              ;; Phase 2: Update .hive-project.edn
+              edn-result (if directory
+                           (update-hive-project-edn! directory old-project-id new-project-id)
+                           {:skipped "no directory provided"})
+
+              ;; Phase 3: Re-register project config with kg-scope
+              config-registered
+              (try
+                (when-let [config (:config edn-result)]
+                  (kg-scope/register-project-config! new-project-id config)
+                  true)
+                (catch Exception e
+                  (log/warn "Failed to re-register project config:" (.getMessage e))
+                  false))
+
+              ;; Phase 4: Clear scope caches so new aliases take effect
+              _cache-cleared (try
+                               (kg-scope/clear-config-cache!)
+                               ;; Re-register after cache clear
+                               (when-let [config (:config edn-result)]
+                                 (kg-scope/register-project-config! new-project-id config))
+                               (catch Exception e
+                                 (log/debug "Cache clear/re-register warning:" (.getMessage e))))]
+
+          (mcp-json {:status "success"
+                     :chroma {:migrated (:migrated migrate-result 0)
+                              :updated-scopes (:updated-scopes migrate-result 0)}
+                     :kg-edges {:migrated (:kg-edges-migrated migrate-result 0)
+                                :error (:kg-error migrate-result)}
+                     :edn (if (:success edn-result)
+                            {:updated true
+                             :aliases (get-in edn-result [:config :aliases])}
+                            {:updated false
+                             :reason (or (:error edn-result)
+                                         (:skipped edn-result))})
+                     :config-registered (boolean config-registered)
+                     :old-project-id old-project-id
+                     :new-project-id new-project-id
+                     :directory directory}))))))
 
 ;; ============================================================
 ;; Tool Definitions

@@ -32,7 +32,8 @@
             [clojure.data.json :as json]
             [clojure.set :as set]
             [hive-mcp.events.core :as events]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log])
+  (:import [java.lang Exception]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -70,13 +71,13 @@
    Messages without project-id default to 'global'.
 
    BUG FIX: Shouts may have :task but no :message (or vice versa).
-   Fall back to :task when :message is nil to prevent {:m nil} in piggyback."
+   Fall back to :task when :message is nil, then empty string to prevent {:m nil} in piggyback."
   []
   (mapcat (fn [[agent-id {:keys [messages]}]]
             (for [{:keys [event-type message task timestamp project-id]} messages]
               {:agent-id agent-id
                :event-type event-type
-               :message (or message task)
+               :message (or message task "")
                :timestamp timestamp
                :project-id (or project-id "global")}))
           @agent-registry))
@@ -229,8 +230,22 @@
     ;; Broadcast to Emacs via WebSocket (primary - reliable)
     (when (ws/connected?)
       (ws/emit! (:type event) (dissoc event :type)))
-    ;; Also broadcast via old channel (for backwards compat)
+    ;; Publish to internal pub/sub (for SlackConnector and other internal subscribers)
+    (channel/publish! event)
+    ;; Also broadcast via old channel (for Emacs clients)
     (channel/broadcast! event)
+    ;; Broadcast to Olympus Web UI (port 7911)
+    ;; Uses requiring-resolve to avoid circular dependency
+    (try
+      (when-let [emit-fn (requiring-resolve 'hive-mcp.transport.olympus/emit-hivemind-shout!)]
+        (emit-fn {:agent-id agent-id
+                  :event-type (name event-type)
+                  :message (:message data)
+                  :task (:task data)
+                  :data (dissoc data :task :message)}))
+      (catch Exception _
+        ;; Olympus WS not started yet - ignore silently
+        nil))
     (log/info "Hivemind shout:" agent-id event-type "project:" project-id)
     ;; Auto-trigger crystallization on ling completion
     (when (= event-type :completed)

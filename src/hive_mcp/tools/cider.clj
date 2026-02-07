@@ -224,6 +224,31 @@
       (mcp-success result)
       (mcp-error (format "Error: %s" error)))))
 
+;; =============================================================================
+;; Unified Eval Handler (routes to silent/explicit/session based on params)
+;; =============================================================================
+
+(defn handle-cider-eval
+  "Unified eval handler. Routes based on mode and session_name params.
+   - session_name provided → eval in named session
+   - mode=\"explicit\" → explicit eval (shows in REPL buffer)
+   - default (mode=\"silent\") → silent eval
+   Backward compatible: eval-explicit and eval-session commands still work as aliases."
+  [params]
+  (let [{:keys [session_name mode] :or {mode "silent"}} params]
+    (cond
+      ;; Session eval takes priority when session_name provided
+      session_name
+      (handle-cider-eval-session params)
+
+      ;; Explicit mode: show in REPL buffer
+      (= mode "explicit")
+      (handle-cider-eval-explicit params)
+
+      ;; Default: silent eval
+      :else
+      (handle-cider-eval-silent params))))
+
 (defn handle-cider-kill-session
   "Kill a specific named CIDER session."
   [{:keys [session_name]}]
