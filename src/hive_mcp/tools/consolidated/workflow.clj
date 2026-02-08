@@ -26,6 +26,8 @@
             [hive-mcp.tools.core :refer [mcp-error mcp-json]]
             [hive-mcp.tools.consolidated.session :as c-session]
             [hive-mcp.tools.consolidated.agent :as c-agent]
+            [hive-mcp.tools.agent.spawn :as spawn]
+            [hive-mcp.tools.agent.dispatch :as dispatch]
             [hive-mcp.tools.consolidated.kanban :as c-kanban]
             [hive-mcp.swarm.datascript.queries :as queries]
             [hive-mcp.agent.protocol :as proto]
@@ -301,7 +303,7 @@
                      agent-name (str "forja-" (System/currentTimeMillis))]
                  (try
                    ;; Spawn ling
-                   (let [spawn-result (c-agent/handle-spawn
+                   (let [spawn-result (spawn/handle-spawn
                                        (cond-> {:type "ling"
                                                 :name agent-name
                                                 :cwd effective-dir
@@ -321,7 +323,7 @@
                        (when-not (:ready? ready)
                          (log/warn "SPARK: dispatching despite readiness timeout"
                                    {:agent-id agent-id :elapsed-ms (:elapsed-ms ready)}))
-                       (c-agent/handle-dispatch
+                       (dispatch/handle-dispatch
                         {:agent_id agent-id
                          :prompt (str title
                                       (when-let [desc (:description task)]

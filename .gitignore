@@ -58,3 +58,7 @@ data/
 
 # python stuff
 classes
+
+**/__pycache__/*
+__pycache__/
+*/__pycache__

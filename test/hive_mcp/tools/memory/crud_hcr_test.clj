@@ -9,7 +9,8 @@
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [hive-mcp.knowledge-graph.scope :as kg-scope]
             [hive-mcp.tools.memory.crud]
-            [hive-mcp.tools.consolidated.agent]))
+            [hive-mcp.tools.consolidated.agent]
+            [hive-mcp.tools.agent.spawn]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -84,7 +85,7 @@
   @(resolve 'hive-mcp.tools.memory.crud/apply-auto-scope-filter))
 
 (def ^:private resolve-project-scope
-  @(resolve 'hive-mcp.tools.consolidated.agent/resolve-project-scope))
+  @(resolve 'hive-mcp.tools.agent.spawn/resolve-project-scope))
 
 ;; =============================================================================
 ;; apply-auto-scope-filter Tests

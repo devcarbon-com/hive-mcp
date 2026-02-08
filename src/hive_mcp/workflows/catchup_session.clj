@@ -150,8 +150,8 @@
                         (query-fn "decision" nil project-id 50))
             conventions (when query-conventions-fn
                           (query-conventions-fn project-id
-                                               (set (map :id axioms))
-                                               (set (map :id priority-conventions))))
+                                                (set (map :id axioms))
+                                                (set (map :id priority-conventions))))
             snippets (when query-fn
                        (query-fn "snippet" nil project-id 20))
             expiring (when query-expiring-fn
@@ -310,10 +310,12 @@
                 (assoc :snippets (store-category :snippets (:snippets data)))))
             (catch Exception _e nil)))
 
-        ;; Piggyback enqueue
+        ;; Piggyback enqueue — use _caller_id for per-caller cursor isolation.
+        ;; Must match routes.clj extract-caller-id formula.
+        caller-id (or (:_caller_id data) "coordinator")
         piggyback-agent-id (if project-id
-                             (str "coordinator-" project-id)
-                             "coordinator")
+                             (str caller-id "-" project-id)
+                             caller-id)
         _ (when (and piggyback-fn (seq piggyback-entries))
             (piggyback-fn piggyback-agent-id project-id piggyback-entries context-refs))]
     (assoc data

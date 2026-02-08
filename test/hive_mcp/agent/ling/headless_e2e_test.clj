@@ -300,7 +300,58 @@
           (is (= "Run tests" (:task (:opts @captured-args)))
               "Task should pass through unchanged when no L2 context available")
           (is (= ["tdd"] (:presets (:opts @captured-args))))
-          (is (= 2000 (:buffer-capacity (:opts @captured-args)))))))))
+          (is (= 2000 (:buffer-capacity (:opts @captured-args))))
+          (is (nil? (:system-prompt (:opts @captured-args)))
+              "No :system-prompt when L2 context unavailable"))))))
+
+(deftest headless-strategy-spawn-routes-l2-to-system-prompt
+  (testing "P3-T4: L2 context routes to :system-prompt, not task prefix"
+    (let [strat (headless-strat/->headless-strategy)
+          captured-args (atom nil)
+          ctx {:id "hs-l2-spawn-001" :cwd "/tmp/proj" :presets ["tdd"] :model nil}
+          ;; Store test data in context-store for L2 envelope
+          ax-id (context-store/context-put!
+                 [{:id "ax-1" :content "Test axiom for L2 routing"}]
+                 :tags #{"axioms" "test"})]
+      (with-redefs [headless/spawn-headless!
+                    (fn [ling-id opts]
+                      (reset! captured-args {:ling-id ling-id :opts opts})
+                      {:ling-id ling-id :pid 12345})]
+        (let [result (strategy/strategy-spawn! strat ctx
+                                               {:task "Run tests"
+                                                :ctx-refs {:axioms ax-id}
+                                                :kg-node-ids []
+                                                :scope "test-project"})]
+          (is (= "hs-l2-spawn-001" result) "Should return ling-id")
+          ;; KEY ASSERTION: Task stays clean — L2 context goes to system-prompt
+          (is (= "Run tests" (:task (:opts @captured-args)))
+              "Task must NOT be prefixed with L2 envelope (P3-T4)")
+          ;; KEY ASSERTION: L2 context routed to :system-prompt
+          (is (some? (:system-prompt (:opts @captured-args)))
+              ":system-prompt should contain L2 envelope")
+          (is (str/includes? (:system-prompt (:opts @captured-args)) "L2-CONTEXT")
+              "system-prompt should contain L2 context marker")
+          ;; Verify task is NOT contaminated with L2 markers
+          (is (not (str/includes? (or (:task (:opts @captured-args)) "") "L2-CONTEXT"))
+              "Task string must not contain L2 markers — they belong in system-prompt"))))))
+
+(deftest headless-strategy-spawn-no-system-prompt-without-refs
+  (testing "P3-T4: No :system-prompt when no L2 context available"
+    (let [strat (headless-strat/->headless-strategy)
+          captured-args (atom nil)
+          ctx {:id "hs-no-l2-001" :cwd "/tmp/proj" :presets ["ling"] :model nil}]
+      (with-redefs [headless/spawn-headless!
+                    (fn [ling-id opts]
+                      (reset! captured-args {:ling-id ling-id :opts opts})
+                      {:ling-id ling-id :pid 12345})
+                    ;; Mock spawn-envelope to nil (no catchup context available)
+                    envelope/build-spawn-envelope
+                    (fn [_ _] nil)]
+        (strategy/strategy-spawn! strat ctx {:task "Plain task"})
+        (is (= "Plain task" (:task (:opts @captured-args)))
+            "Task should be unchanged")
+        (is (nil? (:system-prompt (:opts @captured-args)))
+            ":system-prompt should be nil without L2 context")))))
 
 (deftest headless-strategy-dispatch-via-stdin
   (testing "HeadlessStrategy.strategy-dispatch! writes to stdin"

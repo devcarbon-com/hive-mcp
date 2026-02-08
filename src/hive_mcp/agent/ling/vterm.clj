@@ -38,7 +38,7 @@
       (if (:success result)
         (let [elisp-slave-id (str/trim (or (:result result) id))]
           (log/info "Ling spawned via elisp (vterm)" {:requested-id id
-                                                       :elisp-slave-id elisp-slave-id})
+                                                      :elisp-slave-id elisp-slave-id})
           elisp-slave-id)
         (do
           (log/error "Failed to spawn ling via elisp" {:id id :error (:error result)})
@@ -101,7 +101,13 @@
         (do
           (log/warn "Elisp kill failed - NOT removing from DataScript"
                     {:id id :elisp-result elisp-result})
-          {:killed? false :id id :reason :elisp-kill-failed})))))
+          {:killed? false :id id :reason :elisp-kill-failed}))))
+
+  (strategy-interrupt! [_ ling-ctx]
+    (let [{:keys [id]} ling-ctx]
+      {:success? false
+       :ling-id id
+       :errors ["Interrupt not supported for vterm spawn mode"]})))
 
 ;;; =============================================================================
 ;;; Factory

@@ -1,60 +1,40 @@
 (ns hive-mcp.tools.memory.crud-test
-  "Unit tests for memory CRUD operations.
+  "Unit tests for memory CRUD intelligence modules.
 
    Tests cover:
-   - content-keyword-level: Content-based abstraction level detection (P1.5)
-   - tag-level-signal: Tag-based abstraction level signals (P1.5)
-   - classify-abstraction-level: Three-tier classification pipeline (P1.5)
+   - classify.clj: Abstraction level classification (P1.5)
+     - content-keyword-level, tag-level-signal, classify-abstraction-level
+   - gaps.clj: Knowledge gap auto-detection (P2.8)
+     - extract-knowledge-gaps, extract-questions, extract-todo-markers
+     - extract-uncertainty, extract-missing, extract-assumptions
    - Schema integration: type->abstraction-level map coverage
-   - extract-knowledge-gaps: Knowledge gap auto-detection (P2.8)
-   - extract-questions: Question extraction from content
-   - extract-todo-markers: TODO/TBD/FIXME extraction
-   - extract-uncertainty: Uncertainty language detection
-   - extract-missing: Missing/incomplete marker detection
-   - extract-assumptions: Assumption marker detection
 
    Test strategy:
-   - All functions are pure - tested directly
+   - All functions are pure (public in their modules) - tested directly
    - No Chroma or DataScript dependencies needed"
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.string :as str]
             [hive-mcp.knowledge-graph.schema :as kg-schema]
-            [hive-mcp.tools.memory.crud]))
+            [hive-mcp.tools.memory.classify :as classify]
+            [hive-mcp.tools.memory.gaps :as gaps]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 ;; =============================================================================
-;; Private fn accessors
+;; Aliases for cleaner test code (now public functions in extracted modules)
 ;; =============================================================================
 
-(def ^:private content-keyword-level
-  @(resolve 'hive-mcp.tools.memory.crud/content-keyword-level))
+(def ^:private content-keyword-level classify/content-keyword-level)
+(def ^:private tag-level-signal classify/tag-level-signal)
+(def ^:private classify-abstraction-level classify/classify-abstraction-level)
 
-(def ^:private tag-level-signal
-  @(resolve 'hive-mcp.tools.memory.crud/tag-level-signal))
-
-(def ^:private classify-abstraction-level
-  @(resolve 'hive-mcp.tools.memory.crud/classify-abstraction-level))
-
-;; P2.8: Knowledge gap detection accessors
-(def ^:private extract-knowledge-gaps
-  @(resolve 'hive-mcp.tools.memory.crud/extract-knowledge-gaps))
-
-(def ^:private extract-questions
-  @(resolve 'hive-mcp.tools.memory.crud/extract-questions))
-
-(def ^:private extract-todo-markers
-  @(resolve 'hive-mcp.tools.memory.crud/extract-todo-markers))
-
-(def ^:private extract-uncertainty
-  @(resolve 'hive-mcp.tools.memory.crud/extract-uncertainty))
-
-(def ^:private extract-missing
-  @(resolve 'hive-mcp.tools.memory.crud/extract-missing))
-
-(def ^:private extract-assumptions
-  @(resolve 'hive-mcp.tools.memory.crud/extract-assumptions))
+(def ^:private extract-knowledge-gaps gaps/extract-knowledge-gaps)
+(def ^:private extract-questions gaps/extract-questions)
+(def ^:private extract-todo-markers gaps/extract-todo-markers)
+(def ^:private extract-uncertainty gaps/extract-uncertainty)
+(def ^:private extract-missing gaps/extract-missing)
+(def ^:private extract-assumptions gaps/extract-assumptions)
 
 ;; =============================================================================
 ;; content-keyword-level Tests (Pure Function)

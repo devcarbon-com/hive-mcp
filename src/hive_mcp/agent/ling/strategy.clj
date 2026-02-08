@@ -60,4 +60,18 @@
        ling-ctx - Map with :id
 
      Returns:
-       {:killed? bool :id string ...}"))
+       {:killed? bool :id string ...}")
+
+  (strategy-interrupt! [this ling-ctx]
+    "Interrupt the current query/task of a running ling.
+
+     Not all strategies support interrupt. Unsupported strategies return
+     {:success? false :errors [\"Interrupt not supported for <mode>\"]}.
+
+     Arguments:
+       ling-ctx - Map with :id
+
+     Returns:
+       {:success? bool :ling-id string :errors [...]}
+
+     Does NOT throw — returns error map on failure (CLARITY-Y)."))

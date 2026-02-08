@@ -85,7 +85,7 @@
 ;;; Ling Record - IAgent Implementation (Strategy-Delegating Facade)
 ;;; =============================================================================
 
-(defrecord Ling [id cwd presets project-id spawn-mode model agents]
+(defrecord Ling [id cwd presets project-id spawn-mode model agents max-budget-usd]
   IAgent
 
   (spawn! [this opts]
@@ -93,6 +93,12 @@
 
      Delegates mode-specific spawn to ILingStrategy.
      Handles common concerns: model resolution, DataScript registration, initial task.
+
+     Budget guardrail (P2-T4):
+     When max-budget-usd is set (via opts or Ling record), registers a
+     per-agent budget via hooks.budget/register-budget! at spawn time.
+     The budget guardrail then checks cumulative cost on every tool call
+     via the permission system, denying+interrupting when exceeded.
 
      Hint injection flow (Tier 1 activation):
      When kanban-task-id is provided, generates KG-driven memory hints
@@ -173,6 +179,18 @@
                                          ;; Agent SDK mode: mark as alive (in-process, no PID)
                                          (= mode :agent-sdk)
                                          (assoc :ling/process-alive? true)))
+
+      ;; Budget guardrail (P2-T4): register per-agent budget if configured.
+      ;; Uses requiring-resolve to avoid hard dep on hooks.budget module.
+      (let [budget-val (or (:max-budget-usd opts) max-budget-usd)]
+        (when (and budget-val (pos? budget-val))
+          (try
+            (when-let [register-fn (requiring-resolve 'hive-mcp.agent.hooks.budget/register-budget!)]
+              (register-fn slave-id budget-val {:model (or effective-model "claude")})
+              (log/info "Budget guardrail registered for ling"
+                        {:ling-id slave-id :max-budget-usd budget-val}))
+            (catch Exception e
+              (log/debug "Budget guardrail registration failed (non-fatal):" (ex-message e))))))
 
       ;; For vterm mode, the task is NOT embedded in strategy-spawn! (spawn only
       ;; creates the buffer). We need a separate dispatch to send the task.
@@ -272,6 +290,12 @@
         (do
           ;; Common: Release claims first
           (.release-claims! this)
+          ;; Budget guardrail (P2-T4): deregister budget on kill
+          (try
+            (when-let [deregister-fn (requiring-resolve 'hive-mcp.agent.hooks.budget/deregister-budget!)]
+              (deregister-fn id))
+            (catch Exception e
+              (log/debug "Budget deregistration failed (non-fatal):" (ex-message e))))
           ;; Delegate kill to strategy
           (let [strat (resolve-strategy mode)
                 result (strategy/strategy-kill! strat (ling-ctx this))]
@@ -334,18 +358,21 @@
    Arguments:
      id   - Unique identifier for this ling
      opts - Map with optional keys:
-            :cwd        - Working directory
-            :presets    - Collection of preset names
-            :project-id - Project ID for scoping
-            :spawn-mode - :vterm (default), :headless, :openrouter, or :agent-sdk
-                          NOTE: :headless is accepted but maps to :agent-sdk
-                          (agent-sdk is the default headless mechanism since 0.12.0)
-            :model      - Model identifier (default: 'claude' = Claude Code CLI)
-                          Non-claude models automatically use :openrouter spawn-mode.
-            :agents     - Subagent definitions map (optional, agent-sdk mode only)
-                          Map of name -> {:description :prompt :tools :model}
-                          Passed to ClaudeAgentOptions.agents for custom
-                          subagent definitions in the Claude SDK session.
+            :cwd             - Working directory
+            :presets          - Collection of preset names
+            :project-id      - Project ID for scoping
+            :spawn-mode      - :vterm (default), :headless, :openrouter, or :agent-sdk
+                               NOTE: :headless is accepted but maps to :agent-sdk
+                               (agent-sdk is the default headless mechanism since 0.12.0)
+            :model           - Model identifier (default: 'claude' = Claude Code CLI)
+                               Non-claude models automatically use :openrouter spawn-mode.
+            :agents          - Subagent definitions map (optional, agent-sdk mode only)
+                               Map of name -> {:description :prompt :tools :model}
+                               Passed to ClaudeAgentOptions.agents for custom
+                               subagent definitions in the Claude SDK session.
+            :max-budget-usd  - Maximum USD spend for this ling (optional, P2-T4)
+                               When set, registers a budget guardrail that denies+interrupts
+                               tool calls when cumulative cost exceeds the limit.
 
    Returns:
      Ling record implementing IAgent protocol"
@@ -365,7 +392,8 @@
                         :project-id (:project-id opts)
                         :spawn-mode effective-spawn-mode
                         :model model-val}
-                 (:agents opts) (assoc :agents (:agents opts))))))
+                 (:agents opts)         (assoc :agents (:agents opts))
+                 (:max-budget-usd opts) (assoc :max-budget-usd (:max-budget-usd opts))))))
 
 (defn create-ling!
   "Create and spawn a new ling agent.
@@ -440,6 +468,37 @@
              :project-id (:slave/project-id slave)
              :spawn-mode (or (:ling/spawn-mode slave) :vterm)
              :model (:ling/model slave)})))
+
+;;; =============================================================================
+;;; Interrupt Support (P3-T3)
+;;; =============================================================================
+
+(defn interrupt-ling!
+  "Interrupt the current query/task of a running ling.
+
+   Resolves the ling's spawn mode and delegates to the appropriate strategy.
+   Currently only agent-sdk mode supports interrupt (via client.interrupt()).
+   Other modes return {:success? false :errors [...]}.
+
+   Arguments:
+     ling-id - ID of the ling to interrupt
+
+   Returns:
+     {:success? bool :ling-id string :errors [...]}
+
+   Does NOT throw — returns error map on failure (CLARITY-Y)."
+  [ling-id]
+  (if-let [ling (get-ling ling-id)]
+    (let [mode (or (:spawn-mode ling)
+                   (when-let [slave (ds-queries/get-slave ling-id)]
+                     (:ling/spawn-mode slave))
+                   :vterm)
+          strat (resolve-strategy mode)]
+      (strategy/strategy-interrupt! strat (ling-ctx ling)))
+    ;; Ling not found in DataScript
+    {:success? false
+     :ling-id ling-id
+     :errors [(str "Ling not found: " ling-id)]}))
 
 ;;; =============================================================================
 ;;; Critical Operations Guard

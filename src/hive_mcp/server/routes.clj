@@ -110,6 +110,22 @@
       (:agent-id args)
       default))
 
+(defn extract-caller-id
+  "Extract the actual MCP caller identity for piggyback cursor isolation.
+
+   Priority:
+   1. :_caller_id — injected by bb-mcp from CLAUDE_SWARM_SLAVE_ID.
+      Always present in modern bb-mcp, never overwritten by user args.
+      Distinguishes coordinator ('coordinator') from lings ('ling-xyz').
+   2. Fallback to 'coordinator' — for old bb-mcp versions without injection.
+
+   CRITICAL: Do NOT use :agent_id or ctx/current-agent-id here.
+   For dispatch-type tools, agent_id is the TARGET (e.g. 'ling-target'),
+   not the caller. Using it would create per-target cursors causing
+   re-delivery from timestamp 0 on every dispatch to a new target."
+  [args]
+  (or (:_caller_id args) "coordinator"))
+
 (defn extract-project-id
   "Extract project-id from args map.
 
@@ -277,20 +293,18 @@
    Runs BEFORE hivemind piggyback in the middleware chain so both
    channels can append to content independently.
 
-   CURSOR FIX: Always uses session-level coordinator identity, NOT
-   extract-agent-id from args or ctx. Both args and ctx may contain
-   a target agent_id (e.g. agent dispatch sets ctx from args), which
-   would create spurious cursor keys per target agent."
+   CURSOR ISOLATION: Uses _caller_id (injected by bb-mcp) for per-caller
+   cursor isolation. Each MCP session (coordinator, ling-1, ling-2) gets
+   its own cursor, preventing lings from consuming coordinator's messages.
+   Falls back to 'coordinator' for old bb-mcp versions."
   [handler]
   (fn [args]
     (let [content (handler args)
           project-id (extract-project-id args)
-          ;; Always use coordinator identity for piggyback cursor.
-          ;; ctx/current-agent-id and args both polluted by target agent_id
-          ;; on dispatch-type tools. Piggyback cursor must be session-stable.
+          caller-id (extract-caller-id args)
           agent-id (if project-id
-                     (str "coordinator-" project-id)
-                     "coordinator")
+                     (str caller-id "-" project-id)
+                     caller-id)
           drain-result (drain-memory-piggyback agent-id project-id)]
       (wrap-memory-piggyback-content content drain-result))))
 
@@ -299,30 +313,24 @@
    SRP: Single responsibility - piggyback embedding only.
 
    Expects handler to return normalized content (vector of items).
-   Uses reader identity for cursor tracking, retrieves piggyback,
+   Uses caller identity for cursor tracking, retrieves piggyback,
    embeds in content.
 
    CRITICAL: project-id scoping ensures coordinators only see their
    project's shouts, preventing cross-project message consumption.
 
-   CURSOR ISOLATION FIX: When no explicit agent-id provided, use
-   'coordinator-{project-id}' to prevent cursor sharing across projects.
-
-   CURSOR IDENTITY FIX: Always uses session-level coordinator identity,
-   NOT extract-agent-id from args or ctx. Both may contain target
-   agent_id (e.g. agent dispatch sets ctx from args), which would
-   create spurious cursor keys causing ALL accumulated shouts to be
-   re-delivered from timestamp 0 on every dispatch to a new target."
+   CURSOR ISOLATION: Uses _caller_id (injected by bb-mcp) for per-caller
+   cursor isolation. Each MCP session (coordinator, ling-1, ling-2) gets
+   its own cursor, preventing lings from consuming coordinator's shouts.
+   Falls back to 'coordinator' for old bb-mcp versions."
   [handler]
   (fn [args]
     (let [content (handler args)
           project-id (extract-project-id args)
-          ;; Always use coordinator identity for piggyback cursor.
-          ;; ctx/current-agent-id and args both polluted by target agent_id
-          ;; on dispatch-type tools. Piggyback cursor must be session-stable.
+          caller-id (extract-caller-id args)
           agent-id (if project-id
-                     (str "coordinator-" project-id)
-                     "coordinator")
+                     (str caller-id "-" project-id)
+                     caller-id)
           piggyback (get-piggyback-messages agent-id project-id)]
       (wrap-piggyback content piggyback))))
 
@@ -346,11 +354,11 @@
     (if (:async args)
       (let [task-id (str "atask-" (random-uuid))
             project-id (extract-project-id args)
-            ;; Always use coordinator identity for buffer key alignment
-            ;; with drain wrapper. See CURSOR IDENTITY FIX in piggyback wrappers.
+            caller-id (extract-caller-id args)
+            ;; Use caller identity for buffer key alignment with drain wrapper.
             agent-id (if project-id
-                       (str "coordinator-" project-id)
-                       "coordinator")]
+                       (str caller-id "-" project-id)
+                       caller-id)]
         ;; Spawn background execution
         (future
           (try
@@ -387,6 +395,9 @@
    Runs alongside memory-piggyback and hivemind-piggyback in the
    middleware chain so all three channels can append independently.
 
+   CURSOR ISOLATION: Uses _caller_id for per-caller cursor alignment
+   with async enqueue. See extract-caller-id.
+
    Format:
    ---TOOLRESULT---
    {:results [...] :remaining N :total M :delivered D}
@@ -395,11 +406,10 @@
   (fn [args]
     (let [content (handler args)
           project-id (extract-project-id args)
-          ;; Always use coordinator identity for buffer key alignment
-          ;; with async enqueue. See CURSOR IDENTITY FIX in piggyback wrappers.
+          caller-id (extract-caller-id args)
           agent-id (if project-id
-                     (str "coordinator-" project-id)
-                     "coordinator")
+                     (str caller-id "-" project-id)
+                     caller-id)
           drain-result (async-buf/drain! agent-id project-id)]
       (wrap-delimited-block content "TOOLRESULT"
                             (when drain-result (pr-str drain-result))))))

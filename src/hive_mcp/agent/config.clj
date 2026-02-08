@@ -1,6 +1,10 @@
 (ns hive-mcp.agent.config
-  "OpenRouter configuration for agent delegation.
-   
+  "DEPRECATED: OpenRouter configuration for agent delegation.
+
+   Prefer hive-agent configuration when hive-agent is on classpath.
+   This namespace is retained as fallback configuration for the legacy
+   drone execution path. See hive-mcp.agent.hive-agent-bridge.
+
    Manages task-type to model mappings and preset configurations.
    All state is held in atoms for runtime configurability via MCP."
   (:require [hive-mcp.config :as global-config]
@@ -165,15 +169,17 @@
      :task-type task-type
      :resolved-task-type resolved-task-type}))
 
-(defn openrouter-backend
-  "Create an OpenRouter backend for agent delegation.
-   
+(defn ^:deprecated openrouter-backend
+  "DEPRECATED: Prefer hive-agent via hive-mcp.agent.hive-agent-bridge.
+
+   Create an OpenRouter backend for agent delegation.
+
    Options:
      :model     - Explicit model name (highest priority)
      :preset    - Swarm preset name for auto task-type selection
      :task-type - Task type for model selection (:coding :arch :docs)
      :api-key   - OpenRouter API key (or set OPENROUTER_API_KEY env)
-   
+
    Priority: model > preset > task-type > :coding (default)"
   [{:keys [model preset task-type api-key]
     :or {task-type :coding}}]

@@ -30,6 +30,7 @@
             [hive-mcp.agent.routing :as routing]
             [hive-mcp.agent.registry :as registry]
             [hive-mcp.agent.cost :as cost]
+            [hive-mcp.agent.hive-agent-bridge :as ha-bridge]
             [hive-mcp.protocols.kg :as kg]
             [hive-mcp.swarm.coordinator :as coordinator]
             [hive-mcp.swarm.datascript :as ds]
@@ -278,17 +279,18 @@
 (defn phase:execute-agentic!
   "Phase 4b: Execute task via in-process agentic loop with session KG.
 
-   Unlike phase:execute! (which delegates to an external function),
-   this creates an LLM backend and runs the agentic loop in-process:
-   - Multi-turn think-act-observe loop
-   - Session KG (Datalevin) for context compression
-   - Tool execution via executor with allowlist enforcement
-   - Termination heuristics (completion language, max turns, failures)
+   **Primary path**: Routes through hive-agent.loop.core/run-agent when available.
+   hive-agent provides a multi-turn agentic loop with native JVM tools and
+   hive-mcp tool bridge (via requiring-resolve). This replaces the old
+   one-shot drone delegation with a proper think-act-observe loop.
+
+   **Fallback path**: When hive-agent is not on classpath, falls back to
+   the existing drone.loop/run-agentic-loop (legacy, deprecated).
 
    Side effects:
    - Emits :drone/started event
    - Shouts to parent ling
-   - Records observations in session KG
+   - Records observations in session KG (when using legacy path)
    - Executes tools via agent executor
 
    Arguments:
@@ -342,50 +344,71 @@
                        {:task (str "Agentic drone: " (subs task 0 (min 80 (count task))))
                         :message (format "Agentic drone %s starting multi-turn loop" drone-id)}))
 
-    ;; Ensure tool registry is initialized
-    (registry/ensure-registered!)
+    ;; PRIMARY PATH: Try hive-agent's run-agent (multi-turn agentic loop)
+    (if-let [ha-result (ha-bridge/run-agent-via-bridge
+                        {:task augmented-task
+                         :model model
+                         :max-turns (or step-budget 20)
+                         :preset-content preset
+                         :project-id nil})]
+      ;; hive-agent handled it — return result
+      (do
+        (log/info {:event :drone/hive-agent-completed
+                   :drone-id drone-id
+                   :turns (get-in ha-result [:hive-agent-metadata :turns])
+                   :tool-calls (:tool_calls_made ha-result)})
+        ha-result)
 
-    ;; Create LLM backend
-    (let [backend (try
-                    (require 'hive-mcp.agent.config)
-                    ((resolve 'hive-mcp.agent.config/openrouter-backend)
-                     {:model model :preset preset})
-                    (catch Exception e
-                      (log/error {:event :drone/backend-creation-failed
-                                  :drone-id drone-id
-                                  :model model
-                                  :error (.getMessage e)})
-                      (throw (ex-info "Failed to create LLM backend"
-                                      {:drone-id drone-id
-                                       :model model
-                                       :error (.getMessage e)}
-                                      e))))
+      ;; FALLBACK PATH: hive-agent not on classpath — use legacy drone loop
+      (do
+        (log/warn {:event :drone/hive-agent-unavailable
+                   :drone-id drone-id
+                   :message "Falling back to legacy agentic loop (deprecated)"})
 
-          ;; Resolve tool allowlist for this drone
-          effective-tools (or tools
-                              (let [al (allowlist/resolve-allowlist
-                                        {:task-type (:task-type task-spec)})]
-                                (vec al)))
+        ;; Ensure tool registry is initialized
+        (registry/ensure-registered!)
 
-          ;; Build permissions set from sandbox
-          permissions (if (get options :auto-approve)
-                        #{:auto-approve}
-                        #{})]
+        ;; Create LLM backend (legacy path)
+        (let [backend (try
+                        (require 'hive-mcp.agent.config)
+                        ((resolve 'hive-mcp.agent.config/openrouter-backend)
+                         {:model model :preset preset})
+                        (catch Exception e
+                          (log/error {:event :drone/backend-creation-failed
+                                      :drone-id drone-id
+                                      :model model
+                                      :error (.getMessage e)})
+                          (throw (ex-info "Failed to create LLM backend"
+                                          {:drone-id drone-id
+                                           :model model
+                                           :error (.getMessage e)}
+                                          e))))
 
-      ;; Execute agentic loop with per-drone KG isolation
-      (binding [domain/*drone-kg-store* (:kg-store ctx)]
-        (agentic-loop/run-agentic-loop
-         {:task augmented-task
-          :files (or files [])
-          :cwd cwd}
-         {:drone-id drone-id
-          :kg-store (:kg-store ctx)}
-         {:max-turns (or step-budget 10)
-          :backend backend
-          :tools effective-tools
-          :permissions permissions
-          :trace? (get options :trace true)
-          :agent-id drone-id})))))
+              ;; Resolve tool allowlist for this drone
+              effective-tools (or tools
+                                  (let [al (allowlist/resolve-allowlist
+                                            {:task-type (:task-type task-spec)})]
+                                    (vec al)))
+
+              ;; Build permissions set from sandbox
+              permissions (if (get options :auto-approve)
+                            #{:auto-approve}
+                            #{})]
+
+          ;; Execute agentic loop with per-drone KG isolation (legacy)
+          (binding [domain/*drone-kg-store* (:kg-store ctx)]
+            (agentic-loop/run-agentic-loop
+             {:task augmented-task
+              :files (or files [])
+              :cwd cwd}
+             {:drone-id drone-id
+              :kg-store (:kg-store ctx)}
+             {:max-turns (or step-budget 10)
+              :backend backend
+              :tools effective-tools
+              :permissions permissions
+              :trace? (get options :trace true)
+              :agent-id drone-id})))))))
 
 ;;; ============================================================
 ;;; Phase 5: Finalize - Diffs, Validation, Metrics
