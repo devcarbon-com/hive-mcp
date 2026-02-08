@@ -144,14 +144,15 @@
               ;; incremental delivery via ---MEMORY--- blocks on subsequent calls.
               ;; Axioms first (highest priority), then priority conventions.
               ;;
-              ;; CURSOR IDENTITY FIX: Must use the SAME stable coordinator identity
-              ;; as wrap-handler-memory-piggyback in routes.clj for the buffer key.
-              ;; Previously used (or (:agent_id args) ...) which diverged from the
-              ;; middleware's drain key when caller passed agent_id (e.g. "coordinator").
-              ;; See decision 20260207012136-1c3339e5.
+              ;; CURSOR ISOLATION: Must use the SAME caller identity formula as
+              ;; wrap-handler-memory-piggyback in routes.clj for buffer key alignment.
+              ;; Uses _caller_id (injected by bb-mcp) for per-caller isolation,
+              ;; falls back to "coordinator" for old bb-mcp versions.
+              ;; See extract-caller-id in routes.clj.
+              caller-id (or (:_caller_id args) "coordinator")
               piggyback-agent-id (if project-id
-                                   (str "coordinator-" project-id)
-                                   "coordinator")
+                                   (str caller-id "-" project-id)
+                                   caller-id)
               piggyback-entries (into (vec axioms) priority-conventions)
 
               ;; Dual-write: Cache entry categories in context-store for pass-by-ref mode.

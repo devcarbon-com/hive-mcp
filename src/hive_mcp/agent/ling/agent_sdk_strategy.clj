@@ -1,11 +1,12 @@
 (ns hive-mcp.agent.ling.agent-sdk-strategy
-  "Agent SDK spawn strategy — Claude Agent SDK (Python) ling lifecycle.
+  "Agent SDK spawn strategy — Claude Code SDK (Python) ling lifecycle.
 
    Delegates to hive-mcp.agent.headless-sdk for SDK session management.
-   Uses libpython-clj to bridge Clojure ↔ Python, running the Claude Agent SDK
+   Uses libpython-clj to bridge Clojure ↔ Python, running the Claude Code SDK
    in the same JVM process with direct DataScript access.
 
-   SAA (Silence-Abstract-Act) phases are managed by the SDK module.
+   ClaudeSDKClient is used as an async context manager for safe connect/disconnect
+   lifecycle. SAA (Silence-Abstract-Act) phases are managed by the SDK module.
 
    SOLID: Single Responsibility — only SDK strategy adaptation.
    CLARITY: L — Pure adapter between ILingStrategy and headless-sdk module."
@@ -36,7 +37,7 @@
                          :spawn-mode :agent-sdk
                          :hint (case (sdk/sdk-status)
                                  :no-libpython "Add clj-python/libpython-clj to deps.edn"
-                                 :no-sdk "Run: pip install claude-agent-sdk"
+                                 :no-sdk "Run: pip install claude-code-sdk"
                                  :not-initialized "Python initialization failed"
                                  "Unknown SDK issue")})))
       (let [result (sdk/spawn-headless-sdk! id (cond-> {:cwd cwd
@@ -55,13 +56,15 @@
   (strategy-dispatch! [_ ling-ctx task-opts]
     (let [{:keys [id]} ling-ctx
           {:keys [task]} task-opts
-          dispatch-opts (select-keys task-opts [:skip-silence? :skip-abstract? :phase])]
+          ;; P3-T2: Thread :raw? through to SDK layer for multi-turn without SAA wrapping
+          dispatch-opts (select-keys task-opts [:skip-silence? :skip-abstract? :phase :raw?])]
       (when-not (sdk/get-session id)
         (throw (ex-info "Agent SDK session not found for dispatch"
                         {:ling-id id})))
       (let [result-ch (sdk/dispatch-headless-sdk! id task dispatch-opts)]
         (log/info "Task dispatched to Agent SDK ling" {:ling-id id
-                                                       :has-result-ch? (some? result-ch)})
+                                                       :has-result-ch? (some? result-ch)
+                                                       :raw? (:raw? dispatch-opts false)})
         ;; Return the result channel so callers can consume SAA messages
         result-ch)))
 
@@ -78,7 +81,12 @@
                       :sdk-observations-count (:observations-count sdk-info)
                       :sdk-started-at (:started-at sdk-info)
                       :sdk-uptime-ms (:uptime-ms sdk-info)
-                      :sdk-backend (:backend sdk-info))
+                      :sdk-backend (:backend sdk-info)
+                      ;; P3-T2: Multi-turn tracking fields
+                      :sdk-turn-count (or (:turn-count sdk-info) 0)
+                      :sdk-has-persistent-client? (boolean (:has-persistent-client? sdk-info))
+                      ;; P3-T3: Interrupt capability
+                      :sdk-interruptable? (boolean (:interruptable? sdk-info)))
           (nil? ds-status) (assoc :slave/status :idle))
         ;; No SDK session found
         (if ds-status
@@ -94,7 +102,12 @@
         (catch clojure.lang.ExceptionInfo e
           ;; Session might not exist (already dead or never spawned)
           (log/warn "Agent SDK kill exception" {:id id :error (ex-message e)})
-          {:killed? true :id id :reason :session-not-found})))))
+          {:killed? true :id id :reason :session-not-found}))))
+
+  (strategy-interrupt! [_ ling-ctx]
+    (let [{:keys [id]} ling-ctx]
+      (log/info "Interrupting Agent SDK ling" {:id id})
+      (sdk/interrupt-headless-sdk! id))))
 
 ;;; =============================================================================
 ;;; Factory

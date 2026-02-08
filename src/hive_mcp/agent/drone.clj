@@ -28,6 +28,7 @@
             [hive-mcp.agent.routing :as routing]
             [hive-mcp.agent.drone.tools :as drone-tools]
             [hive-mcp.agent.drone.preset :as preset]
+            [hive-mcp.agent.hive-agent-bridge :as ha-bridge]
             [hive-mcp.tools.diff :as diff]
             [hive-mcp.swarm.coordinator :as coordinator]
             [hive-mcp.swarm.datascript :as ds]

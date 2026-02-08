@@ -13,6 +13,7 @@
             [clojure.data.json :as json]
             [clojure.java.io :as io]
             [hive-mcp.tools.diff :as diff]
+            [hive-mcp.tools.diff.validation :as diff-validation]
             [hive-mcp.agent.context :as ctx]))
 
 ;; =============================================================================
@@ -69,9 +70,11 @@
                       (clear-pending-diffs!)))
 
 (defmacro with-mock-path-validation
-  "Run body with path validation mocked to always succeed."
+  "Run body with path validation mocked to always succeed.
+   Targets the original var in validation ns (not the facade re-export)
+   since handlers.clj calls validation/validate-diff-path directly."
   [& body]
-  `(with-redefs [diff/validate-diff-path mock-validate-path]
+  `(with-redefs [diff-validation/validate-diff-path mock-validate-path]
      ~@body))
 
 ;; =============================================================================
@@ -443,7 +446,7 @@
 
 (deftest test-sandbox-path-translation
   (testing "translate-sandbox-path converts /tmp/fs-N/ paths to project paths"
-    (with-redefs [diff/get-project-root (constantly "/home/user/project")]
+    (with-redefs [diff-validation/get-project-root (constantly "/home/user/project")]
       (is (= "/home/user/project/src/foo.clj"
              (diff/translate-sandbox-path "/tmp/fs-1/src/foo.clj")))
       (is (= "/home/user/project/test/bar_test.clj"

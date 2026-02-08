@@ -395,6 +395,43 @@
       :error          (ns-resolve ns' 'handle-error)})))
 
 ;; =============================================================================
+;; SAA Workflow Registration
+;; =============================================================================
+
+(defn register-saa-workflow!
+  "Register the saa-workflow handlers.
+   Requires hive-mcp.workflows.saa-workflow namespace to be loaded.
+
+   Maps EDN keyword handlers to saa-workflow implementation fns:
+     :start          -> handle-start
+     :catchup        -> handle-catchup
+     :silence        -> handle-silence
+     :silence-review -> handle-silence-review
+     :abstract       -> handle-abstract
+     :validate-plan  -> handle-validate-plan
+     :store-plan     -> handle-store-plan
+     :act-dispatch   -> handle-act-dispatch
+     :act-verify     -> handle-act-verify
+     :end            -> handle-end
+     :error          -> handle-error"
+  []
+  (require 'hive-mcp.workflows.saa-workflow)
+  (let [ns' (find-ns 'hive-mcp.workflows.saa-workflow)]
+    (register-handlers!
+     :saa-workflow
+     {:start          (ns-resolve ns' 'handle-start)
+      :catchup        (ns-resolve ns' 'handle-catchup)
+      :silence        (ns-resolve ns' 'handle-silence)
+      :silence-review (ns-resolve ns' 'handle-silence-review)
+      :abstract       (ns-resolve ns' 'handle-abstract)
+      :validate-plan  (ns-resolve ns' 'handle-validate-plan)
+      :store-plan     (ns-resolve ns' 'handle-store-plan)
+      :act-dispatch   (ns-resolve ns' 'handle-act-dispatch)
+      :act-verify     (ns-resolve ns' 'handle-act-verify)
+      :end            (ns-resolve ns' 'handle-end)
+      :error          (ns-resolve ns' 'handle-error)})))
+
+;; =============================================================================
 ;; Init (Boot Entry Point)
 ;; =============================================================================
 
@@ -413,6 +450,7 @@
   (register-wrap-session!)
   (register-complete-session!)
   (register-catchup!)
+  (register-saa-workflow!)
   (compile-registry!)
   (let [workflows (list-workflows)]
     (log/info "Workflow registry initialized" {:workflows workflows})

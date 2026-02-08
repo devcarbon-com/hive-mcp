@@ -59,7 +59,8 @@
          :project  (resolve-handler 'hive-mcp.tools.consolidated.project/handle-project)
          :session  (resolve-handler 'hive-mcp.tools.consolidated.session/handle-session)
          :emacs    (resolve-handler 'hive-mcp.tools.consolidated.emacs/handle-emacs)
-         :agent    (resolve-handler 'hive-mcp.tools.consolidated.agent/handle-agent)}
+         :agent    (resolve-handler 'hive-mcp.tools.consolidated.agent/handle-agent)
+         :multi    (resolve-handler 'hive-mcp.tools.consolidated.multi/handle-multi)}
         nil-handlers (filterv (fn [[_ v]] (nil? v)) handlers-map)]
     ;; Validate all handlers loaded successfully
     (when (seq nil-handlers)

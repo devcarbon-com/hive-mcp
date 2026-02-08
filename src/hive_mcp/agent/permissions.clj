@@ -20,6 +20,7 @@
    Integration:
    - Bridges tool_allowlist.clj for drone tool filtering
    - Supports hooks-style callbacks for permission prompts
+   - Budget guardrail hooks via agent.hooks.budget (P2-T4)
    - Default policy: safe-autonomy (read + safe-write allowed)
 
    SOLID-I: Permission logic separate from session/backend.
@@ -389,6 +390,93 @@
      Policy with :allow-all level"
   []
   (->policy :allow-all))
+
+;;; ============================================================================
+;;; Budget-Aware Policy Presets (P2-T4 Hook Integration)
+;;; ============================================================================
+
+(defn- resolve-budget-guardrail-handler
+  "Dynamically resolve the budget guardrail handler factory.
+   Uses requiring-resolve to avoid circular deps and keep budget module optional.
+
+   Returns:
+     Budget guardrail handler fn, or nil if module unavailable."
+  []
+  (try
+    (when-let [factory-fn (requiring-resolve 'hive-mcp.agent.hooks.budget/budget-guardrail-handler)]
+      (factory-fn))
+    (catch Exception e
+      (log/debug "Budget guardrail handler not available" {:error (ex-message e)})
+      nil)))
+
+(defn ling-policy-with-budget
+  "Permission policy for ling agents with budget guardrail.
+   Composes :allow-safe permissions with budget checking.
+   If budget module is unavailable, falls back to plain ling-policy.
+
+   The budget guardrail checks cumulative USD cost per agent and
+   denies+interrupts tool calls when max-budget-usd is exceeded.
+
+   Arguments:
+     opts - Optional map:
+            :max-budget-usd - USD budget limit (registers on first check)
+            :agent-id       - Agent ID for budget tracking
+            :model          - Model for cost estimation
+
+   Returns:
+     Policy with :allow-safe level + budget guardrail composite handler"
+  ([] (ling-policy-with-budget {}))
+  ([opts]
+   (if-let [budget-handler (resolve-budget-guardrail-handler)]
+     ;; Register the budget if provided
+     (do
+       (when (and (:agent-id opts) (:max-budget-usd opts))
+         (try
+           (let [register-fn (requiring-resolve 'hive-mcp.agent.hooks.budget/register-budget!)]
+             (register-fn (:agent-id opts)
+                          (:max-budget-usd opts)
+                          {:model (:model opts)}))
+           (catch Exception e
+             (log/warn "Failed to register budget" {:error (ex-message e)}))))
+       ;; Compose: logging + budget guardrail
+       (->policy :allow-safe
+                 (composite-handler [(logging-handler) budget-handler])))
+     ;; Budget module not available → fallback to plain ling-policy
+     (do
+       (log/debug "Budget module unavailable, using plain ling-policy")
+       (ling-policy)))))
+
+(defn drone-policy-with-budget
+  "Permission policy for drone agents with budget guardrail.
+   Composes allowlist filtering with budget checking.
+
+   Arguments:
+     opts - Drone options map with:
+            :tool-allowlist  - Explicit allowlist set
+            :task-type       - Task type for profile-based allowlist
+            :max-budget-usd  - USD budget limit
+            :agent-id        - Agent ID for budget tracking
+            :model           - Model for cost estimation
+
+   Returns:
+     Policy with :allow-safe level + allowlist + budget composite handler"
+  [opts]
+  (let [al-handler (allowlist-handler opts)
+        budget-handler (resolve-budget-guardrail-handler)]
+    ;; Register the budget if provided
+    (when (and (:agent-id opts) (:max-budget-usd opts) budget-handler)
+      (try
+        (let [register-fn (requiring-resolve 'hive-mcp.agent.hooks.budget/register-budget!)]
+          (register-fn (:agent-id opts)
+                       (:max-budget-usd opts)
+                       {:model (:model opts)}))
+        (catch Exception e
+          (log/warn "Failed to register drone budget" {:error (ex-message e)}))))
+    (if budget-handler
+      (->policy :allow-safe
+                (composite-handler [al-handler budget-handler]))
+      ;; No budget module → plain drone-policy
+      (->policy :allow-safe al-handler))))
 
 ;;; ============================================================================
 ;;; Stateful Permission Manager (per-session)

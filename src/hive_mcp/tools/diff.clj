@@ -1,9 +1,16 @@
 (ns hive-mcp.tools.diff
-  "Diff-based workflow tools for drone agents.
+  "Diff-based workflow tools for drone agents — facade module.
 
-   Drones (OpenRouter free-tier models) cannot safely use file_write/file_edit
-   directly due to their lower capability. This module provides a review-based
-   workflow where drones propose diffs that the hivemind can review and apply.
+   This namespace re-exports all public vars from the diff sub-modules
+   for backward compatibility. New code should require specific sub-modules:
+
+   - hive-mcp.tools.diff.state       — atoms, TDD status
+   - hive-mcp.tools.diff.compute     — pure diff computation
+   - hive-mcp.tools.diff.validation  — path validation
+   - hive-mcp.tools.diff.auto-approve — approval rules
+   - hive-mcp.tools.diff.handlers    — core MCP handlers
+   - hive-mcp.tools.diff.wave        — wave batch operations
+   - hive-mcp.tools.diff.batch       — multi-drone batch operations
 
    Workflow:
    1. Drone calls propose_diff with old/new content and description
@@ -12,968 +19,199 @@
    4. Hivemind calls apply_diff (applies change) or reject_diff (discards)
 
    Token-Efficient Three-Tier API (ADR 20260125002853):
-   - Tier 1: list_proposed_diffs → metadata + metrics only (~200 tokens/diff)
-   - Tier 2: get_diff_details → formatted hunks (~500 tokens/diff)
-   - Tier 3: apply_diff → uses stored full content internally
-
-   Architecture (DDD/SOLID):
-   - Domain: Diff lifecycle (pending → applied/rejected)
-   - Application: Handlers coordinate validation + state updates
-   - Infra: File I/O via slurp/spit (mocked in tests)"
-  (:require [hive-mcp.tools.core :refer [mcp-json]]
-            [hive-mcp.agent.context :as ctx]
-            [hive-mcp.emacsclient :as ec]
-            [hive-mcp.guards :as guards]
-            [clojure.data.json :as json]
-            [clojure.string :as str]
-            [clojure.java.io :as io]
-            [taoensso.timbre :as log])
-  (:import [com.github.difflib DiffUtils]
-           [com.github.difflib.patch DeltaType AbstractDelta]))
+   - Tier 1: list_proposed_diffs -> metadata + metrics only (~200 tokens/diff)
+   - Tier 2: get_diff_details -> formatted hunks (~500 tokens/diff)
+   - Tier 3: apply_diff -> uses stored full content internally"
+  (:require [hive-mcp.tools.diff.state :as state]
+            [hive-mcp.tools.diff.compute :as compute]
+            [hive-mcp.tools.diff.validation :as validation]
+            [hive-mcp.tools.diff.auto-approve :as auto-approve]
+            [hive-mcp.tools.diff.handlers :as handlers]
+            [hive-mcp.tools.diff.wave :as wave]
+            [hive-mcp.tools.diff.batch :as batch]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 ;; =============================================================================
-;; Domain: Pending Diffs State
+;; Re-exports: State
 ;; =============================================================================
 
-(defn- mcp-error-json
-  "Create an error MCP response with JSON-encoded error message."
-  [error-message]
-  {:type "text"
-   :text (json/write-str {:error error-message})
-   :isError true})
+(def pending-diffs
+  "Atom storing pending diff proposals. Map of diff-id -> diff-data."
+  state/pending-diffs)
 
-;; Atom storing pending diff proposals. Map of diff-id -> diff-data.
-(defonce pending-diffs (atom {}))
-
-;; Forward declarations for functions defined later but used in wave helpers
-(declare handle-apply-diff handle-reject-diff)
-
-;; =============================================================================
-;; Auto-Approve Rules Configuration
-;; =============================================================================
+(def auto-approve-rules
+  "Atom storing current auto-approve rules."
+  state/auto-approve-rules)
 
 (def default-auto-approve-rules
-  "Default rules for auto-approving diff proposals.
+  "Default auto-approve rules configuration."
+  state/default-auto-approve-rules)
 
-   A diff is auto-approved only if ALL conditions are met:
-   - max-lines-changed: Maximum total lines added + deleted
-   - no-deletions-only: Reject changes that only delete code
-   - require-description: Require non-empty description
-   - allowed-path-patterns: Regex patterns for allowed file paths"
-  {:max-lines-changed 100
-   :no-deletions-only true
-   :require-description true
-   :allowed-path-patterns [#".*\.clj[sx]?$"    ; Clojure files
-                           #".*\.edn$"         ; EDN config
-                           #".*\.md$"          ; Markdown docs
-                           #".*\.json$"]})     ; JSON config
+(def clear-pending-diffs!
+  "Clear pending diffs. GUARDED - no-op if coordinator running."
+  state/clear-pending-diffs!)
 
-(defonce auto-approve-rules (atom default-auto-approve-rules))
-
-(defn clear-pending-diffs!
-  "Clear pending diffs. GUARDED - no-op if coordinator running.
-
-   CLARITY-Y: Yield safe failure - prevents test fixtures from
-   corrupting production diff state."
-  []
-  (guards/when-not-coordinator
-   "clear-pending-diffs! called"
-   (reset! pending-diffs {})))
+(def update-diff-tdd-status!
+  "Update a diff's TDD status after drone runs tests/lint."
+  state/update-diff-tdd-status!)
 
 ;; =============================================================================
-;; Domain: Diff Operations (Pure Functions)
+;; Re-exports: Compute
 ;; =============================================================================
 
-(defn generate-diff-id
+(def generate-diff-id
   "Generate a unique diff ID."
-  []
-  (str "diff-" (System/currentTimeMillis) "-" (rand-int 10000)))
+  compute/generate-diff-id)
 
-(defn compute-unified-diff
-  "Compute a unified diff between old and new content.
-   Returns a string in unified diff format.
+(def compute-unified-diff
+  "DEPRECATED: Use compute-hunks. Compute a unified diff."
+  compute/compute-unified-diff)
 
-   DEPRECATED: Use compute-hunks for token-efficient diff storage.
-   This naive implementation marks ALL lines as changed."
-  [old-content new-content file-path]
-  (let [old-lines (str/split-lines old-content)
-        new-lines (str/split-lines new-content)
-        ;; Simple line-by-line diff (not full Myers algorithm, but sufficient)
-        header (str "--- a/" file-path "\n+++ b/" file-path "\n@@ -1,"
-                    (count old-lines) " +1," (count new-lines) " @@\n")]
-    (str header
-         (str/join "\n"
-                   (concat
-                    (map #(str "-" %) old-lines)
-                    (map #(str "+" %) new-lines))))))
+(def compute-hunks
+  "Compute git-style hunks using java-diff-utils."
+  compute/compute-hunks)
 
-;; =============================================================================
-;; Token-Efficient Hunk-Based Diff (ADR 20260125002853)
-;; =============================================================================
+(def compute-metrics
+  "Compute diff metrics from hunks."
+  compute/compute-metrics)
 
-(defn- delta-type->keyword
-  "Convert Java DeltaType enum to Clojure keyword."
-  [^DeltaType dt]
-  (condp = dt
-    DeltaType/CHANGE :change
-    DeltaType/DELETE :delete
-    DeltaType/INSERT :insert
-    DeltaType/EQUAL  :equal
-    :unknown))
-
-(defn- extract-context
-  "Extract context lines around a position.
-   Returns {:before [lines...] :after [lines...]}."
-  [lines position length context-size]
-  (let [before-start (max 0 (- position context-size))
-        after-end (min (count lines) (+ position length context-size))]
-    {:before (vec (subvec (vec lines) before-start position))
-     :after (vec (subvec (vec lines) (+ position length) after-end))}))
-
-(defn- delta->hunk
-  "Convert a java-diff-utils Delta to a hunk map with context."
-  [^AbstractDelta delta old-lines _new-lines context-size]
-  (let [source (.getSource delta)
-        target (.getTarget delta)
-        old-pos (.getPosition source)
-        new-pos (.getPosition target)
-        old-chunk-lines (vec (.getLines source))
-        new-chunk-lines (vec (.getLines target))
-        context (extract-context old-lines old-pos (count old-chunk-lines) context-size)]
-    {:type (delta-type->keyword (.getType delta))
-     :start-old (inc old-pos)  ; 1-indexed for display
-     :start-new (inc new-pos)
-     :old-lines (count old-chunk-lines)
-     :new-lines (count new-chunk-lines)
-     :context-before (:before context)
-     :removed old-chunk-lines
-     :added new-chunk-lines
-     :context-after (:after context)}))
-
-(defn compute-hunks
-  "Compute git-style hunks using java-diff-utils.
-   Returns vector of hunk maps with context.
-
-   Each hunk contains:
-   - :type - :change, :delete, :insert
-   - :start-old, :start-new - 1-indexed line positions
-   - :old-lines, :new-lines - count of lines in each version
-   - :context-before, :context-after - surrounding lines
-   - :removed, :added - actual changed lines
-
-   Options:
-   - :context-lines (default 3) - lines of context around changes"
-  [old-content new-content & [{:keys [context-lines] :or {context-lines 3}}]]
-  (let [old-lines (if (str/blank? old-content) [] (str/split-lines old-content))
-        new-lines (if (str/blank? new-content) [] (str/split-lines new-content))
-        patch (DiffUtils/diff old-lines new-lines)
-        deltas (.getDeltas patch)]
-    (mapv #(delta->hunk % old-lines new-lines context-lines) deltas)))
-
-(defn compute-metrics
-  "Compute diff metrics from hunks.
-   Returns map with :lines-added, :lines-removed, :net-change, :hunks-count."
-  [hunks]
-  (let [added (reduce + (map :new-lines hunks))
-        removed (reduce + (map :old-lines hunks))]
-    {:lines-added added
-     :lines-removed removed
-     :net-change (- added removed)
-     :hunks-count (count hunks)}))
-
-(defn format-hunk-as-unified
+(def format-hunk-as-unified
   "Format a single hunk as unified diff text."
-  [{:keys [start-old start-new old-lines new-lines
-           context-before removed added context-after]}]
-  (let [;; Adjust positions for context
-        ctx-before-count (count context-before)
-        display-start-old (max 1 (- start-old ctx-before-count))
-        display-start-new (max 1 (- start-new ctx-before-count))
-        total-old (+ ctx-before-count old-lines (count context-after))
-        total-new (+ ctx-before-count new-lines (count context-after))
-        header (format "@@ -%d,%d +%d,%d @@"
-                       display-start-old total-old
-                       display-start-new total-new)]
-    (str/join "\n"
-              (concat
-               [header]
-               (map #(str " " %) context-before)
-               (map #(str "-" %) removed)
-               (map #(str "+" %) added)
-               (map #(str " " %) context-after)))))
+  compute/format-hunk-as-unified)
 
-(defn format-hunks-as-unified
-  "Format hunks as human-readable unified diff string.
-   Generates proper unified diff with file headers."
-  [hunks file-path]
-  (if (empty? hunks)
-    (str "--- a/" file-path "\n+++ b/" file-path "\n(no changes)")
-    (str "--- a/" file-path "\n"
-         "+++ b/" file-path "\n"
-         (str/join "\n" (map format-hunk-as-unified hunks)))))
+(def format-hunks-as-unified
+  "Format hunks as human-readable unified diff string."
+  compute/format-hunks-as-unified)
 
-(defn create-diff-proposal
-  "Create a diff proposal map from input parameters.
-   Optionally includes wave-id for batch review tracking.
-
-   Token-Efficient Storage (ADR 20260125002853):
-   - Computes and stores :hunks for tier-2 retrieval
-   - Computes and stores :metrics for tier-1 listing
-   - Stores :old-content/:new-content for apply_diff (tier-3, never returned)
-   - :unified-diff removed (replaced by on-demand hunk formatting)"
-  [{:keys [file_path old_content new_content description drone_id wave_id]}]
-  (let [diff-id (generate-diff-id)
-        hunks (compute-hunks old_content new_content)
-        metrics (compute-metrics hunks)]
-    (cond-> {:id diff-id
-             :file-path file_path
-             :old-content old_content   ; Tier 3: stored, never returned
-             :new-content new_content   ; Tier 3: stored, never returned
-             :description (or description "No description provided")
-             :drone-id (or drone_id "unknown")
-             :hunks hunks               ; Tier 2: returned by get_diff_details
-             :metrics metrics           ; Tier 1: returned by list_proposed_diffs
-             :tdd-status nil            ; Populated by drone after tests/lint
-             :status "pending"
-             :created-at (java.time.Instant/now)}
-      wave_id (assoc :wave-id wave_id))))
-
-(defn validate-propose-params
-  "Validate parameters for propose_diff. Returns nil if valid, error message if not.
-
-   CLARITY-Y: Validates new_content is non-empty to prevent 0-byte file writes
-   when LLMs return empty responses."
-  [{:keys [file_path old_content new_content]}]
-  (cond
-    (str/blank? file_path) "Missing required field: file_path"
-    (nil? old_content) "Missing required field: old_content"
-    (nil? new_content) "Missing required field: new_content"
-    ;; CLARITY-Y: Prevent empty file writes from LLM empty responses
-    (str/blank? new_content) "new_content cannot be empty or whitespace-only - LLM may have returned empty response"
-    :else nil))
-
-(defn get-project-root
-  "Get project root from Emacs or fall back to current working directory."
-  []
-  (or (try (ec/project-root)
-           (catch Exception _ nil))
-      (System/getProperty "user.dir")))
-
-(defn translate-sandbox-path
-  "Translate clojure-mcp sandbox paths back to real project paths.
-   
-   Drones run through clojure-mcp which sandboxes file access to /tmp/fs-<n>/.
-   This function detects sandbox paths and translates them to real paths.
-   
-   Example: /tmp/fs-1/src/foo.clj -> <project-root>/src/foo.clj"
-  [file-path]
-  (if-let [[_ relative-path] (re-matches #"/tmp/fs-\d+/(.+)" file-path)]
-    (let [project-root (get-project-root)]
-      (log/debug "Translating sandbox path" {:sandbox file-path :relative relative-path})
-      (str (str/replace project-root #"/$" "") "/" relative-path))
-    file-path))
-
-(defn validate-diff-path
-  "Validate a file path for propose_diff.
-
-   Drones sometimes hallucinate invalid paths like '/hivemind/controller.clj'.
-   This function validates that paths:
-   1. Are not suspicious absolute paths (absolute paths must exist)
-   2. Don't escape the project directory (no ../../../etc/passwd)
-   3. Resolve to valid locations within the project
-
-   Arguments:
-     file-path    - Path to validate
-     project-root - Optional project root override (defaults to get-project-root)
-
-   Returns {:valid true :resolved-path \"...\"} or {:valid false :error \"...\"}."
-  ([file-path] (validate-diff-path file-path nil))
-  ([file-path project-root-override]
-   (let [project-root (or project-root-override (get-project-root))
-         file (io/file file-path)]
-     (cond
-      ;; Check 1: Empty or blank path
-       (str/blank? file-path)
-       {:valid false :error "File path cannot be empty"}
-
-      ;; Check 2: Suspicious absolute paths (absolute but doesn't exist)
-       (and (.isAbsolute file)
-            (not (.exists file))
-           ;; Also reject if the parent directory doesn't exist
-           ;; (clear sign of hallucinated path like /hivemind/foo.clj)
-            (not (.exists (.getParentFile file))))
-       {:valid false
-        :error (str "Invalid absolute path: '" file-path "' - "
-                    "neither the file nor its parent directory exists. "
-                    "Use relative paths like 'src/hive_mcp/foo.clj' or ensure the path is valid.")}
-
-      ;; Check 3: Path escapes project directory
-       (let [resolved (if (.isAbsolute file)
-                        file
-                        (io/file project-root file-path))
-             canonical-path (.getCanonicalPath resolved)
-             canonical-root (.getCanonicalPath (io/file project-root))]
-         (not (str/starts-with? canonical-path canonical-root)))
-       {:valid false
-        :error (str "Path escapes project directory: '" file-path "' "
-                    "would resolve outside the project root '" project-root "'. "
-                    "All paths must be within the project directory.")}
-
-      ;; Check 4: Absolute path that exists - allow it
-       (.isAbsolute file)
-       {:valid true :resolved-path (.getCanonicalPath file)}
-
-      ;; Check 5: Relative path - resolve against project root
-       :else
-       (let [resolved (io/file project-root file-path)
-             canonical-path (.getCanonicalPath resolved)]
-         {:valid true :resolved-path canonical-path})))))
+(def create-diff-proposal
+  "Create a diff proposal map from input parameters."
+  compute/create-diff-proposal)
 
 ;; =============================================================================
-;; Auto-Approve Validation
+;; Re-exports: Validation
 ;; =============================================================================
 
-(defn- count-line-changes
-  "Count total lines changed (added + deleted) in a diff."
-  [old-content new-content]
-  (let [old-lines (count (str/split-lines (or old-content "")))
-        new-lines (count (str/split-lines (or new-content "")))]
-    (+ (max 0 (- old-lines new-lines))  ; deleted lines
-       (max 0 (- new-lines old-lines))))) ; added lines
+(def validate-propose-params
+  "Validate parameters for propose_diff."
+  validation/validate-propose-params)
 
-(defn- deletions-only?
-  "Check if the change only deletes content without adding anything."
-  [old-content new-content]
-  (and (not (str/blank? old-content))
-       (or (str/blank? new-content)
-           (< (count new-content) (/ (count old-content) 2)))))
+(def get-project-root
+  "Get project root from Emacs or fall back to cwd."
+  validation/get-project-root)
 
-(defn- path-matches-patterns?
-  "Check if file path matches any of the allowed patterns."
-  [file-path patterns]
-  (if (empty? patterns)
-    true  ; No patterns = allow all
-    (some #(re-matches % file-path) patterns)))
+(def translate-sandbox-path
+  "Translate clojure-mcp sandbox paths back to real project paths."
+  validation/translate-sandbox-path)
 
-(defn auto-approve-diff?
-  "Check if a diff meets auto-approve criteria.
-
-   Arguments:
-     diff  - Diff proposal map
-     rules - Optional rules (defaults to @auto-approve-rules)
-
-   Returns {:approved true} or {:approved false :reason \"...\"}."
-  ([diff] (auto-approve-diff? diff @auto-approve-rules))
-  ([{:keys [old-content new-content file-path description]} rules]
-   (let [{:keys [max-lines-changed no-deletions-only
-                 require-description allowed-path-patterns]} rules
-         line-changes (count-line-changes old-content new-content)]
-     (cond
-       ;; Check line count
-       (and max-lines-changed (> line-changes max-lines-changed))
-       {:approved false
-        :reason (str "Too many lines changed: " line-changes " > " max-lines-changed)}
-
-       ;; Check deletions-only
-       (and no-deletions-only (deletions-only? old-content new-content))
-       {:approved false
-        :reason "Change only deletes content - requires manual review"}
-
-       ;; Check description
-       (and require-description (str/blank? description))
-       {:approved false
-        :reason "Missing description - requires manual review"}
-
-       ;; Check path pattern
-       (and (seq allowed-path-patterns)
-            (not (path-matches-patterns? file-path allowed-path-patterns)))
-       {:approved false
-        :reason (str "File path not in allowed patterns: " file-path)}
-
-       ;; All checks passed
-       :else
-       {:approved true}))))
+(def validate-diff-path
+  "Validate a file path for propose_diff."
+  validation/validate-diff-path)
 
 ;; =============================================================================
-;; TDD Status Integration (ADR 20260125002853)
+;; Re-exports: Auto-Approve
 ;; =============================================================================
 
-(defn update-diff-tdd-status!
-  "Update a diff's TDD status after drone runs tests/lint.
+(def auto-approve-diff?
+  "Check if a diff meets auto-approve criteria."
+  auto-approve/auto-approve-diff?)
 
-   Arguments:
-     diff-id    - ID of the diff to update
-     tdd-status - Map with :kondo and/or :tests keys:
-                  {:kondo {:clean true/false :errors [...]}
-                   :tests {:passed true/false :count N :duration-ms N}}
+(def get-auto-approve-rules
+  "Get current auto-approve rules with descriptions."
+  auto-approve/get-auto-approve-rules)
 
-   Returns updated diff or nil if not found.
-
-   Usage by drones:
-   1. Propose diff → get diff-id
-   2. Run kondo lint → update-diff-tdd-status! with :kondo results
-   3. Run tests → update-diff-tdd-status! with :tests results
-   4. Ling reviews → sees TDD status in list_proposed_diffs"
-  [diff-id tdd-status]
-  (when (contains? @pending-diffs diff-id)
-    (swap! pending-diffs update diff-id
-           (fn [diff]
-             (update diff :tdd-status
-                     (fn [existing]
-                       (merge existing tdd-status)))))
-    (log/info "Updated diff TDD status" {:diff-id diff-id :tdd-status tdd-status})
-    (get @pending-diffs diff-id)))
+(def safe-to-auto-approve?
+  "Check if diff meets auto-approve criteria (alias)."
+  auto-approve/safe-to-auto-approve?)
 
 ;; =============================================================================
-;; Wave Batch Operations
+;; Re-exports: Core Handlers
 ;; =============================================================================
 
-(defn get-wave-diffs
+(def handle-propose-diff
+  "Handle propose_diff tool call."
+  handlers/handle-propose-diff)
+
+(def handle-list-proposed-diffs
+  "Handle list_proposed_diffs tool call."
+  handlers/handle-list-proposed-diffs)
+
+(def handle-apply-diff
+  "Handle apply_diff tool call."
+  handlers/handle-apply-diff)
+
+(def handle-reject-diff
+  "Handle reject_diff tool call."
+  handlers/handle-reject-diff)
+
+(def handle-get-diff-details
+  "Handle get_diff_details tool call."
+  handlers/handle-get-diff-details)
+
+(def handle-get-auto-approve-rules
+  "Handle get_auto_approve_rules tool call."
+  handlers/handle-get-auto-approve-rules)
+
+;; =============================================================================
+;; Re-exports: Wave Operations
+;; =============================================================================
+
+(def get-wave-diffs
   "Get all pending diffs for a specific wave-id."
-  [wave-id]
-  (->> (vals @pending-diffs)
-       (filter #(= wave-id (:wave-id %)))
-       (vec)))
+  wave/get-wave-diffs)
 
-(defn review-wave-diffs
-  "Get a summary of all diffs proposed by a wave for review.
+(def review-wave-diffs
+  "Get a summary of all diffs proposed by a wave."
+  wave/review-wave-diffs)
 
-   Token-Efficient Tier 1 Response (ADR 20260125002853):
-   Returns metadata only - use get_diff_details for hunk inspection.
+(def approve-wave-diffs!
+  "Approve and apply all diffs from a wave."
+  wave/approve-wave-diffs!)
 
-   Returns map with:
-     :wave-id     - The wave ID
-     :count       - Number of diffs
-     :diffs       - List of diff metadata (tier-1: no content/hunks)
-     :auto-approve-results - Which diffs would pass auto-approve"
-  [wave-id]
-  (let [diffs (get-wave-diffs wave-id)
-        ;; Tier 1: metadata only
-        summaries (mapv (fn [d]
-                          {:id (:id d)
-                           :file-path (:file-path d)
-                           :description (:description d)
-                           :drone-id (:drone-id d)
-                           :metrics (:metrics d)
-                           :tdd-status (:tdd-status d)
-                           :status (:status d)
-                           :created-at (str (:created-at d))})
-                        diffs)
-        auto-results (mapv (fn [d]
-                             {:id (:id d)
-                              :file-path (:file-path d)
-                              :auto-approve (auto-approve-diff? d)})
-                           diffs)]
-    {:wave-id wave-id
-     :count (count diffs)
-     :diffs summaries
-     :auto-approve-results auto-results}))
+(def reject-wave-diffs!
+  "Reject all diffs from a wave."
+  wave/reject-wave-diffs!)
 
-(defn approve-wave-diffs!
-  "Approve and apply all diffs from a wave.
+(def auto-approve-wave-diffs!
+  "Auto-approve diffs meeting criteria, flag others for review."
+  wave/auto-approve-wave-diffs!)
 
-   Arguments:
-     wave-id    - Wave ID to approve diffs for
-     diff-ids   - Optional specific diff IDs to approve (nil = all)
+(def handle-review-wave-diffs
+  "Handle review_wave_diffs tool call."
+  wave/handle-review-wave-diffs)
 
-   Returns map with :applied and :failed lists."
-  ([wave-id] (approve-wave-diffs! wave-id nil))
-  ([wave-id diff-ids]
-   (let [wave-diffs (get-wave-diffs wave-id)
-         to-apply (if diff-ids
-                    (filter #(contains? (set diff-ids) (:id %)) wave-diffs)
-                    wave-diffs)
-         results (for [{:keys [id]} to-apply]
-                   (let [response (handle-apply-diff {:diff_id id})
-                         parsed (try (json/read-str (:text response) :key-fn keyword)
-                                     (catch Exception _ nil))]
-                     (if (:isError response)
-                       {:status :failed :id id :error (:error parsed)}
-                       {:status :applied :id id :file (:file-path parsed)})))
-         {applied :applied failed :failed} (group-by :status results)]
-     (log/info "Approved wave diffs" {:wave-id wave-id
-                                      :applied (count applied)
-                                      :failed (count failed)})
-     {:applied (vec applied)
-      :failed (vec failed)})))
+(def handle-approve-wave-diffs
+  "Handle approve_wave_diffs tool call."
+  wave/handle-approve-wave-diffs)
 
-(defn reject-wave-diffs!
-  "Reject all diffs from a wave.
+(def handle-reject-wave-diffs
+  "Handle reject_wave_diffs tool call."
+  wave/handle-reject-wave-diffs)
 
-   Arguments:
-     wave-id - Wave ID to reject diffs for
-     reason  - Reason for rejection
-
-   Returns count of rejected diffs."
-  [wave-id reason]
-  (let [wave-diffs (get-wave-diffs wave-id)]
-    (doseq [{:keys [id]} wave-diffs]
-      (handle-reject-diff {:diff_id id :reason reason}))
-    (log/info "Rejected wave diffs" {:wave-id wave-id :count (count wave-diffs) :reason reason})
-    {:rejected (count wave-diffs)
-     :wave-id wave-id
-     :reason reason}))
-
-(defn auto-approve-wave-diffs!
-  "Auto-approve diffs that meet criteria, flag others for manual review.
-
-   Arguments:
-     wave-id - Wave ID to process
-
-   Returns map with :auto-approved, :manual-review, and :failed lists."
-  [wave-id]
-  (let [wave-diffs (get-wave-diffs wave-id)
-        categorized (for [d wave-diffs]
-                      (assoc d :auto-check (auto-approve-diff? d)))
-        auto-approvable (filter #(get-in % [:auto-check :approved]) categorized)
-        manual-review (remove #(get-in % [:auto-check :approved]) categorized)
-        ;; Apply auto-approved diffs
-        apply-results (for [{:keys [id]} auto-approvable]
-                        (let [response (handle-apply-diff {:diff_id id})
-                              parsed (try (json/read-str (:text response) :key-fn keyword)
-                                          (catch Exception _ nil))]
-                          (if (:isError response)
-                            {:status :failed :id id :error (:error parsed)}
-                            {:status :applied :id id})))
-        {applied :applied failed :failed} (group-by :status apply-results)]
-    (log/info "Auto-approved wave diffs" {:wave-id wave-id
-                                          :auto-approved (count applied)
-                                          :manual-review (count manual-review)
-                                          :failed (count failed)})
-    {:auto-approved (vec applied)
-     :manual-review (mapv (fn [d]
-                            {:id (:id d)
-                             :file-path (:file-path d)
-                             :reason (get-in d [:auto-check :reason])})
-                          manual-review)
-     :failed (vec failed)}))
+(def handle-auto-approve-wave-diffs
+  "Handle auto_approve_wave_diffs tool call."
+  wave/handle-auto-approve-wave-diffs)
 
 ;; =============================================================================
-;; Multi-Drone Batch Operations
+;; Re-exports: Batch Operations
 ;; =============================================================================
 
-(defn batch-review-diffs
-  "Get all pending diffs from multiple drones for batch review.
+(def batch-review-diffs
+  "Get all pending diffs from multiple drones for batch review."
+  batch/batch-review-diffs)
 
-   Token-Efficient Tier 1 Response (ADR 20260125002853):
-   Returns metadata only - use get_diff_details for hunk inspection.
+(def approve-safe-diffs!
+  "Auto-approve diffs from multiple drones that meet criteria."
+  batch/approve-safe-diffs!)
 
-   Arguments:
-     drone-ids - Collection of drone IDs (or nil for all pending diffs)
+(def handle-batch-review-diffs
+  "Handle batch_review_diffs tool call."
+  batch/handle-batch-review-diffs)
 
-   Returns list of diffs sorted by timestamp, with auto-approve analysis."
-  ([] (batch-review-diffs nil))
-  ([drone-ids]
-   (let [all-diffs (vals @pending-diffs)
-         filtered (if (seq drone-ids)
-                    (filter #(contains? (set drone-ids) (:drone-id %)) all-diffs)
-                    all-diffs)]
-     (->> filtered
-          (sort-by :created-at)
-          (mapv (fn [d]
-                  {:id (:id d)
-                   :file-path (:file-path d)
-                   :description (:description d)
-                   :drone-id (:drone-id d)
-                   :wave-id (:wave-id d)
-                   :metrics (:metrics d)
-                   :tdd-status (:tdd-status d)
-                   :created-at (str (:created-at d))
-                   :auto-approve-check (auto-approve-diff? d)}))))))
-
-(defn get-auto-approve-rules
-  "Get current auto-approve rules with descriptions.
-
-   Returns the rules map with human-readable format."
-  []
-  (let [rules @auto-approve-rules]
-    {:max-lines-changed (:max-lines-changed rules)
-     :must-pass-lint false  ; Not implemented yet - future enhancement
-     :no-deletions-only (:no-deletions-only rules)
-     :require-description (:require-description rules)
-     :allowed-path-patterns (mapv str (:allowed-path-patterns rules))}))
-
-(defn safe-to-auto-approve?
-  "Check if diff meets auto-approve criteria.
-
-   Alias for auto-approve-diff? with more descriptive name.
-   Returns true if diff can be safely auto-approved."
-  ([diff] (safe-to-auto-approve? diff @auto-approve-rules))
-  ([diff rules]
-   (:approved (auto-approve-diff? diff rules))))
-
-(defn approve-safe-diffs!
-  "Auto-approve diffs from multiple drones that meet safety criteria.
-
-   Arguments:
-     drone-ids - Collection of drone IDs (or nil for all pending diffs)
-     opts      - Optional map with:
-                 :rules - Custom rules (defaults to @auto-approve-rules)
-                 :dry-run - If true, only report what would be approved
-
-   Returns map with:
-     :auto-approved - Diffs that were approved and applied
-     :manual-review - Diffs that need manual review (with reasons)
-     :failed        - Diffs that failed to apply"
-  ([] (approve-safe-diffs! nil {}))
-  ([drone-ids] (approve-safe-diffs! drone-ids {}))
-  ([drone-ids {:keys [rules dry-run] :or {rules @auto-approve-rules dry-run false}}]
-   (let [diffs (batch-review-diffs drone-ids)
-         categorized (for [d diffs
-                           :let [check (auto-approve-diff?
-                                        (get @pending-diffs (:id d))
-                                        rules)]]
-                       (assoc d :auto-check check))
-         auto-approvable (filter #(get-in % [:auto-check :approved]) categorized)
-         manual-review (remove #(get-in % [:auto-check :approved]) categorized)]
-     (if dry-run
-       ;; Dry run - just report what would happen
-       {:dry-run true
-        :would-approve (mapv #(select-keys % [:id :file-path :drone-id]) auto-approvable)
-        :manual-review (mapv #(select-keys % [:id :file-path :drone-id :auto-check]) manual-review)}
-       ;; Actual execution - apply safe diffs
-       (let [apply-results (for [{:keys [id]} auto-approvable]
-                             (let [response (handle-apply-diff {:diff_id id})
-                                   parsed (try (json/read-str (:text response) :key-fn keyword)
-                                               (catch Exception _ nil))]
-                               (if (:isError response)
-                                 {:status :failed :id id :error (:error parsed)}
-                                 {:status :applied :id id :file-path (:file-path parsed)})))
-             {applied :applied failed :failed} (group-by :status apply-results)]
-         (log/info "Batch approve-safe-diffs!" {:drones (count (set (map :drone-id diffs)))
-                                                :total (count diffs)
-                                                :auto-approved (count applied)
-                                                :manual-review (count manual-review)
-                                                :failed (count failed)})
-         {:auto-approved (vec applied)
-          :manual-review (mapv (fn [d]
-                                 {:id (:id d)
-                                  :file-path (:file-path d)
-                                  :drone-id (:drone-id d)
-                                  :reason (get-in d [:auto-check :reason])})
-                               manual-review)
-          :failed (vec failed)})))))
-
-;; =============================================================================
-;; Application: Handlers
-;; =============================================================================
-
-(defn handle-propose-diff
-  "Handle propose_diff tool call.
-   Stores a proposed diff for review by the hivemind.
-   Translates sandbox paths and validates file paths.
-
-   BUG FIX: Uses directory parameter or ctx/current-directory as project root
-   for path validation. This prevents 'Path escapes project directory' errors
-   when drones work on projects outside the MCP server's working directory."
-  [{:keys [file_path _old_content _new_content _description drone_id directory] :as params}]
-  ;; CRITICAL FIX: Get project root from context or explicit parameter
-  ;; Without this, path validation uses MCP server's cwd, not drone's project
-  (let [project-root (or directory
-                         (ctx/current-directory)
-                         (get-project-root))]
-    (log/debug "propose_diff called" {:file file_path :drone drone_id :project-root project-root})
-    (if-let [error (validate-propose-params params)]
-      (do
-        (log/warn "propose_diff validation failed" {:error error})
-        (mcp-error-json error))
-      ;; Translate sandbox paths before validation
-      (let [translated-path (translate-sandbox-path file_path)
-            _ (when (not= translated-path file_path)
-                (log/info "Translated sandbox path" {:from file_path :to translated-path}))
-            ;; Use project-root from context for path validation
-            path-result (validate-diff-path translated-path project-root)]
-        (if-not (:valid path-result)
-          (do
-            (log/warn "propose_diff path validation failed"
-                      {:file translated-path :original file_path :error (:error path-result) :drone drone_id})
-            (mcp-error-json (:error path-result)))
-          (try
-            ;; Use the resolved path for the proposal
-            (let [resolved-path (:resolved-path path-result)
-                  proposal (create-diff-proposal (assoc params :file_path resolved-path))]
-              (swap! pending-diffs assoc (:id proposal) proposal)
-              (log/info "Diff proposed" {:id (:id proposal)
-                                         :file resolved-path
-                                         :original-path file_path
-                                         :drone drone_id})
-              (mcp-json {:id (:id proposal)
-                         :status "pending"
-                         :file-path resolved-path
-                         :original-path (when (not= file_path resolved-path) file_path)
-                         :description (:description proposal)
-                         :message "Diff proposed for review. Hivemind will apply or reject."}))
-            (catch Exception e
-              (log/error e "Failed to propose diff")
-              (mcp-error-json (str "Failed to propose diff: " (.getMessage e))))))))))
-
-(defn handle-list-proposed-diffs
-  "Handle list_proposed_diffs tool call.
-   Returns all pending diffs, optionally filtered by drone_id.
-
-   Token-Efficient Tier 1 Response (ADR 20260125002853):
-   Returns ONLY metadata: id, file-path, description, drone-id, wave-id,
-   status, created-at, metrics, tdd-status. (~200 tokens/diff)
-
-   Does NOT return: old-content, new-content, hunks, unified-diff."
-  [{:keys [drone_id]}]
-  (log/debug "list_proposed_diffs called" {:drone_id drone_id})
-  (try
-    (let [all-diffs (vals @pending-diffs)
-          filtered (if (str/blank? drone_id)
-                     all-diffs
-                     (filter #(= drone_id (:drone-id %)) all-diffs))
-          ;; Tier 1: Metadata only - dissoc content AND hunks
-          safe-diffs (map (fn [d]
-                            (-> d
-                                (update :created-at str)
-                                (dissoc :old-content :new-content  ; Tier 3
-                                        :hunks                     ; Tier 2
-                                        :unified-diff)))           ; Legacy
-                          filtered)]
-      (log/info "Listed proposed diffs" {:count (count safe-diffs)})
-      (mcp-json {:count (count safe-diffs)
-                 :diffs (vec safe-diffs)}))
-    (catch Exception e
-      (log/error e "Failed to list proposed diffs")
-      (mcp-error-json (str "Failed to list diffs: " (.getMessage e))))))
-
-(defn handle-apply-diff
-  "Handle apply_diff tool call.
-   Applies the diff by finding and replacing old-content within the file.
-   If old-content is empty and file doesn't exist, creates a new file.
-
-   CLARITY-Y: Defense-in-depth validation blocks empty new_content even if
-   it passed propose_diff, preventing 0-byte file writes from LLM failures."
-  [{:keys [diff_id]}]
-  (log/debug "apply_diff called" {:diff_id diff_id})
-  (cond
-    (str/blank? diff_id)
-    (do
-      (log/warn "apply_diff missing diff_id")
-      (mcp-error-json "Missing required field: diff_id"))
-
-    (not (contains? @pending-diffs diff_id))
-    (do
-      (log/warn "apply_diff diff not found" {:diff_id diff_id})
-      (mcp-error-json (str "Diff not found: " diff_id)))
-
-    :else
-    (let [{:keys [file-path old-content new-content]} (get @pending-diffs diff_id)
-          file-exists? (.exists (io/file file-path))
-          creating-new-file? (and (str/blank? old-content) (not file-exists?))]
-      ;; CLARITY-Y: Defense-in-depth - block empty content even if it passed propose_diff
-      (cond
-        ;; Block empty new_content (prevents 0-byte file writes)
-        (str/blank? new-content)
-        (do
-          (log/warn "apply_diff blocked: empty new_content" {:diff_id diff_id :file file-path})
-          (swap! pending-diffs dissoc diff_id)
-          (mcp-error-json "Cannot apply diff: new_content is empty or whitespace-only. This typically indicates the LLM returned an empty response."))
-
-        ;; Case 1: Creating a new file (old-content empty, file doesn't exist)
-        creating-new-file?
-        (try
-          (let [parent (.getParentFile (io/file file-path))]
-            (when (and parent (not (.exists parent)))
-              (.mkdirs parent)))
-          (spit file-path new-content)
-          (swap! pending-diffs dissoc diff_id)
-          (log/info "New file created" {:id diff_id :file file-path})
-          (mcp-json {:id diff_id
-                     :status "applied"
-                     :file-path file-path
-                     :created true
-                     :message "New file created successfully"})
-          (catch Exception e
-            (log/error e "Failed to create file" {:diff_id diff_id})
-            (mcp-error-json (str "Failed to create file: " (.getMessage e)))))
-
-        ;; Case 2: File doesn't exist but old-content is not empty - error
-        (not file-exists?)
-        (do
-          (log/warn "apply_diff file not found" {:file file-path})
-          (mcp-error-json (str "File not found: " file-path)))
-
-        ;; Case 3: Normal replacement in existing file
-        :else
-        (try
-          (let [current-content (slurp file-path)]
-            (cond
-              ;; old-content not found in file
-              (not (str/includes? current-content old-content))
-              (do
-                (log/warn "apply_diff old content not found in file" {:file file-path})
-                (mcp-error-json "Old content not found in file. File may have been modified since diff was proposed."))
-
-              ;; Multiple occurrences - ambiguous
-              (> (count (re-seq (re-pattern (java.util.regex.Pattern/quote old-content)) current-content)) 1)
-              (do
-                (log/warn "apply_diff multiple matches found" {:file file-path})
-                (mcp-error-json "Multiple occurrences of old content found. Cannot apply safely - diff is ambiguous."))
-
-              ;; Exactly one match - apply the replacement
-              :else
-              (do
-                (spit file-path (str/replace-first current-content old-content new-content))
-                (swap! pending-diffs dissoc diff_id)
-                (log/info "Diff applied" {:id diff_id :file file-path})
-                (mcp-json {:id diff_id
-                           :status "applied"
-                           :file-path file-path
-                           :message "Diff applied successfully"}))))
-          (catch Exception e
-            (log/error e "Failed to apply diff" {:diff_id diff_id})
-            (mcp-error-json (str "Failed to apply diff: " (.getMessage e)))))))))
-
-(defn handle-reject-diff
-  "Handle reject_diff tool call.
-   Removes the diff from pending without applying."
-  [{:keys [diff_id reason]}]
-  (log/debug "reject_diff called" {:diff_id diff_id :reason reason})
-  (cond
-    (str/blank? diff_id)
-    (do
-      (log/warn "reject_diff missing diff_id")
-      (mcp-error-json "Missing required field: diff_id"))
-
-    (not (contains? @pending-diffs diff_id))
-    (do
-      (log/warn "reject_diff diff not found" {:diff_id diff_id})
-      (mcp-error-json (str "Diff not found: " diff_id)))
-
-    :else
-    (let [{:keys [file-path drone-id]} (get @pending-diffs diff_id)]
-      ;; Remove from pending (don't apply)
-      (swap! pending-diffs dissoc diff_id)
-      (log/info "Diff rejected" {:id diff_id :file file-path :reason reason})
-      (mcp-json {:id diff_id
-                 :status "rejected"
-                 :file-path file-path
-                 :drone-id drone-id
-                 :reason (or reason "No reason provided")
-                 :message "Diff rejected and discarded"}))))
-
-(defn handle-get-diff-details
-  "Handle get_diff_details tool call.
-   Returns diff details with formatted hunks for review.
-
-   Token-Efficient Tier 2 Response (ADR 20260125002853):
-   Returns: all metadata + :unified-diff (formatted from hunks on-demand)
-   Does NOT return: raw old-content, new-content (tier-3 internal only)
-
-   ~500 tokens/diff - use for detailed inspection before approve/reject."
-  [{:keys [diff_id]}]
-  (log/debug "get_diff_details called" {:diff_id diff_id})
-  (cond
-    (str/blank? diff_id)
-    (mcp-error-json "Missing required field: diff_id")
-
-    (not (contains? @pending-diffs diff_id))
-    (mcp-error-json (str "Diff not found: " diff_id))
-
-    :else
-    (let [diff (get @pending-diffs diff_id)
-          ;; Format hunks as unified diff on-demand (not stored)
-          formatted-diff (format-hunks-as-unified (:hunks diff) (:file-path diff))]
-      (mcp-json (-> diff
-                    (update :created-at str)
-                    (dissoc :old-content :new-content)  ; Never expose tier-3
-                    (assoc :unified-diff formatted-diff))))))
-
-(defn handle-review-wave-diffs
-  "Handle review_wave_diffs tool call.
-   Returns summary of all diffs from a wave with auto-approve analysis."
-  [{:keys [wave_id]}]
-  (log/debug "review_wave_diffs called" {:wave_id wave_id})
-  (if (str/blank? wave_id)
-    (mcp-error-json "Missing required field: wave_id")
-    (try
-      (let [result (review-wave-diffs wave_id)]
-        (mcp-json result))
-      (catch Exception e
-        (log/error e "Failed to review wave diffs")
-        (mcp-error-json (str "Failed to review wave diffs: " (.getMessage e)))))))
-
-(defn handle-approve-wave-diffs
-  "Handle approve_wave_diffs tool call.
-   Applies all or selected diffs from a wave."
-  [{:keys [wave_id diff_ids]}]
-  (log/debug "approve_wave_diffs called" {:wave_id wave_id :diff_ids diff_ids})
-  (if (str/blank? wave_id)
-    (mcp-error-json "Missing required field: wave_id")
-    (try
-      (let [result (approve-wave-diffs! wave_id diff_ids)]
-        (mcp-json result))
-      (catch Exception e
-        (log/error e "Failed to approve wave diffs")
-        (mcp-error-json (str "Failed to approve wave diffs: " (.getMessage e)))))))
-
-(defn handle-reject-wave-diffs
-  "Handle reject_wave_diffs tool call.
-   Rejects all diffs from a wave."
-  [{:keys [wave_id reason]}]
-  (log/debug "reject_wave_diffs called" {:wave_id wave_id :reason reason})
-  (if (str/blank? wave_id)
-    (mcp-error-json "Missing required field: wave_id")
-    (try
-      (let [result (reject-wave-diffs! wave_id (or reason "Rejected by coordinator"))]
-        (mcp-json result))
-      (catch Exception e
-        (log/error e "Failed to reject wave diffs")
-        (mcp-error-json (str "Failed to reject wave diffs: " (.getMessage e)))))))
-
-(defn handle-auto-approve-wave-diffs
-  "Handle auto_approve_wave_diffs tool call.
-   Auto-approves diffs meeting criteria, flags others for manual review."
-  [{:keys [wave_id]}]
-  (log/debug "auto_approve_wave_diffs called" {:wave_id wave_id})
-  (if (str/blank? wave_id)
-    (mcp-error-json "Missing required field: wave_id")
-    (try
-      (let [result (auto-approve-wave-diffs! wave_id)]
-        (mcp-json result))
-      (catch Exception e
-        (log/error e "Failed to auto-approve wave diffs")
-        (mcp-error-json (str "Failed to auto-approve: " (.getMessage e)))))))
-
-(defn handle-batch-review-diffs
-  "Handle batch_review_diffs tool call.
-   Returns all pending diffs from multiple drones for batch review."
-  [{:keys [drone_ids]}]
-  (log/debug "batch_review_diffs called" {:drone_ids drone_ids})
-  (try
-    (let [ids (when (seq drone_ids) (vec drone_ids))
-          result (batch-review-diffs ids)]
-      (mcp-json {:count (count result)
-                 :diffs result
-                 :rules (get-auto-approve-rules)}))
-    (catch Exception e
-      (log/error e "Failed to batch review diffs")
-      (mcp-error-json (str "Failed to batch review: " (.getMessage e))))))
-
-(defn handle-approve-safe-diffs
-  "Handle approve_safe_diffs tool call.
-   Auto-approve diffs from multiple drones that meet safety criteria."
-  [{:keys [drone_ids dry_run]}]
-  (log/debug "approve_safe_diffs called" {:drone_ids drone_ids :dry_run dry_run})
-  (try
-    (let [ids (when (seq drone_ids) (vec drone_ids))
-          result (approve-safe-diffs! ids {:dry-run (boolean dry_run)})]
-      (mcp-json result))
-    (catch Exception e
-      (log/error e "Failed to approve safe diffs")
-      (mcp-error-json (str "Failed to approve safe diffs: " (.getMessage e))))))
-
-(defn handle-get-auto-approve-rules
-  "Handle get_auto_approve_rules tool call.
-   Returns the current auto-approve rules configuration."
-  [_params]
-  (log/debug "get_auto_approve_rules called")
-  (mcp-json (get-auto-approve-rules)))
+(def handle-approve-safe-diffs
+  "Handle approve_safe_diffs tool call."
+  batch/handle-approve-safe-diffs)
 
 ;; =============================================================================
 ;; Tool Definitions

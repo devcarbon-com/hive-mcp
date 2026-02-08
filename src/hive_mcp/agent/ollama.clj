@@ -1,6 +1,10 @@
 (ns hive-mcp.agent.ollama
-  "Ollama backend for agent delegation.
-   
+  "DEPRECATED: Ollama backend for agent delegation.
+
+   Prefer hive-agent.llm.openrouter (which supports all OpenRouter models)
+   via hive-mcp.agent.hive-agent-bridge. This namespace is retained for
+   backward compatibility when hive-agent is not on the classpath.
+
    Provides local LLM access via Ollama HTTP API.
    Uses OpenAI-compatible tool calling format."
   (:require [hive-mcp.agent.protocol :as proto]
@@ -97,8 +101,10 @@
 
   (model-name [_] model))
 
-(defn ollama-backend
-  "Create an Ollama backend for agent delegation.
+(defn ^:deprecated ollama-backend
+  "DEPRECATED: Prefer hive-agent via hive-mcp.agent.hive-agent-bridge.
+
+   Create an Ollama backend for agent delegation.
 
    Options:
      :host - Ollama server URL (default: from config.edn :services.ollama.host)

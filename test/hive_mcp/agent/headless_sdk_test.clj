@@ -14,7 +14,10 @@
    would be tagged :integration."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.core.async :as async :refer [<!! >!! chan close!]]
-            [hive-mcp.agent.headless-sdk :as sdk]))
+            [clojure.set]
+            [hive-mcp.agent.headless-sdk :as sdk]
+            [hive-mcp.agent.ling.strategy :as strategy]
+            [hive-mcp.agent.ling.agent-sdk-strategy :as sdk-strat]))
 
 ;; =============================================================================
 ;; Test Fixtures
@@ -109,6 +112,53 @@
           phase-tools (set (:allowed-tools (:act sdk/saa-phases)))]
       (is (some mutation-tools phase-tools)
           "Act phase should have at least one mutation tool"))))
+
+;; =============================================================================
+;; SAA Gating Hook Contract Tests (No Python Required)
+;; =============================================================================
+
+(deftest saa-phases-have-hook-required-fields-test
+  (testing "Each phase has :name and :allowed-tools needed by build-saa-hooks"
+    (doseq [[phase-key phase-config] sdk/saa-phases]
+      (is (keyword? (:name phase-config))
+          (str "Phase " phase-key " must have a :name keyword for hook phase_name"))
+      (is (vector? (:allowed-tools phase-config))
+          (str "Phase " phase-key " must have :allowed-tools vector for hook filtering"))
+      (is (pos? (count (:allowed-tools phase-config)))
+          (str "Phase " phase-key " must have at least one allowed tool")))))
+
+(deftest silence-phase-denies-mutation-tools-test
+  (testing "Silence phase allowed-tools excludes all mutation tools"
+    (let [silence-tools (set (:allowed-tools (:silence sdk/saa-phases)))
+          mutation-tools #{"Edit" "Write" "Bash" "NotebookEdit"}]
+      (is (empty? (clojure.set/intersection silence-tools mutation-tools))
+          "Silence phase must not include any mutation tools"))))
+
+(deftest abstract-phase-denies-mutation-tools-test
+  (testing "Abstract phase allowed-tools excludes all mutation tools"
+    (let [abstract-tools (set (:allowed-tools (:abstract sdk/saa-phases)))
+          mutation-tools #{"Edit" "Write" "Bash" "NotebookEdit"}]
+      (is (empty? (clojure.set/intersection abstract-tools mutation-tools))
+          "Abstract phase must not include any mutation tools"))))
+
+(deftest act-phase-allows-mutation-tools-test
+  (testing "Act phase allowed-tools includes mutation tools for execution"
+    (let [act-tools (set (:allowed-tools (:act sdk/saa-phases)))]
+      (is (contains? act-tools "Edit")
+          "Act phase must allow Edit for file changes")
+      (is (contains? act-tools "Write")
+          "Act phase must allow Write for new files")
+      (is (contains? act-tools "Bash")
+          "Act phase must allow Bash for commands"))))
+
+(deftest saa-phase-tool-sets-are-progressively-permissive-test
+  (testing "Each successive SAA phase allows >= tools than previous"
+    (let [silence-tools (set (:allowed-tools (:silence sdk/saa-phases)))
+          abstract-tools (set (:allowed-tools (:abstract sdk/saa-phases)))
+          act-tools (set (:allowed-tools (:act sdk/saa-phases)))]
+      ;; Act must be a superset of abstract
+      (is (clojure.set/subset? abstract-tools act-tools)
+          "Act phase must allow all abstract phase tools plus more"))))
 
 ;; =============================================================================
 ;; SDK Availability Tests (Graceful Degradation)
@@ -341,6 +391,184 @@
         (sdk/kill-headless-sdk! ling-id)))))
 
 ;; =============================================================================
+;; P3-T2: Persistent Client / Multi-Turn Tests
+;; =============================================================================
+
+(deftest spawn-creates-persistent-client-test
+  (testing "spawn-headless-sdk! creates persistent loop + client refs in session"
+    (when (sdk/available?)
+      (let [ling-id (gen-ling-id)
+            result (sdk/spawn-headless-sdk! ling-id {:cwd "/tmp"})
+            session (sdk/get-session ling-id)]
+        (is (= :spawned (:status result)))
+        ;; P3-T2: Session must have persistent client refs
+        (is (string? (:client-ref session))
+            "Session should have client-ref (Python global name)")
+        (is (string? (:py-loop-var session))
+            "Session should have py-loop-var (Python global name)")
+        (is (string? (:py-safe-id session))
+            "Session should have py-safe-id")
+        (is (zero? (:turn-count session))
+            "Initial turn count should be 0")
+        ;; Client-ref should follow naming convention
+        (is (re-matches #"_hive_client_.*" (:client-ref session))
+            "Client ref should follow _hive_client_<safe-id> pattern")
+        (is (re-matches #"_hive_loop_.*" (:py-loop-var session))
+            "Loop var should follow _hive_loop_<safe-id> pattern")
+        (sdk/kill-headless-sdk! ling-id)))))
+
+(deftest status-shows-persistent-client-info-test
+  (testing "sdk-status-for shows multi-turn tracking fields"
+    (when (sdk/available?)
+      (let [ling-id (gen-ling-id)
+            _ (sdk/spawn-headless-sdk! ling-id {:cwd "/tmp"})
+            status (sdk/sdk-status-for ling-id)]
+        (is (true? (:has-persistent-client? status))
+            "Status should show has-persistent-client? true")
+        (is (zero? (:turn-count status))
+            "Status should show initial turn count of 0")
+        (is (true? (:interruptable? status))
+            "Persistent client should be interruptable")
+        (sdk/kill-headless-sdk! ling-id)))))
+
+(deftest dispatch-requires-persistent-client-test
+  (testing "dispatch to session without client-ref throws"
+    ;; Use var access to private register fn for test setup
+    (let [ling-id (gen-ling-id)
+          register! @#'sdk/register-session!
+          unregister! @#'sdk/unregister-session!]
+      (register! ling-id {:ling-id ling-id
+                          :phase :idle
+                          :cwd "/tmp"
+                          :client-ref nil
+                          :py-loop-var nil})
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"No persistent client"
+                            (sdk/dispatch-headless-sdk! ling-id "test task")))
+      (unregister! ling-id))))
+
+(deftest kill-gracefully-disconnects-test
+  (testing "kill-headless-sdk! disconnects client and removes session"
+    (when (sdk/available?)
+      (let [ling-id (gen-ling-id)
+            _ (sdk/spawn-headless-sdk! ling-id {:cwd "/tmp"})
+            ;; Verify session exists with client
+            session-before (sdk/get-session ling-id)]
+        (is (some? (:client-ref session-before)))
+        ;; Kill should succeed (graceful disconnect)
+        (let [result (sdk/kill-headless-sdk! ling-id)]
+          (is (true? (:killed? result)))
+          ;; Session should be gone
+          (is (nil? (sdk/get-session ling-id))))))))
+
+(deftest ling-id-safe-id-conversion-test
+  (testing "ling-id->safe-id replaces non-alphanumeric chars"
+    ;; Test via spawn — the safe-id is derived internally
+    (when (sdk/available?)
+      (let [ling-id "swarm-test-agent-123"
+            _ (sdk/spawn-headless-sdk! ling-id {:cwd "/tmp"})
+            session (sdk/get-session ling-id)]
+        (is (= "swarm_test_agent_123" (:py-safe-id session))
+            "Hyphens should be replaced with underscores")
+        (sdk/kill-headless-sdk! ling-id)))))
+
+(deftest dispatch-raw-mode-returns-channel-test
+  (testing "Dispatch with :raw? true returns a channel"
+    (when (sdk/available?)
+      (let [ling-id (gen-ling-id)
+            _ (sdk/spawn-headless-sdk! ling-id {:cwd "/tmp"})
+            ;; Raw dispatch — returns channel even if SDK call may fail
+            ch (sdk/dispatch-headless-sdk! ling-id "echo hello" {:raw? true})]
+        (is (some? ch) "Raw dispatch should return a channel")
+        ;; Drain channel to prevent hanging
+        (async/thread (loop [] (when (<!! ch) (recur))))
+        (Thread/sleep 500)
+        (sdk/kill-headless-sdk! ling-id)))))
+
+(deftest kill-all-with-persistent-clients-test
+  (testing "kill-all-sdk! cleans up all persistent clients"
+    (when (sdk/available?)
+      (let [ids (mapv (fn [_] (gen-ling-id)) (range 2))]
+        ;; Spawn two lings
+        (doseq [id ids]
+          (sdk/spawn-headless-sdk! id {:cwd "/tmp"}))
+        ;; Verify both registered
+        (is (= 2 (count (sdk/list-sdk-sessions))))
+        ;; Kill all
+        (let [result (sdk/kill-all-sdk!)]
+          (is (= 2 (:killed result)))
+          (is (zero? (:errors result))))
+        ;; Verify all gone
+        (is (= 0 (count (sdk/list-sdk-sessions))))))))
+
+;; =============================================================================
+;; P3-T2: Strategy Layer :raw? Threading Tests
+;; =============================================================================
+
+(deftest strategy-dispatch-threads-raw-option-test
+  (testing "AgentSDKStrategy.strategy-dispatch! threads :raw? to SDK dispatch"
+    ;; Setup: register a mock session with client-ref so dispatch doesn't throw
+    (let [ling-id (gen-ling-id)
+          register! @#'sdk/register-session!
+          unregister! @#'sdk/unregister-session!
+          captured-opts (atom nil)]
+      (register! ling-id {:ling-id ling-id
+                          :phase :idle
+                          :cwd "/tmp"
+                          :client-ref (str "_hive_client_test")
+                          :py-loop-var (str "_hive_loop_test")
+                          :turn-count 0})
+      ;; Mock dispatch-headless-sdk! to capture the opts passed
+      (with-redefs [sdk/dispatch-headless-sdk!
+                    (fn [id task & [opts]]
+                      (reset! captured-opts {:id id :task task :opts opts})
+                      ;; Return a closed channel (simulates instant completion)
+                      (let [ch (chan 1)]
+                        (close! ch)
+                        ch))]
+        (let [strategy-inst (sdk-strat/->agent-sdk-strategy)]
+          ;; Dispatch with :raw? true
+          (strategy/strategy-dispatch!
+           strategy-inst
+           {:id ling-id}
+           {:task "Test raw dispatch" :raw? true})
+          ;; Verify :raw? was threaded through to SDK layer
+          (is (true? (:raw? (:opts @captured-opts)))
+              ":raw? should be threaded through strategy to SDK dispatch")
+          (is (= ling-id (:id @captured-opts)))
+          (is (= "Test raw dispatch" (:task @captured-opts)))))
+      (unregister! ling-id))))
+
+(deftest strategy-dispatch-without-raw-omits-option-test
+  (testing "AgentSDKStrategy.strategy-dispatch! without :raw? passes nil"
+    (let [ling-id (gen-ling-id)
+          register! @#'sdk/register-session!
+          unregister! @#'sdk/unregister-session!
+          captured-opts (atom nil)]
+      (register! ling-id {:ling-id ling-id
+                          :phase :idle
+                          :cwd "/tmp"
+                          :client-ref (str "_hive_client_test")
+                          :py-loop-var (str "_hive_loop_test")
+                          :turn-count 0})
+      (with-redefs [sdk/dispatch-headless-sdk!
+                    (fn [id task & [opts]]
+                      (reset! captured-opts {:id id :task task :opts opts})
+                      (let [ch (chan 1)]
+                        (close! ch)
+                        ch))]
+        (let [strategy-inst (sdk-strat/->agent-sdk-strategy)]
+          ;; Dispatch WITHOUT :raw?
+          (strategy/strategy-dispatch!
+           strategy-inst
+           {:id ling-id}
+           {:task "Normal SAA dispatch"})
+          ;; :raw? should not be present (nil in the select-keys result)
+          (is (nil? (:raw? (:opts @captured-opts)))
+              ":raw? should be nil when not provided")))
+      (unregister! ling-id))))
+
+;; =============================================================================
 ;; Integration Test Placeholder (requires actual Python + SDK)
 ;; =============================================================================
 
@@ -362,6 +590,25 @@
               (is (pos? (count msgs)))
               (is (= :saa-complete (:type (last msgs)))))))
         ;; Cleanup
+        (sdk/kill-headless-sdk! ling-id)))))
+
+(deftest ^:integration multi-turn-dispatch-test
+  (testing "Multiple dispatches to same ling increment turn count"
+    (when (sdk/available?)
+      (let [ling-id (gen-ling-id)
+            _ (sdk/spawn-headless-sdk! ling-id {:cwd "/tmp"})]
+        ;; First dispatch (raw)
+        (let [ch1 (sdk/dispatch-headless-sdk! ling-id "What is 2+2?" {:raw? true})]
+          (loop [] (when (<!! ch1) (recur))))
+        ;; Check turn count after first dispatch
+        (is (pos? (:turn-count (sdk/get-session ling-id)))
+            "Turn count should increment after dispatch")
+        ;; Second dispatch (raw)
+        (let [ch2 (sdk/dispatch-headless-sdk! ling-id "What is 3+3?" {:raw? true})]
+          (loop [] (when (<!! ch2) (recur))))
+        ;; Turn count should be higher
+        (is (>= (:turn-count (sdk/get-session ling-id)) 2)
+            "Turn count should be >= 2 after two dispatches")
         (sdk/kill-headless-sdk! ling-id)))))
 
 (comment

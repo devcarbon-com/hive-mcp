@@ -1,5 +1,10 @@
 (ns hive-mcp.agent.loop
-  "Agent tool-use loop orchestration.
+  "DEPRECATED: Agent tool-use loop orchestration.
+
+   Prefer hive-agent.loop.core/run-agent for multi-turn agentic execution.
+   This namespace is retained for backward compatibility when hive-agent
+   is not on the classpath. See hive-mcp.agent.hive-agent-bridge for the
+   primary execution path.
 
    Application layer use case that orchestrates:
    - LLM calls via backend protocol
@@ -37,8 +42,10 @@
                                    (json/write-str arguments))}})
         calls))
 
-(defn run-loop
-  "Run the agent tool-use loop until completion or max steps.
+(defn ^:deprecated run-loop
+  "DEPRECATED: Prefer hive-agent.loop.core/run-agent via hive-agent-bridge.
+
+   Run the agent tool-use loop until completion or max steps.
 
    Options:
      :backend     - LLMBackend instance (required)

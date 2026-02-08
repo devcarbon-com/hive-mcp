@@ -117,6 +117,43 @@
       (mcp-error (str "Failed to reset hourly: " (ex-message e))))))
 
 ;;; =============================================================================
+;;; Budget Guardrail Status (P2-T4)
+;;; =============================================================================
+
+(defn handle-get-agent-budget
+  "Get budget guardrail status for a specific agent.
+
+   Parameters:
+     agent_id - Agent identifier (required)"
+  [{:keys [agent_id]}]
+  (try
+    (if-not agent_id
+      (mcp-error "agent_id is required")
+      (if-let [status-fn (requiring-resolve 'hive-mcp.agent.hooks.budget/get-budget-status)]
+        (if-let [status (status-fn agent_id)]
+          (mcp-json status)
+          (mcp-json {:agent-id agent_id :registered false :message "No budget registered for this agent"}))
+        (mcp-json {:available false :message "Budget guardrail module not loaded"})))
+    (catch Exception e
+      (log/error e "get_agent_budget failed")
+      (mcp-error (str "Failed to get agent budget: " (ex-message e))))))
+
+(defn handle-get-all-agent-budgets
+  "Get budget guardrail status for all registered agents."
+  [_params]
+  (try
+    (if-let [all-fn (requiring-resolve 'hive-mcp.agent.hooks.budget/get-all-budget-statuses)]
+      (let [statuses (all-fn)
+            total-fn (requiring-resolve 'hive-mcp.agent.hooks.budget/get-total-spend)
+            total (when total-fn (total-fn))]
+        (mcp-json {:agents statuses
+                   :total (or total {:total-spend-usd 0.0 :agent-count 0})}))
+      (mcp-json {:available false :message "Budget guardrail module not loaded"}))
+    (catch Exception e
+      (log/error e "get_all_agent_budgets failed")
+      (mcp-error (str "Failed to get agent budgets: " (ex-message e))))))
+
+;;; =============================================================================
 ;;; Tool Definitions
 ;;; =============================================================================
 
@@ -173,4 +210,19 @@
     :inputSchema {:type "object"
                   :properties {}
                   :required []}
-    :handler handle-reset-hourly}])
+    :handler handle-reset-hourly}
+
+   {:name "cost_agent_budget"
+    :description "Get budget guardrail status for a specific agent. Shows max budget, spent USD, remaining, tool calls, and whether budget is exceeded."
+    :inputSchema {:type "object"
+                  :properties {:agent_id {:type "string"
+                                          :description "Agent identifier to check budget for (required)"}}
+                  :required ["agent_id"]}
+    :handler handle-get-agent-budget}
+
+   {:name "cost_all_agent_budgets"
+    :description "Get budget guardrail status for all registered agents. Shows per-agent spend and total USD spend across the hive."
+    :inputSchema {:type "object"
+                  :properties {}
+                  :required []}
+    :handler handle-get-all-agent-budgets}])

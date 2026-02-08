@@ -347,7 +347,13 @@
         ;; Session not found - may already be dead
         (do
           (log/warn "OpenRouter ling not found in registry" {:id id})
-          {:killed? true :id id :reason :session-not-found})))))
+          {:killed? true :id id :reason :session-not-found}))))
+
+  (strategy-interrupt! [_ ling-ctx]
+    (let [{:keys [id]} ling-ctx]
+      {:success? false
+       :ling-id id
+       :errors ["Interrupt not supported for openrouter spawn mode"]})))
 
 ;;; =============================================================================
 ;;; Factory

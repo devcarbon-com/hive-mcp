@@ -589,6 +589,75 @@
                      (.getMessage e)))))))
 
 ;; =============================================================================
+;; Effect: :saa/run-workflow (SAA FSM Integration)
+;; =============================================================================
+
+(defn- handle-saa-run-workflow
+  "Execute a :saa/run-workflow effect - run SAA workflow via FSM.
+
+   Triggers the SAA (Silence-Abstract-Act) workflow asynchronously.
+   Uses the compiled FSM from the workflow registry, falling back to
+   the inline spec if the registry isn't available.
+
+   Expected data shape:
+   {:task       \"Fix auth bug in login flow\"  ; required
+    :agent-id   \"swarm-ling-123\"              ; required
+    :directory  \"/path/to/project\"            ; required
+    :plan-only? false                           ; optional, default false
+    :resources  {...}}                          ; optional, override resources map
+
+   Example:
+   {:saa/run-workflow {:task \"Implement lazy presets\"
+                       :agent-id \"ling-1\"
+                       :directory \"/home/user/project\"}}
+
+   Note: Runs in a future to avoid blocking the event loop.
+   Dispatches :saa/completed or :saa/failed events on completion."
+  [{:keys [task agent-id directory plan-only? resources] :as data}]
+  (when (and task agent-id)
+    (future
+      (try
+        (require 'hive-mcp.workflows.saa-workflow)
+        (let [run-fn (if plan-only?
+                       (resolve 'hive-mcp.workflows.saa-workflow/run-plan-only)
+                       (resolve 'hive-mcp.workflows.saa-workflow/run-full-saa))
+              ;; Build minimal resources if not provided
+              default-resources {:scope-fn (fn [dir]
+                                             (try
+                                               (let [scope-fn (requiring-resolve
+                                                               'hive-mcp.swarm.scope/get-current-project-id)]
+                                                 (scope-fn dir))
+                                               (catch Exception _ "unknown")))
+                                 :shout-fn (fn [aid phase msg]
+                                             (hivemind/shout! aid :progress
+                                                              {:workflow :saa
+                                                               :phase phase
+                                                               :message msg}))
+                                 :clock-fn #(java.time.Instant/now)}
+              effective-resources (merge default-resources resources)
+              opts {:task task
+                    :agent-id agent-id
+                    :directory directory}
+              result (run-fn effective-resources opts)]
+          ;; Dispatch completion event
+          (when-let [dispatch-fn (requiring-resolve 'hive-mcp.events.core/dispatch)]
+            (dispatch-fn [:saa/completed (merge (select-keys result
+                                                             [:agent-id :task :plan-memory-id
+                                                              :kanban-task-ids :plan-only?
+                                                              :tests-passed? :grounding-score])
+                                                {:agent-id agent-id})])))
+        (catch Exception e
+          (log/error "[EVENT] SAA workflow failed:" (.getMessage e))
+          ;; Dispatch failure event
+          (try
+            (when-let [dispatch-fn (requiring-resolve 'hive-mcp.events.core/dispatch)]
+              (dispatch-fn [:saa/failed {:agent-id agent-id
+                                         :task task
+                                         :phase :unknown
+                                         :error (.getMessage e)}]))
+            (catch Exception _ nil)))))))
+
+;; =============================================================================
 ;; Registration
 ;; =============================================================================
 
@@ -615,6 +684,7 @@
    - :dispatch-task   - Dispatch task to swarm slave (POC-07)
    - :swarm-send-prompt - Send prompt to ling terminal (Agora Turn Relay)
    - :emit-system-error - Structured error telemetry (Telemetry Phase 1)
+   - :saa/run-workflow - Run SAA workflow via FSM (async, dispatches :saa/completed or :saa/failed)
    - KG effects       - See hive-mcp.events.effects.kg
 
    Coeffects registered (POC-08/09/10/11):
@@ -761,6 +831,9 @@
                    (catch Exception e
                      (log/debug "[EVENT] Olympus broadcast failed (non-fatal):" (.getMessage e))))))
 
+    ;; :saa/run-workflow - Run SAA workflow via FSM (async)
+    (ev/reg-fx :saa/run-workflow handle-saa-run-workflow)
+
     ;; ==========================================================================
     ;; Knowledge Graph Effects (delegated to kg.clj for SRP compliance)
     ;; ==========================================================================
@@ -772,7 +845,7 @@
 
     (reset! *registered true)
     (log/info "[hive-events] Coeffects registered: :now :agent-context :db-snapshot :waiting-lings :request-ctx")
-    (log/info "[hive-events] Effects registered: :shout :targeted-shout :log :ds-transact :wrap-notify :channel-publish :memory-write :report-metrics :emit-system-error :dispatch :dispatch-n :git-commit :kanban-sync :dispatch-task :swarm-send-prompt :agora/continue :kanban-move-done :wrap-crystallize :tool-registry-refresh :olympus-broadcast")
+    (log/info "[hive-events] Effects registered: :shout :targeted-shout :log :ds-transact :wrap-notify :channel-publish :memory-write :report-metrics :emit-system-error :dispatch :dispatch-n :git-commit :kanban-sync :dispatch-task :swarm-send-prompt :agora/continue :kanban-move-done :wrap-crystallize :tool-registry-refresh :olympus-broadcast :saa/run-workflow")
     true))
 
 (defn reset-registration!

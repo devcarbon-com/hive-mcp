@@ -48,9 +48,13 @@
 ;; Protocol/Config/Registry APIs moved to:
 ;;   hive-mcp.agent.{protocol,config,registry}
 
-(defn delegate!
-  "Delegate a task to a local or cloud model with tool access.
-   
+(defn ^:deprecated delegate!
+  "DEPRECATED: One-shot delegate loop. Prefer hive-agent.loop.core/run-agent
+   for multi-turn agentic execution. This function is retained for backward
+   compatibility but will emit a deprecation warning.
+
+   Delegate a task to a local or cloud model with tool access.
+
    Options:
      :backend   - Backend type: :openrouter (default) or :ollama
      :model     - Model name (backend-specific)
